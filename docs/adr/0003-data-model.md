@@ -13,11 +13,13 @@ Core tables:
 - `roles`
 - `memberships`
 - `organization_invitations`
+- `auth_sessions`
 
 Model constraints:
 - Unique user email (case-insensitive).
 - Unique membership (`organization_id`, `user_id`).
 - Role catalog seeded as `owner`, `admin`, `member`.
+- Refresh session tokens are stored as hashes (`auth_sessions.refresh_token_hash`).
 
 ## Consequences
 - Supports organization creation, invitation, and role mutation flows.

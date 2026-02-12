@@ -1,57 +1,86 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useEffect } from "react";
+import { apiFetch, getApiBase } from "../../lib/api";
 
 type AuthPayload = {
-  session?: { token: string };
+  session?: { token: string; expiresAt: number };
   user?: { id: string; email: string };
   code?: string;
   message?: string;
 };
 
-function getApiBase(): string {
-  return process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3001";
+function oauthStartUrl(provider: "google" | "github"): string {
+  return `${getApiBase()}/v1/auth/oauth/${provider}/start`;
 }
 
 export default function AuthPage() {
+  const [oauthStatus, setOauthStatus] = useState<string | null>(null);
+  const [oauthProvider, setOauthProvider] = useState<string | null>(null);
+  const [oauthCode, setOauthCode] = useState<string | null>(null);
+
   const [email, setEmail] = useState("owner@example.com");
   const [password, setPassword] = useState("Password123");
   const [result, setResult] = useState<AuthPayload | null>(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setOauthStatus(params.get("oauth"));
+    setOauthProvider(params.get("provider"));
+    setOauthCode(params.get("code"));
+  }, []);
+
+  const oauthBanner = useMemo(() => {
+    if (oauthStatus === "success") {
+      return `OAuth login succeeded (${oauthProvider ?? "provider"}).`;
+    }
+    if (oauthStatus === "error") {
+      return `OAuth login failed: ${oauthCode ?? "unknown_error"}`;
+    }
+    return null;
+  }, [oauthCode, oauthProvider, oauthStatus]);
+
   async function signup() {
-    const response = await fetch(`${getApiBase()}/v1/auth/signup`, {
+    const response = await apiFetch("/v1/auth/signup", {
       method: "POST",
-      headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
     setResult(await response.json());
   }
 
   async function login() {
-    const response = await fetch(`${getApiBase()}/v1/auth/login`, {
+    const response = await apiFetch("/v1/auth/login", {
       method: "POST",
-      headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
     setResult(await response.json());
   }
 
-  async function oauth() {
-    const response = await fetch(`${getApiBase()}/v1/auth/oauth/google/callback`, {
+  async function refreshSession() {
+    const response = await apiFetch("/v1/auth/refresh", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        code: `bootstrap-${Date.now()}`,
-        state: "valid-oauth-state",
-        email,
-      }),
+    });
+    setResult(await response.json());
+  }
+
+  async function logout() {
+    const response = await apiFetch("/v1/auth/logout", {
+      method: "POST",
     });
     setResult(await response.json());
   }
 
   return (
     <main>
-      <h1>Auth Bootstrap</h1>
+      <h1>Auth</h1>
+
+      {oauthBanner ? (
+        <div className="card">
+          <strong>{oauthBanner}</strong>
+        </div>
+      ) : null}
+
       <div className="card">
         <label htmlFor="email">Email</label>
         <input id="email" value={email} onChange={(event) => setEmail(event.target.value)} />
@@ -64,12 +93,20 @@ export default function AuthPage() {
           type="password"
         />
 
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           <button onClick={signup}>Sign up</button>
           <button onClick={login}>Login</button>
-          <button onClick={oauth}>OAuth callback</button>
+          <button onClick={refreshSession}>Refresh session</button>
+          <button onClick={logout}>Logout</button>
         </div>
-        <small>Copy the returned bearer token for org endpoints.</small>
+      </div>
+
+      <div className="card">
+        <strong>OAuth</strong>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+          <a href={oauthStartUrl("google")}>Continue with Google</a>
+          <a href={oauthStartUrl("github")}>Continue with GitHub</a>
+        </div>
       </div>
 
       {result ? (

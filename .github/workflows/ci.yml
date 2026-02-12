@@ -44,15 +44,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Test
-        run: pnpm test
-
-      - name: Build
-        run: pnpm build
-
       - name: Migration contract check
         run: pnpm migrate:check
 
@@ -61,3 +52,20 @@ jobs:
 
       - name: RLS integration test
         run: pnpm --filter @vespid/db test:integration
+
+      - name: API integration tests
+        run: pnpm --filter @vespid/api test
+
+      - name: API integration tests (warn mode)
+        env:
+          ORG_CONTEXT_ENFORCEMENT: warn
+        run: pnpm --filter @vespid/api test
+
+      - name: Workspace lint
+        run: pnpm lint
+
+      - name: Web checks
+        run: pnpm --filter @vespid/web lint && pnpm --filter @vespid/web test
+
+      - name: Build
+        run: pnpm build

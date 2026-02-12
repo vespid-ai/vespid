@@ -1,21 +1,73 @@
-import { afterAll, describe, expect, it } from "vitest";
+import crypto from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "./server.js";
 import { MemoryAppStore } from "./store/memory-store.js";
+import type { OAuthService, OAuthProvider } from "./oauth.js";
 
-describe("api foundation", () => {
+function extractCookies(input: { headers: Record<string, unknown> }, names: string[]): string {
+  const setCookieHeader = input.headers["set-cookie"];
+  const lines = Array.isArray(setCookieHeader)
+    ? setCookieHeader
+    : typeof setCookieHeader === "string"
+      ? [setCookieHeader]
+      : [];
+
+  const cookies: string[] = [];
+  for (const name of names) {
+    const found = lines.find((line) => line.startsWith(`${name}=`));
+    if (!found) {
+      continue;
+    }
+    const [cookiePart] = found.split(";");
+    if (cookiePart) {
+      cookies.push(cookiePart);
+    }
+  }
+  return cookies.join("; ");
+}
+
+function bearerToken(input: { session: { token: string } }): string {
+  return input.session.token;
+}
+
+function fakeOAuthService(): OAuthService {
+  return {
+    createAuthorizationUrl(provider: OAuthProvider, context) {
+      const url = new URL(`https://oauth.local/${provider}/authorize`);
+      url.searchParams.set("state", context.state);
+      return url;
+    },
+    async exchangeCodeForProfile(provider: OAuthProvider, context) {
+      if (context.code === "bad-code") {
+        throw new Error("OAUTH_EXCHANGE_FAILED");
+      }
+      return {
+        email: `${provider}-${context.code}@example.com`,
+        displayName: `${provider}-user`,
+      };
+    },
+  };
+}
+
+describe("api hardening foundation", () => {
   const store = new MemoryAppStore();
   let server: Awaited<ReturnType<typeof buildServer>>;
 
-  it("signup works and login fails with wrong password", async () => {
-    server = await buildServer({ store });
+  beforeAll(async () => {
+    server = await buildServer({ store, oauthService: fakeOAuthService(), orgContextEnforcement: "strict" });
+  });
 
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it("supports signup/login and rejects invalid password", async () => {
     const signup = await server.inject({
       method: "POST",
       url: "/v1/auth/signup",
       payload: {
         email: "owner@example.com",
         password: "Password123",
-        displayName: "Owner",
       },
     });
 
@@ -31,35 +83,151 @@ describe("api foundation", () => {
         password: "wrong-password",
       },
     });
-
     expect(loginBad.statusCode).toBe(401);
-  });
 
-  it("oauth callback accepts valid state and rejects invalid state", async () => {
-    const invalid = await server.inject({
+    const login = await server.inject({
       method: "POST",
-      url: "/v1/auth/oauth/google/callback",
+      url: "/v1/auth/login",
       payload: {
-        code: "oauth-code",
-        state: "bad",
+        email: "owner@example.com",
+        password: "Password123",
       },
     });
+    expect(login.statusCode).toBe(200);
+  });
+
+  it("runs OAuth start/callback and keeps OAuth failure reason codes", async () => {
+    const start = await server.inject({
+      method: "GET",
+      url: "/v1/auth/oauth/google/start?mode=json",
+    });
+
+    expect(start.statusCode).toBe(200);
+    const startBody = start.json() as { authorizationUrl: string };
+    const callbackState = new URL(startBody.authorizationUrl).searchParams.get("state");
+    expect(callbackState).toBeTruthy();
+
+    const oauthCookies = extractCookies(start, ["vespid_oauth_state", "vespid_oauth_nonce"]);
+
+    const invalid = await server.inject({
+      method: "GET",
+      url: `/v1/auth/oauth/google/callback?mode=json&code=ok&state=invalid`,
+      headers: {
+        cookie: oauthCookies,
+      },
+    });
+
     expect(invalid.statusCode).toBe(401);
+    expect((invalid.json() as { code: string }).code).toBe("UNAUTHORIZED");
+
+    const invalidNonce = await server.inject({
+      method: "GET",
+      url: `/v1/auth/oauth/google/callback?mode=json&code=ok&state=${callbackState}`,
+      headers: {
+        cookie: oauthCookies.replace(/vespid_oauth_nonce=[^;]+/, "vespid_oauth_nonce=tampered"),
+      },
+    });
+
+    expect(invalidNonce.statusCode).toBe(401);
+    expect((invalidNonce.json() as { code: string }).code).toBe("UNAUTHORIZED");
 
     const valid = await server.inject({
-      method: "POST",
-      url: "/v1/auth/oauth/google/callback",
-      payload: {
-        code: "oauth-code",
-        state: "valid-oauth-state",
+      method: "GET",
+      url: `/v1/auth/oauth/google/callback?mode=json&code=ok&state=${callbackState}`,
+      headers: {
+        cookie: oauthCookies,
       },
     });
 
     expect(valid.statusCode).toBe(200);
+    const validBody = valid.json() as { session: { token: string }; user: { email: string } };
+    expect(validBody.session.token.length).toBeGreaterThan(10);
+    expect(validBody.user.email).toContain("google-ok@");
+
+    const startBadCode = await server.inject({
+      method: "GET",
+      url: "/v1/auth/oauth/google/start?mode=json",
+    });
+    const badCodeState = new URL((startBadCode.json() as { authorizationUrl: string }).authorizationUrl).searchParams.get("state");
+    const badCodeCookies = extractCookies(startBadCode, ["vespid_oauth_state", "vespid_oauth_nonce"]);
+
+    const exchangeFailed = await server.inject({
+      method: "GET",
+      url: `/v1/auth/oauth/google/callback?mode=json&code=bad-code&state=${badCodeState}`,
+      headers: {
+        cookie: badCodeCookies,
+      },
+    });
+
+    expect(exchangeFailed.statusCode).toBe(401);
+    expect((exchangeFailed.json() as { code: string }).code).toBe("OAUTH_EXCHANGE_FAILED");
   });
 
-  it("creates org with default owner membership", async () => {
+  it("supports cookie refresh and revocable sessions", async () => {
     const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "session-owner@example.com",
+        password: "Password123",
+      },
+    });
+
+    const signupBody = signup.json() as { session: { token: string } };
+    const cookie = extractCookies(signup, ["vespid_session"]);
+
+    const orgByCookie = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: {
+        cookie,
+      },
+      payload: {
+        name: "Cookie Org",
+        slug: `cookie-org-${Date.now()}`,
+      },
+    });
+
+    expect(orgByCookie.statusCode).toBe(201);
+    expect(typeof orgByCookie.headers["x-access-token"]).toBe("string");
+
+    const refresh = await server.inject({
+      method: "POST",
+      url: "/v1/auth/refresh",
+      headers: {
+        cookie,
+      },
+    });
+
+    expect(refresh.statusCode).toBe(200);
+
+    const logout = await server.inject({
+      method: "POST",
+      url: "/v1/auth/logout",
+      headers: {
+        authorization: `Bearer ${bearerToken(signupBody)}`,
+      },
+    });
+
+    expect(logout.statusCode).toBe(200);
+
+    const denied = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: {
+        authorization: `Bearer ${bearerToken(signupBody)}`,
+      },
+      payload: {
+        name: "Denied Org",
+        slug: `denied-org-${Date.now()}`,
+      },
+    });
+
+    expect(denied.statusCode).toBe(401);
+  });
+
+  it("requires X-Org-Id and blocks cross-org access", async () => {
+    const owner = await server.inject({
       method: "POST",
       url: "/v1/auth/signup",
       payload: {
@@ -67,28 +235,251 @@ describe("api foundation", () => {
         password: "Password123",
       },
     });
+    const ownerToken = bearerToken(owner.json() as { session: { token: string } });
 
-    const token = (signup.json() as { session: { token: string } }).session.token;
+    const outsider = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "org-outsider@example.com",
+        password: "Password123",
+      },
+    });
+    const outsiderToken = bearerToken(outsider.json() as { session: { token: string } });
+
     const org = await server.inject({
       method: "POST",
       url: "/v1/orgs",
-      headers: { authorization: `Bearer ${token}` },
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
       payload: {
-        name: "Test Org",
-        slug: "test-org",
+        name: "Tenant Org",
+        slug: `tenant-org-${Date.now()}`,
       },
     });
 
-    expect(org.statusCode).toBe(201);
-    const body = org.json() as {
-      membership: { roleKey: string; userId: string };
-      organization: { id: string };
-    };
-    expect(body.membership.roleKey).toBe("owner");
-    expect(body.membership.userId.length).toBeGreaterThan(10);
+    const orgId = (org.json() as { organization: { id: string } }).organization.id;
+
+    const missingHeader = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+      payload: {
+        email: "member@example.com",
+        roleKey: "member",
+      },
+    });
+
+    expect(missingHeader.statusCode).toBe(400);
+    expect((missingHeader.json() as { code: string }).code).toBe("ORG_CONTEXT_REQUIRED");
+
+    const wrongHeader = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": crypto.randomUUID(),
+      },
+      payload: {
+        email: "member@example.com",
+        roleKey: "member",
+      },
+    });
+
+    expect(wrongHeader.statusCode).toBe(400);
+    expect((wrongHeader.json() as { code: string }).code).toBe("INVALID_ORG_CONTEXT");
+
+    const crossOrg = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${outsiderToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "member@example.com",
+        roleKey: "member",
+      },
+    });
+
+    expect(crossOrg.statusCode).toBe(403);
+    expect((crossOrg.json() as { code: string }).code).toBe("ORG_ACCESS_DENIED");
   });
 
-  it("allows invite by owner and rejects role mutation by member", async () => {
+  it("supports workflow core lifecycle with tenant and role checks", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "workflow-owner@example.com",
+        password: "Password123",
+      },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "workflow-member@example.com",
+        password: "Password123",
+      },
+    });
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+
+    const outsiderSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "workflow-outsider@example.com",
+        password: "Password123",
+      },
+    });
+    const outsiderToken = bearerToken(outsiderSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Workflow Org",
+        slug: `workflow-org-${Date.now()}`,
+      },
+    });
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const inviteMember = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "workflow-member@example.com",
+        roleKey: "member",
+      },
+    });
+    expect(inviteMember.statusCode).toBe(201);
+    const inviteToken = (inviteMember.json() as { invitation: { token: string } }).invitation.token;
+
+    const acceptMember = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+      },
+    });
+    expect(acceptMember.statusCode).toBe(200);
+
+    const createWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Bug triage workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [
+            { id: "node-http", type: "http.request" },
+            { id: "node-agent", type: "agent.execute" },
+          ],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const outsiderCreateDenied = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${outsiderToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Outsider Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [{ id: "node1", type: "agent.execute" }],
+        },
+      },
+    });
+    expect(outsiderCreateDenied.statusCode).toBe(403);
+
+    const runBeforePublish = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {},
+    });
+    expect(runBeforePublish.statusCode).toBe(409);
+
+    const memberPublishDenied = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(memberPublishDenied.statusCode).toBe(403);
+
+    const publishWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishWorkflow.statusCode).toBe(200);
+    expect((publishWorkflow.json() as { workflow: { status: string } }).workflow.status).toBe("published");
+
+    const runWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        input: { issueKey: "ABC-123" },
+      },
+    });
+    expect(runWorkflow.statusCode).toBe(201);
+    const runBody = runWorkflow.json() as {
+      run: { id: string; status: string };
+      execution: { status: string; steps: Array<unknown> };
+    };
+    expect(runBody.run.status).toBe("succeeded");
+    expect(runBody.execution.status).toBe("succeeded");
+    expect(runBody.execution.steps.length).toBe(2);
+
+    const getRun = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runBody.run.id}`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(getRun.statusCode).toBe(200);
+    expect((getRun.json() as { run: { id: string } }).run.id).toBe(runBody.run.id);
+  });
+
+  it("completes invitation accept flow and enforces email match", async () => {
     const ownerSignup = await server.inject({
       method: "POST",
       url: "/v1/auth/signup",
@@ -97,8 +488,7 @@ describe("api foundation", () => {
         password: "Password123",
       },
     });
-    const ownerToken = (ownerSignup.json() as { session: { token: string } }).session.token;
-    const ownerUser = ownerSignup.json() as { user: { id: string } };
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
 
     const orgRes = await server.inject({
       method: "POST",
@@ -110,91 +500,415 @@ describe("api foundation", () => {
       },
     });
 
-    const orgBody = orgRes.json() as { organization: { id: string } };
-    const orgId = orgBody.organization.id;
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
 
-    const invite = await server.inject({
+    const inviteOk = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/invitations`,
-      headers: { authorization: `Bearer ${ownerToken}` },
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
       payload: {
-        email: "member@example.com",
+        email: "member-accept@example.com",
         roleKey: "member",
       },
     });
 
-    expect(invite.statusCode).toBe(201);
+    expect(inviteOk.statusCode).toBe(201);
+    const inviteToken = (inviteOk.json() as { invitation: { token: string } }).invitation.token;
 
     const memberSignup = await server.inject({
       method: "POST",
       url: "/v1/auth/signup",
       payload: {
-        email: "member@example.com",
+        email: "member-accept@example.com",
         password: "Password123",
       },
     });
-    const memberBody = memberSignup.json() as { user: { id: string }; session: { token: string } };
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
 
-    await store.attachMembership({
-      organizationId: orgId,
-      userId: memberBody.user.id,
-      roleKey: "member",
-    });
-
-    const roleMutation = await server.inject({
+    const accept = await server.inject({
       method: "POST",
-      url: `/v1/orgs/${orgId}/members/${ownerUser.user.id}/role`,
-      headers: { authorization: `Bearer ${memberBody.session.token}` },
-      payload: {
-        roleKey: "admin",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
       },
     });
 
-    expect(roleMutation.statusCode).toBe(403);
-  });
+    expect(accept.statusCode).toBe(200);
+    const acceptBody = accept.json() as { result: { accepted: boolean; organizationId: string } };
+    expect(acceptBody.result.accepted).toBe(true);
+    expect(acceptBody.result.organizationId).toBe(orgId);
 
-  it("blocks cross-org access", async () => {
-    const userA = await server.inject({
-      method: "POST",
-      url: "/v1/auth/signup",
-      payload: { email: "cross-a@example.com", password: "Password123" },
-    });
-    const userAToken = (userA.json() as { session: { token: string } }).session.token;
-
-    const userB = await server.inject({
-      method: "POST",
-      url: "/v1/auth/signup",
-      payload: { email: "cross-b@example.com", password: "Password123" },
-    });
-    const userBToken = (userB.json() as { session: { token: string } }).session.token;
-
-    const orgA = await server.inject({
-      method: "POST",
-      url: "/v1/orgs",
-      headers: { authorization: `Bearer ${userAToken}` },
-      payload: {
-        name: "Cross Org A",
-        slug: `cross-org-a-${Date.now()}`,
-      },
-    });
-    const orgId = (orgA.json() as { organization: { id: string } }).organization.id;
-
-    const forbiddenInvite = await server.inject({
+    const inviteMismatch = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/invitations`,
-      headers: { authorization: `Bearer ${userBToken}` },
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
       payload: {
-        email: "x@example.com",
+        email: "expected-match@example.com",
         roleKey: "member",
       },
     });
 
-    expect(forbiddenInvite.statusCode).toBe(403);
+    const mismatchToken = (inviteMismatch.json() as { invitation: { token: string } }).invitation.token;
+
+    const wrongUserSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "wrong-user@example.com",
+        password: "Password123",
+      },
+    });
+    const wrongUserToken = bearerToken(wrongUserSignup.json() as { session: { token: string } });
+
+    const mismatch = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${mismatchToken}/accept`,
+      headers: {
+        authorization: `Bearer ${wrongUserToken}`,
+      },
+    });
+
+    expect(mismatch.statusCode).toBe(403);
+  });
+
+});
+
+describe("api rbac promotion flow", () => {
+  let server: Awaited<ReturnType<typeof buildServer>>;
+
+  beforeAll(async () => {
+    server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      orgContextEnforcement: "strict",
+    });
   });
 
   afterAll(async () => {
-    if (server) {
-      await server.close();
-    }
+    await server.close();
+  });
+
+  it("enforces invite and role-mutation permissions across member/admin/owner", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "rbac-owner@example.com",
+        password: "Password123",
+      },
+    });
+    const ownerBody = ownerSignup.json() as { session: { token: string }; user: { id: string } };
+    const ownerToken = bearerToken(ownerBody);
+
+    const adminCandidateSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "rbac-admin-candidate@example.com",
+        password: "Password123",
+      },
+    });
+    const adminCandidateBody = adminCandidateSignup.json() as { session: { token: string }; user: { id: string } };
+    const adminCandidateToken = bearerToken(adminCandidateBody);
+    const adminCandidateUserId = adminCandidateBody.user.id;
+
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "rbac-member@example.com",
+        password: "Password123",
+      },
+    });
+    const memberBody = memberSignup.json() as { session: { token: string }; user: { id: string } };
+    const memberToken = bearerToken(memberBody);
+    const memberUserId = memberBody.user.id;
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "RBAC Matrix Org",
+        slug: `rbac-matrix-org-${Date.now()}`,
+      },
+    });
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const inviteAdminCandidate = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "rbac-admin-candidate@example.com",
+        roleKey: "member",
+      },
+    });
+    expect(inviteAdminCandidate.statusCode).toBe(201);
+
+    const inviteMember = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "rbac-member@example.com",
+        roleKey: "member",
+      },
+    });
+    expect(inviteMember.statusCode).toBe(201);
+
+    const adminCandidateInviteToken = (inviteAdminCandidate.json() as { invitation: { token: string } }).invitation.token;
+    const memberInviteToken = (inviteMember.json() as { invitation: { token: string } }).invitation.token;
+
+    const acceptAdminCandidate = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${adminCandidateInviteToken}/accept`,
+      headers: {
+        authorization: `Bearer ${adminCandidateToken}`,
+      },
+    });
+    expect(acceptAdminCandidate.statusCode).toBe(200);
+
+    const acceptMember = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${memberInviteToken}/accept`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+      },
+    });
+    expect(acceptMember.statusCode).toBe(200);
+
+    const memberInviteDenied = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "rbac-member-cannot-invite@example.com",
+        roleKey: "member",
+      },
+    });
+    expect(memberInviteDenied.statusCode).toBe(403);
+
+    const memberRoleMutationDenied = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/members/${adminCandidateUserId}/role`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        roleKey: "admin",
+      },
+    });
+    expect(memberRoleMutationDenied.statusCode).toBe(403);
+
+    const promoteAdminCandidate = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/members/${adminCandidateUserId}/role`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        roleKey: "admin",
+      },
+    });
+    expect(promoteAdminCandidate.statusCode).toBe(200);
+    expect((promoteAdminCandidate.json() as { membership: { roleKey: string } }).membership.roleKey).toBe("admin");
+
+    const adminInviteAllowed = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${adminCandidateToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "rbac-admin-can-invite@example.com",
+        roleKey: "member",
+      },
+    });
+    expect(adminInviteAllowed.statusCode).toBe(201);
+
+    const adminRoleMutationAllowed = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/members/${memberUserId}/role`,
+      headers: {
+        authorization: `Bearer ${adminCandidateToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        roleKey: "admin",
+      },
+    });
+    expect(adminRoleMutationAllowed.statusCode).toBe(200);
+    expect((adminRoleMutationAllowed.json() as { membership: { roleKey: string } }).membership.roleKey).toBe("admin");
+
+    const adminCannotAssignOwner = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/members/${memberUserId}/role`,
+      headers: {
+        authorization: `Bearer ${adminCandidateToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        roleKey: "owner",
+      },
+    });
+    expect(adminCannotAssignOwner.statusCode).toBe(403);
+
+    const ownerCanAssignOwner = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/members/${memberUserId}/role`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        roleKey: "owner",
+      },
+    });
+    expect(ownerCanAssignOwner.statusCode).toBe(200);
+    expect((ownerCanAssignOwner.json() as { membership: { roleKey: string } }).membership.roleKey).toBe("owner");
+  });
+});
+
+describe("api org context warn mode", () => {
+  let server: Awaited<ReturnType<typeof buildServer>>;
+  let ownerToken: string;
+  let outsiderToken: string;
+  let orgId: string;
+
+  beforeAll(async () => {
+    server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      orgContextEnforcement: "warn",
+    });
+
+    const owner = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "warn-owner@example.com",
+        password: "Password123",
+      },
+    });
+    ownerToken = bearerToken(owner.json() as { session: { token: string } });
+
+    const outsider = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "warn-outsider@example.com",
+        password: "Password123",
+      },
+    });
+    outsiderToken = bearerToken(outsider.json() as { session: { token: string } });
+
+    const org = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Warn Org",
+        slug: `warn-org-${Date.now()}`,
+      },
+    });
+    orgId = (org.json() as { organization: { id: string } }).organization.id;
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it("allows owner request without X-Org-Id and emits warning header", async () => {
+    const invite = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+      payload: {
+        email: "warn-member-a@example.com",
+        roleKey: "member",
+      },
+    });
+
+    expect(invite.statusCode).toBe(201);
+    const warningHeader = invite.headers["x-org-context-warning"];
+    expect(typeof warningHeader).toBe("string");
+    expect(String(warningHeader)).toContain("ORG_CONTEXT_REQUIRED");
+  });
+
+  it("still rejects outsider request in warn mode when membership is missing", async () => {
+    const denied = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${outsiderToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: "warn-member-b@example.com",
+        roleKey: "member",
+      },
+    });
+
+    expect(denied.statusCode).toBe(403);
+    expect((denied.json() as { code: string }).code).toBe("ORG_ACCESS_DENIED");
+  });
+
+  it("falls back to route org when X-Org-Id mismatches and emits warning", async () => {
+    const mismatched = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": crypto.randomUUID(),
+      },
+      payload: {
+        email: "warn-member-c@example.com",
+        roleKey: "member",
+      },
+    });
+
+    expect(mismatched.statusCode).toBe(201);
+    const warningHeader = mismatched.headers["x-org-context-warning"];
+    expect(typeof warningHeader).toBe("string");
+    expect(String(warningHeader)).toContain("INVALID_ORG_CONTEXT");
+  });
+
+  it("keeps oauth failure reason code in json mode", async () => {
+    const invite = await server.inject({
+      method: "GET",
+      url: "/v1/auth/oauth/google/start?mode=json",
+    });
+    const state = new URL((invite.json() as { authorizationUrl: string }).authorizationUrl).searchParams.get("state");
+    const cookies = extractCookies(invite, ["vespid_oauth_state", "vespid_oauth_nonce"]);
+
+    const failed = await server.inject({
+      method: "GET",
+      url: `/v1/auth/oauth/google/callback?mode=json&code=bad-code&state=${state}`,
+      headers: { cookie: cookies },
+    });
+
+    expect(failed.statusCode).toBe(401);
+    expect((failed.json() as { code: string }).code).toBe("OAUTH_EXCHANGE_FAILED");
   });
 });

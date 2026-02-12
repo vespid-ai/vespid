@@ -1,5 +1,9 @@
+import crypto from "node:crypto";
 import Fastify from "fastify";
+import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
 import {
+  AppError,
   badRequest,
   conflict,
   forbidden,
@@ -7,23 +11,63 @@ import {
   signAuthToken,
   unauthorized,
   verifyAuthToken,
-  type AppError,
+  type AppError as AppErrorType,
 } from "@vespid/shared";
+import { generateCodeVerifier, generateState } from "arctic";
 import { z } from "zod";
-import type { AppStore } from "./types.js";
+import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
 import { createStore } from "./store/index.js";
+import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
+import { executeWorkflow, workflowDslSchema } from "@vespid/workflow";
 
 type AuthContext = {
   userId: string;
   email: string;
+  sessionId: string;
+};
+
+type OrgContext = {
+  organizationId: string;
+  membership: MembershipRecord;
+};
+
+type OrgContextEnforcement = "strict" | "warn";
+
+type OAuthStateRecord = {
+  provider: OAuthProvider;
+  codeVerifier: string;
+  nonce: string;
+  expiresAtSec: number;
+};
+
+type RefreshTokenPayload = {
+  sessionId: string;
+  userId: string;
+  tokenNonce: string;
+  expiresAt: number;
 };
 
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthContext;
+    orgContext?: OrgContext;
+    orgContextWarnings?: string[];
   }
 }
+
+const ACCESS_TOKEN_TTL_SEC = Number(process.env.ACCESS_TOKEN_TTL_SEC ?? 15 * 60);
+const SESSION_TTL_SEC = Number(process.env.SESSION_TTL_SEC ?? 7 * 24 * 60 * 60);
+const OAUTH_CONTEXT_TTL_SEC = Number(process.env.OAUTH_CONTEXT_TTL_SEC ?? 10 * 60);
+const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME ?? "vespid_session";
+const OAUTH_STATE_COOKIE_NAME = "vespid_oauth_state";
+const OAUTH_NONCE_COOKIE_NAME = "vespid_oauth_nonce";
+const WEB_BASE_URL = process.env.WEB_BASE_URL ?? "http://localhost:3000";
+const API_LOG_LEVEL = process.env.API_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info");
+const ORG_CONTEXT_ENFORCEMENT = z
+  .enum(["strict", "warn"])
+  .default("strict")
+  .parse(process.env.ORG_CONTEXT_ENFORCEMENT ?? "strict");
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -34,13 +78,6 @@ const signupSchema = z.object({
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
-});
-
-const oauthSchema = z.object({
-  code: z.string().min(1),
-  state: z.string().min(1),
-  email: z.string().email().optional(),
-  displayName: z.string().min(1).max(120).optional(),
 });
 
 const createOrgSchema = z.object({
@@ -57,6 +94,21 @@ const roleMutationSchema = z.object({
   roleKey: z.enum(["owner", "admin", "member"]),
 });
 
+const createWorkflowSchema = z.object({
+  name: z.string().min(2).max(120),
+  dsl: workflowDslSchema,
+});
+
+const createWorkflowRunSchema = z.object({
+  input: z.unknown().optional(),
+});
+
+const oauthQuerySchema = z.object({
+  code: z.string().min(1),
+  state: z.string().min(1),
+  mode: z.enum(["json"]).optional(),
+});
+
 function toPublicUser(input: { id: string; email: string; displayName: string | null; createdAt: string }) {
   return {
     id: input.id,
@@ -71,37 +123,532 @@ function parseAuthHeader(value: string | undefined): string | null {
     return null;
   }
   const [scheme, token] = value.split(" ");
-  if (scheme !== "Bearer" || !token) {
+  if (!scheme || scheme.toLowerCase() !== "bearer" || !token) {
     return null;
   }
   return token;
 }
 
-export async function buildServer(input?: { store?: AppStore }) {
-  const server = Fastify({ logger: false });
+function orgContextRequired(message = "X-Org-Id header is required"): AppError {
+  return new AppError(400, { code: "ORG_CONTEXT_REQUIRED", message });
+}
+
+function orgContextInvalid(message = "Invalid organization context"): AppError {
+  return new AppError(400, { code: "INVALID_ORG_CONTEXT", message });
+}
+
+function orgAccessDenied(message = "You are not a member of this organization"): AppError {
+  return new AppError(403, { code: "ORG_ACCESS_DENIED", message });
+}
+
+function base64UrlEncode(input: string): string {
+  return Buffer.from(input, "utf8").toString("base64url");
+}
+
+function base64UrlDecode(input: string): string {
+  return Buffer.from(input, "base64url").toString("utf8");
+}
+
+function hmac(content: string, secret: string): string {
+  return crypto.createHmac("sha256", secret).update(content).digest("base64url");
+}
+
+function timingSafeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function hashRefreshToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function signRefreshToken(payload: RefreshTokenPayload, secret: string): string {
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const signature = hmac(encodedPayload, secret);
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyRefreshToken(token: string, secret: string): RefreshTokenPayload | null {
+  const [encodedPayload, signature] = token.split(".");
+  if (!encodedPayload || !signature) {
+    return null;
+  }
+
+  const expectedSignature = hmac(encodedPayload, secret);
+  if (!timingSafeEqual(signature, expectedSignature)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(base64UrlDecode(encodedPayload)) as Partial<RefreshTokenPayload>;
+    if (!payload.sessionId || !payload.userId || !payload.tokenNonce || typeof payload.expiresAt !== "number") {
+      return null;
+    }
+    if (payload.expiresAt <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return {
+      sessionId: payload.sessionId,
+      userId: payload.userId,
+      tokenNonce: payload.tokenNonce,
+      expiresAt: payload.expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isSessionActive(session: SessionRecord): boolean {
+  if (session.revokedAt) {
+    return false;
+  }
+  return new Date(session.expiresAt).getTime() > Date.now();
+}
+
+function extractProvider(value: unknown): OAuthProvider {
+  const parsed = z.enum(["google", "github"]).safeParse(value);
+  if (!parsed.success) {
+    throw badRequest("Unsupported OAuth provider");
+  }
+  return parsed.data;
+}
+
+function parseInvitationTokenOrganizationId(token: string): string | null {
+  const [organizationId] = token.split(".");
+  const parsed = z.string().uuid().safeParse(organizationId);
+  if (!parsed.success) {
+    return null;
+  }
+  return parsed.data;
+}
+
+function parseOrgHeaderValue(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw orgContextRequired();
+  }
+  const parsed = z.string().uuid().safeParse(raw);
+  if (!parsed.success) {
+    throw orgContextInvalid("X-Org-Id must be a valid UUID");
+  }
+  return parsed.data;
+}
+
+function parseUserAgent(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return undefined;
+}
+
+function toOAuthAppError(error: unknown): AppError {
+  if (error instanceof AppError) {
+    return error;
+  }
+
+  const message = error instanceof Error ? error.message : "OAUTH_EXCHANGE_FAILED";
+
+  if (message.startsWith("OAUTH_PROVIDER_NOT_CONFIGURED:")) {
+    const provider = message.split(":")[1] ?? "provider";
+    return new AppError(503, {
+      code: "OAUTH_PROVIDER_NOT_CONFIGURED",
+      message: `OAuth provider is not configured: ${provider}`,
+    });
+  }
+
+  if (message === "OAUTH_INVALID_NONCE") {
+    return new AppError(401, {
+      code: "OAUTH_INVALID_NONCE",
+      message: "Invalid OAuth nonce",
+    });
+  }
+
+  if (message === "OAUTH_EMAIL_REQUIRED") {
+    return new AppError(400, {
+      code: "OAUTH_EMAIL_REQUIRED",
+      message: "OAuth provider did not return an email address",
+    });
+  }
+
+  return new AppError(401, {
+    code: message.startsWith("OAUTH_") ? message : "OAUTH_EXCHANGE_FAILED",
+    message: "OAuth exchange failed",
+  });
+}
+
+function invitationErrorToAppError(error: Error): AppError {
+  if (error.message === "INVITATION_NOT_FOUND") {
+    return notFound("Invitation not found");
+  }
+  if (error.message === "INVITATION_EXPIRED") {
+    return badRequest("Invitation has expired");
+  }
+  if (error.message === "INVITATION_EMAIL_MISMATCH") {
+    return forbidden("Invitation email does not match authenticated user");
+  }
+  if (error.message === "INVITATION_NOT_PENDING") {
+    return badRequest("Invitation is not pending");
+  }
+  return new AppError(500, {
+    code: "INVITATION_ACCEPT_FAILED",
+    message: "Invitation accept failed",
+  });
+}
+
+export async function buildServer(input?: {
+  store?: AppStore;
+  oauthService?: OAuthService;
+  orgContextEnforcement?: OrgContextEnforcement;
+}) {
+  const server = Fastify({
+    logger: {
+      level: API_LOG_LEVEL,
+    },
+  });
+
+  await server.register(cookie);
+  await server.register(cors, {
+    origin: (origin, cb) => {
+      if (!origin || origin === WEB_BASE_URL) {
+        cb(null, true);
+        return;
+      }
+      cb(null, false);
+    },
+    credentials: true,
+  });
+
   const store = input?.store ?? createStore();
+  const oauthService = input?.oauthService ?? createOAuthServiceFromEnv();
+  const orgContextEnforcement: OrgContextEnforcement = input?.orgContextEnforcement ?? ORG_CONTEXT_ENFORCEMENT;
   await store.ensureDefaultRoles();
 
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
+  const refreshSecret = process.env.REFRESH_TOKEN_SECRET ?? authSecret;
+  const oauthStateSecret = process.env.OAUTH_STATE_SECRET ?? "dev-oauth-state-secret";
+  const secureCookies = process.env.NODE_ENV === "production";
+  const oauthStates = new Map<string, OAuthStateRecord>();
+
+  function setSessionCookie(reply: { setCookie: Function }, refreshToken: string): void {
+    reply.setCookie(SESSION_COOKIE_NAME, refreshToken, {
+      httpOnly: true,
+      path: "/",
+      maxAge: SESSION_TTL_SEC,
+      sameSite: "lax",
+      secure: secureCookies,
+    });
+  }
+
+  function clearSessionCookie(reply: { clearCookie: Function }): void {
+    reply.clearCookie(SESSION_COOKIE_NAME, {
+      path: "/",
+      sameSite: "lax",
+      secure: secureCookies,
+    });
+  }
+
+  function setOAuthCookies(reply: { setCookie: Function }, input: { state: string; nonce: string }): void {
+    reply.setCookie(OAUTH_STATE_COOKIE_NAME, signRefreshToken(
+      {
+        sessionId: input.state,
+        userId: "oauth",
+        tokenNonce: "state",
+        expiresAt: Math.floor(Date.now() / 1000) + OAUTH_CONTEXT_TTL_SEC,
+      },
+      oauthStateSecret
+    ), {
+      httpOnly: true,
+      path: "/",
+      maxAge: OAUTH_CONTEXT_TTL_SEC,
+      sameSite: "lax",
+      secure: secureCookies,
+    });
+
+    reply.setCookie(OAUTH_NONCE_COOKIE_NAME, signRefreshToken(
+      {
+        sessionId: input.nonce,
+        userId: "oauth",
+        tokenNonce: "nonce",
+        expiresAt: Math.floor(Date.now() / 1000) + OAUTH_CONTEXT_TTL_SEC,
+      },
+      oauthStateSecret
+    ), {
+      httpOnly: true,
+      path: "/",
+      maxAge: OAUTH_CONTEXT_TTL_SEC,
+      sameSite: "lax",
+      secure: secureCookies,
+    });
+  }
+
+  function clearOAuthCookies(reply: { clearCookie: Function }): void {
+    reply.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/", sameSite: "lax", secure: secureCookies });
+    reply.clearCookie(OAUTH_NONCE_COOKIE_NAME, { path: "/", sameSite: "lax", secure: secureCookies });
+  }
+
+  async function createSessionForUser(input: {
+    user: UserRecord;
+    userAgent: string | undefined;
+    ip: string | undefined;
+    reply: { setCookie: Function };
+  }) {
+    const sessionId = crypto.randomUUID();
+    const refreshPayload: RefreshTokenPayload = {
+      sessionId,
+      userId: input.user.id,
+      tokenNonce: crypto.randomBytes(24).toString("base64url"),
+      expiresAt: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC,
+    };
+    const refreshToken = signRefreshToken(refreshPayload, refreshSecret);
+
+    await store.createSession({
+      id: sessionId,
+      userId: input.user.id,
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(refreshPayload.expiresAt * 1000),
+      userAgent: input.userAgent ?? null,
+      ip: input.ip ?? null,
+    });
+
+    const session = signAuthToken({
+      userId: input.user.id,
+      email: input.user.email,
+      sessionId,
+      ttlSec: ACCESS_TOKEN_TTL_SEC,
+      secret: authSecret,
+    });
+
+    setSessionCookie(input.reply, refreshToken);
+    return session;
+  }
+
+  async function authenticateFromBearerToken(token: string): Promise<AuthContext | null> {
+    const payload = verifyAuthToken(token, authSecret);
+    if (!payload) {
+      return null;
+    }
+
+    const [session, user] = await Promise.all([
+      store.getSessionById({ userId: payload.userId, sessionId: payload.sessionId }),
+      store.getUserById(payload.userId),
+    ]);
+
+    if (!session || !user || !isSessionActive(session)) {
+      return null;
+    }
+
+    await store.touchSession({ userId: payload.userId, sessionId: payload.sessionId });
+
+    return {
+      userId: payload.userId,
+      email: payload.email,
+      sessionId: payload.sessionId,
+    };
+  }
+
+  async function authenticateFromRefreshCookie(input: {
+    token: string;
+    rotateRefreshToken: boolean;
+    reply: { setCookie: Function };
+  }): Promise<{ auth: AuthContext; session: ReturnType<typeof signAuthToken>; user: UserRecord } | null> {
+    const payload = verifyRefreshToken(input.token, refreshSecret);
+    if (!payload) {
+      return null;
+    }
+
+    const [session, user] = await Promise.all([
+      store.getSessionById({ userId: payload.userId, sessionId: payload.sessionId }),
+      store.getUserById(payload.userId),
+    ]);
+
+    if (!session || !user || !isSessionActive(session)) {
+      return null;
+    }
+
+    if (!timingSafeEqual(session.refreshTokenHash, hashRefreshToken(input.token))) {
+      return null;
+    }
+
+    if (input.rotateRefreshToken) {
+      const rotatedPayload: RefreshTokenPayload = {
+        sessionId: payload.sessionId,
+        userId: payload.userId,
+        tokenNonce: crypto.randomBytes(24).toString("base64url"),
+        expiresAt: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC,
+      };
+      const rotatedToken = signRefreshToken(rotatedPayload, refreshSecret);
+      await store.rotateSessionRefreshToken({
+        userId: payload.userId,
+        sessionId: payload.sessionId,
+        refreshTokenHash: hashRefreshToken(rotatedToken),
+        expiresAt: new Date(rotatedPayload.expiresAt * 1000),
+      });
+      setSessionCookie(input.reply, rotatedToken);
+    } else {
+      await store.touchSession({ userId: payload.userId, sessionId: payload.sessionId });
+    }
+
+    const accessSession = signAuthToken({
+      userId: user.id,
+      email: user.email,
+      sessionId: payload.sessionId,
+      ttlSec: ACCESS_TOKEN_TTL_SEC,
+      secret: authSecret,
+    });
+
+    return {
+      auth: {
+        userId: user.id,
+        email: user.email,
+        sessionId: payload.sessionId,
+      },
+      session: accessSession,
+      user,
+    };
+  }
+
+  async function requireOrgContext(request: {
+    headers: Record<string, unknown>;
+    id: string;
+    method: string;
+    url: string;
+    auth?: AuthContext;
+    orgContext?: OrgContext;
+    orgContextWarnings?: string[];
+  }, input?: { expectedOrgId?: string }): Promise<OrgContext> {
+    if (request.orgContext) {
+      return request.orgContext;
+    }
+
+    const auth = request.auth;
+    if (!auth) {
+      throw unauthorized();
+    }
+    const authContext = auth;
+
+    function warnOrgContext(code: "ORG_CONTEXT_REQUIRED" | "INVALID_ORG_CONTEXT", message: string) {
+      request.orgContextWarnings ??= [];
+      request.orgContextWarnings.push(code);
+      server.log.warn(
+        {
+          event: "org_context_header_fallback",
+          reason: code,
+          userId: authContext.userId,
+          routeOrgId: input?.expectedOrgId ?? null,
+          headerOrgId: request.headers["x-org-id"],
+          requestId: request.id,
+          path: request.url,
+          method: request.method,
+          message,
+        },
+        "org context header fallback"
+      );
+    }
+
+    let orgId: string;
+    try {
+      orgId = parseOrgHeaderValue(request.headers["x-org-id"]);
+    } catch (error) {
+      if (orgContextEnforcement === "strict") {
+        throw error;
+      }
+      if (!input?.expectedOrgId) {
+        throw error;
+      }
+      orgId = input.expectedOrgId;
+      warnOrgContext("ORG_CONTEXT_REQUIRED", "Missing/invalid X-Org-Id header; fell back to route org id");
+    }
+
+    if (input?.expectedOrgId && input.expectedOrgId !== orgId) {
+      if (orgContextEnforcement === "strict") {
+        throw orgContextInvalid("X-Org-Id does not match route organization id");
+      }
+      warnOrgContext("INVALID_ORG_CONTEXT", "X-Org-Id mismatched route org id; fell back to route org id");
+      orgId = input.expectedOrgId;
+    }
+
+    const membership = await store.getMembership({
+      organizationId: orgId,
+      userId: authContext.userId,
+      actorUserId: authContext.userId,
+    });
+
+    if (!membership) {
+      server.log.warn(
+        {
+          event: "org_context_access_denied",
+          userId: authContext.userId,
+          orgId,
+          requestId: request.id,
+          path: request.url,
+          method: request.method,
+        },
+        "org context access denied"
+      );
+      throw orgAccessDenied();
+    }
+
+    const context: OrgContext = { organizationId: orgId, membership };
+    request.orgContext = context;
+    return context;
+  }
+
+  function requireAuth(request: { auth?: AuthContext }): AuthContext {
+    if (!request.auth) {
+      throw unauthorized();
+    }
+    return request.auth;
+  }
 
   server.setErrorHandler((error, _request, reply) => {
-    const appError = error as Partial<AppError> & { payload?: unknown };
+    const appError = error as Partial<AppErrorType> & { payload?: unknown };
     if (typeof appError.statusCode === "number" && appError.payload) {
       return reply.status(appError.statusCode).send(appError.payload);
     }
     return reply.status(500).send({ code: "INTERNAL_ERROR", message: "Internal server error" });
   });
 
-  server.addHook("preHandler", async (request) => {
-    const token = parseAuthHeader(request.headers.authorization);
-    if (!token) {
+  server.addHook("preHandler", async (request, reply) => {
+    const bearer = parseAuthHeader(request.headers.authorization);
+    if (bearer) {
+      const auth = await authenticateFromBearerToken(bearer);
+      if (auth) {
+        request.auth = auth;
+        return;
+      }
+    }
+
+    const refreshCookie = request.cookies[SESSION_COOKIE_NAME];
+    if (!refreshCookie) {
       return;
     }
-    const payload = verifyAuthToken(token, authSecret);
-    if (!payload) {
+
+    const authResult = await authenticateFromRefreshCookie({
+      token: refreshCookie,
+      rotateRefreshToken: false,
+      reply,
+    });
+    if (!authResult) {
       return;
     }
-    request.auth = { userId: payload.userId, email: payload.email };
+
+    request.auth = authResult.auth;
+    reply.header("x-access-token", authResult.session.token);
+  });
+
+  server.addHook("onSend", async (request, reply, payload) => {
+    if (request.orgContextWarnings && request.orgContextWarnings.length > 0) {
+      const uniqueWarnings = [...new Set(request.orgContextWarnings)];
+      reply.header("x-org-context-warning", uniqueWarnings.join(","));
+    }
+    return payload;
   });
 
   server.post("/v1/auth/signup", async (request, reply) => {
@@ -122,16 +669,17 @@ export async function buildServer(input?: { store?: AppStore }) {
       displayName: parsed.data.displayName ?? null,
     });
 
-    const session = signAuthToken({
-      userId: user.id,
-      email: user.email,
-      secret: authSecret,
+    const session = await createSessionForUser({
+      user,
+      userAgent: parseUserAgent(request.headers["user-agent"]),
+      ip: request.ip,
+      reply,
     });
 
     return reply.status(201).send({ session, user: toPublicUser(user) });
   });
 
-  server.post("/v1/auth/login", async (request) => {
+  server.post("/v1/auth/login", async (request, reply) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
       throw badRequest("Invalid login payload", parsed.error.flatten());
@@ -147,45 +695,183 @@ export async function buildServer(input?: { store?: AppStore }) {
       throw unauthorized("Invalid credentials");
     }
 
-    const session = signAuthToken({ userId: user.id, email: user.email, secret: authSecret });
+    const session = await createSessionForUser({
+      user,
+      userAgent: parseUserAgent(request.headers["user-agent"]),
+      ip: request.ip,
+      reply,
+    });
+
     return { session, user: toPublicUser(user) };
   });
 
-  server.post("/v1/auth/oauth/:provider/callback", async (request, reply) => {
-    const provider = z.enum(["google", "github"]).safeParse((request.params as { provider?: string }).provider);
-    if (!provider.success) {
-      throw badRequest("Unsupported OAuth provider");
+  server.post("/v1/auth/refresh", async (request, reply) => {
+    const refreshToken = request.cookies[SESSION_COOKIE_NAME];
+    if (!refreshToken) {
+      throw unauthorized("Session cookie is required");
     }
 
-    const parsed = oauthSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw badRequest("Invalid OAuth payload", parsed.error.flatten());
+    const authResult = await authenticateFromRefreshCookie({
+      token: refreshToken,
+      rotateRefreshToken: true,
+      reply,
+    });
+
+    if (!authResult) {
+      throw unauthorized("Refresh token is invalid or expired");
     }
 
-    if (parsed.data.state !== "valid-oauth-state") {
-      throw unauthorized("Invalid OAuth state");
-    }
-
-    const email = parsed.data.email ?? `${provider.data}+${parsed.data.code}@oauth.local`;
-    const existing = await store.getUserByEmail(email);
-    const user =
-      existing ??
-      (await store.createUser({
-        email,
-        passwordHash: await hashPassword(`oauth:${provider.data}:${parsed.data.code}`),
-        displayName: parsed.data.displayName ?? provider.data ?? null,
-      }));
-
-    const session = signAuthToken({ userId: user.id, email: user.email, secret: authSecret });
-    return reply.status(200).send({ session, user: toPublicUser(user), provider: provider.data });
+    return {
+      session: authResult.session,
+      user: toPublicUser(authResult.user),
+    };
   });
 
-  function requireAuth(request: { auth?: AuthContext }): AuthContext {
-    if (!request.auth) {
-      throw unauthorized();
+  server.post("/v1/auth/logout", async (request, reply) => {
+    const auth = requireAuth(request);
+    await store.revokeSession({ userId: auth.userId, sessionId: auth.sessionId });
+    clearSessionCookie(reply);
+    return { ok: true };
+  });
+
+  server.post("/v1/auth/logout-all", async (request, reply) => {
+    const auth = requireAuth(request);
+    const revokedCount = await store.revokeAllSessionsForUser(auth.userId);
+    clearSessionCookie(reply);
+    return { ok: true, revokedCount };
+  });
+
+  server.get("/v1/auth/oauth/:provider/start", async (request, reply) => {
+    const provider = extractProvider((request.params as { provider?: string }).provider);
+    const mode = (request.query as { mode?: string }).mode;
+
+    const state = generateState();
+    const nonce = crypto.randomBytes(24).toString("base64url");
+    const codeVerifier = generateCodeVerifier();
+
+    oauthStates.set(state, {
+      provider,
+      codeVerifier,
+      nonce,
+      expiresAtSec: Math.floor(Date.now() / 1000) + OAUTH_CONTEXT_TTL_SEC,
+    });
+
+    let authorizationUrl: URL;
+    try {
+      authorizationUrl = oauthService.createAuthorizationUrl(provider, {
+        state,
+        codeVerifier,
+        nonce,
+      });
+    } catch (error) {
+      throw toOAuthAppError(error);
     }
-    return request.auth;
-  }
+
+    setOAuthCookies(reply, { state, nonce });
+
+    if (mode === "json") {
+      return {
+        provider,
+        authorizationUrl: authorizationUrl.toString(),
+      };
+    }
+
+    return reply.redirect(authorizationUrl.toString());
+  });
+
+  server.get("/v1/auth/oauth/:provider/callback", async (request, reply) => {
+    const provider = extractProvider((request.params as { provider?: string }).provider);
+    const parsed = oauthQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      throw badRequest("Invalid OAuth callback query", parsed.error.flatten());
+    }
+
+    try {
+      const signedStateCookie = request.cookies[OAUTH_STATE_COOKIE_NAME];
+      const signedNonceCookie = request.cookies[OAUTH_NONCE_COOKIE_NAME];
+      if (!signedStateCookie || !signedNonceCookie) {
+        throw unauthorized("Missing OAuth state/nonce cookies");
+      }
+
+      const stateCookiePayload = verifyRefreshToken(signedStateCookie, oauthStateSecret);
+      const nonceCookiePayload = verifyRefreshToken(signedNonceCookie, oauthStateSecret);
+      if (!stateCookiePayload || !nonceCookiePayload) {
+        throw unauthorized("Invalid OAuth state/nonce cookies");
+      }
+
+      if (stateCookiePayload.sessionId !== parsed.data.state) {
+        throw unauthorized("Invalid OAuth state");
+      }
+
+      const stored = oauthStates.get(parsed.data.state);
+      oauthStates.delete(parsed.data.state);
+      clearOAuthCookies(reply);
+
+      if (!stored || stored.provider !== provider || stored.expiresAtSec <= Math.floor(Date.now() / 1000)) {
+        throw unauthorized("Invalid or expired OAuth state");
+      }
+
+      if (nonceCookiePayload.sessionId !== stored.nonce) {
+        throw unauthorized("Invalid OAuth nonce");
+      }
+
+      const profile = await oauthService.exchangeCodeForProfile(provider, {
+        code: parsed.data.code,
+        codeVerifier: stored.codeVerifier,
+        nonce: stored.nonce,
+      });
+
+      const existingUser = await store.getUserByEmail(profile.email);
+      const user =
+        existingUser ??
+        (await store.createUser({
+          email: profile.email,
+          passwordHash: await hashPassword(`oauth:${provider}:${crypto.randomUUID()}`),
+          displayName: profile.displayName,
+        }));
+
+      const session = await createSessionForUser({
+        user,
+        userAgent: parseUserAgent(request.headers["user-agent"]),
+        ip: request.ip,
+        reply,
+      });
+
+      if (parsed.data.mode === "json") {
+        return {
+          session,
+          user: toPublicUser(user),
+          provider,
+        };
+      }
+
+      const redirectUrl = new URL("/auth", WEB_BASE_URL);
+      redirectUrl.searchParams.set("oauth", "success");
+      redirectUrl.searchParams.set("provider", provider);
+      return reply.redirect(redirectUrl.toString());
+    } catch (error) {
+      const mapped = toOAuthAppError(error);
+      server.log.warn(
+        {
+          event: "oauth_callback_failed",
+          provider,
+          reasonCode: mapped.payload.code,
+          requestId: request.id,
+          path: request.url,
+        },
+        "oauth callback failed"
+      );
+
+      if (parsed.data.mode === "json") {
+        throw mapped;
+      }
+      const redirectUrl = new URL("/auth", WEB_BASE_URL);
+      redirectUrl.searchParams.set("oauth", "error");
+      redirectUrl.searchParams.set("provider", provider);
+      redirectUrl.searchParams.set("code", mapped.payload.code);
+      return reply.redirect(redirectUrl.toString());
+    }
+  });
 
   server.post("/v1/orgs", async (request, reply) => {
     const auth = requireAuth(request);
@@ -210,12 +896,8 @@ export async function buildServer(input?: { store?: AppStore }) {
       throw badRequest("Missing orgId");
     }
 
-    const actorMembership = await store.getMembership({ organizationId: orgId, userId: auth.userId });
-    if (!actorMembership) {
-      throw forbidden("Not a member of this organization");
-    }
-
-    if (!["owner", "admin"].includes(actorMembership.roleKey)) {
+    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
       throw forbidden("Role is not allowed to invite members");
     }
 
@@ -225,7 +907,7 @@ export async function buildServer(input?: { store?: AppStore }) {
     }
 
     const invitation = await store.createInvitation({
-      organizationId: orgId,
+      organizationId: orgContext.organizationId,
       email: parsed.data.email,
       roleKey: parsed.data.roleKey,
       invitedByUserId: auth.userId,
@@ -237,17 +919,12 @@ export async function buildServer(input?: { store?: AppStore }) {
   server.post("/v1/orgs/:orgId/members/:memberId/role", async (request) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string; memberId?: string };
-
     if (!params.orgId || !params.memberId) {
       throw badRequest("Missing orgId or memberId");
     }
 
-    const actorMembership = await store.getMembership({ organizationId: params.orgId, userId: auth.userId });
-    if (!actorMembership) {
-      throw forbidden("Not a member of this organization");
-    }
-
-    if (!["owner", "admin"].includes(actorMembership.roleKey)) {
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
       throw forbidden("Role is not allowed to change membership roles");
     }
 
@@ -256,12 +933,13 @@ export async function buildServer(input?: { store?: AppStore }) {
       throw badRequest("Invalid role update payload", parsed.error.flatten());
     }
 
-    if (parsed.data.roleKey === "owner" && actorMembership.roleKey !== "owner") {
+    if (parsed.data.roleKey === "owner" && orgContext.membership.roleKey !== "owner") {
       throw forbidden("Only owner can assign owner role");
     }
 
     const updated = await store.updateMembershipRole({
-      organizationId: params.orgId,
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
       memberUserId: params.memberId,
       roleKey: parsed.data.roleKey,
     });
@@ -271,6 +949,257 @@ export async function buildServer(input?: { store?: AppStore }) {
     }
 
     return { membership: updated };
+  });
+
+  server.post("/v1/orgs/:orgId/workflows", async (request, reply) => {
+    const auth = requireAuth(request);
+    const orgId = (request.params as { orgId?: string }).orgId;
+    if (!orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to create workflows");
+    }
+
+    const parsed = createWorkflowSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid workflow payload", parsed.error.flatten());
+    }
+
+    const workflow = await store.createWorkflow({
+      organizationId: orgContext.organizationId,
+      name: parsed.data.name,
+      dsl: parsed.data.dsl,
+      createdByUserId: auth.userId,
+    });
+
+    return reply.status(201).send({ workflow });
+  });
+
+  server.get("/v1/orgs/:orgId/workflows/:workflowId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const workflow = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+
+    return { workflow };
+  });
+
+  server.post("/v1/orgs/:orgId/workflows/:workflowId/publish", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to publish workflows");
+    }
+
+    const workflow = await store.publishWorkflow({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+
+    return { workflow };
+  });
+
+  server.post("/v1/orgs/:orgId/workflows/:workflowId/runs", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const parsed = createWorkflowRunSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid workflow run payload", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const workflow = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+    if (workflow.status !== "published") {
+      throw conflict("Workflow must be published before runs can be created");
+    }
+
+    const run = await store.createWorkflowRun({
+      organizationId: orgContext.organizationId,
+      workflowId: workflow.id,
+      triggerType: "manual",
+      requestedByUserId: auth.userId,
+      input: parsed.data.input,
+    });
+
+    await store.markWorkflowRunRunning({
+      organizationId: orgContext.organizationId,
+      workflowId: workflow.id,
+      runId: run.id,
+      actorUserId: auth.userId,
+    });
+
+    try {
+      const execution = executeWorkflow({
+        dsl: workflowDslSchema.parse(workflow.dsl),
+        runInput: parsed.data.input,
+      });
+
+      if (execution.status === "failed") {
+        const failedRun = await store.markWorkflowRunFailed({
+          organizationId: orgContext.organizationId,
+          workflowId: workflow.id,
+          runId: run.id,
+          actorUserId: auth.userId,
+          error: "Workflow execution failed",
+        });
+        server.log.warn(
+          {
+            event: "workflow_run_failed",
+            userId: auth.userId,
+            orgId: orgContext.organizationId,
+            workflowId: workflow.id,
+            runId: run.id,
+            requestId: request.id,
+            path: request.url,
+          },
+          "workflow run failed"
+        );
+        return reply.status(201).send({ run: failedRun, execution });
+      }
+
+      const succeededRun = await store.markWorkflowRunSucceeded({
+        organizationId: orgContext.organizationId,
+        workflowId: workflow.id,
+        runId: run.id,
+        actorUserId: auth.userId,
+        output: execution,
+      });
+      return reply.status(201).send({ run: succeededRun, execution });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workflow execution failed";
+      const failedRun = await store.markWorkflowRunFailed({
+        organizationId: orgContext.organizationId,
+        workflowId: workflow.id,
+        runId: run.id,
+        actorUserId: auth.userId,
+        error: message,
+      });
+      server.log.warn(
+        {
+          event: "workflow_run_failed",
+          userId: auth.userId,
+          orgId: orgContext.organizationId,
+          workflowId: workflow.id,
+          runId: run.id,
+          reasonCode: "WORKFLOW_EXECUTION_ERROR",
+          requestId: request.id,
+          path: request.url,
+        },
+        "workflow run failed"
+      );
+      return reply.status(201).send({
+        run: failedRun,
+        execution: {
+          status: "failed",
+          steps: [],
+          output: { completedNodeCount: 0, failedNodeId: null },
+        },
+      });
+    }
+  });
+
+  server.get("/v1/orgs/:orgId/workflows/:workflowId/runs/:runId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string; runId?: string };
+    if (!params.orgId || !params.workflowId || !params.runId) {
+      throw badRequest("Missing orgId, workflowId, or runId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const run = await store.getWorkflowRunById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      runId: params.runId,
+      actorUserId: auth.userId,
+    });
+    if (!run) {
+      throw notFound("Workflow run not found");
+    }
+
+    return { run };
+  });
+
+  server.post("/v1/invitations/:token/accept", async (request) => {
+    const auth = requireAuth(request);
+    const token = (request.params as { token?: string }).token;
+    if (!token) {
+      throw badRequest("Missing invitation token");
+    }
+
+    const organizationId = parseInvitationTokenOrganizationId(token);
+    if (!organizationId) {
+      throw badRequest("Invalid invitation token");
+    }
+
+    const headerOrgId = request.headers["x-org-id"];
+    if (headerOrgId) {
+      const parsedHeaderOrgId = parseOrgHeaderValue(headerOrgId);
+      if (parsedHeaderOrgId !== organizationId) {
+        throw orgContextInvalid("X-Org-Id does not match invitation organization");
+      }
+    }
+
+    try {
+      const result = await store.acceptInvitation({
+        organizationId,
+        token,
+        userId: auth.userId,
+        email: auth.email,
+      });
+      return { result };
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      const mapped = invitationErrorToAppError(error);
+      server.log.warn(
+        {
+          event: "invitation_accept_failed",
+          tokenPrefix: token.slice(0, 8),
+          reasonCode: mapped.payload.code,
+          userId: auth.userId,
+          requestId: request.id,
+          path: request.url,
+        },
+        "invitation accept failed"
+      );
+      throw mapped;
+    }
   });
 
   server.get("/healthz", async () => ({ ok: true }));

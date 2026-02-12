@@ -6,6 +6,7 @@ describe("auth token", () => {
     const session = signAuthToken({
       userId: "u_1",
       email: "user@example.com",
+      sessionId: "s_1",
       ttlSec: 60,
       nowMs: 1_700_000_000_000,
       secret: "secret",
@@ -14,12 +15,14 @@ describe("auth token", () => {
     const payload = verifyAuthToken(session.token, "secret", 1_700_000_000);
     expect(payload?.userId).toBe("u_1");
     expect(payload?.email).toBe("user@example.com");
+    expect(payload?.sessionId).toBe("s_1");
   });
 
   it("returns null for invalid signature", () => {
     const session = signAuthToken({
       userId: "u_1",
       email: "user@example.com",
+      sessionId: "s_1",
       secret: "secret",
     });
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { migrateUp } from "./migrate.js";
@@ -24,52 +25,92 @@ describeIf("RLS integration", () => {
     }
   });
 
-  it("returns no rows when tenant context points to another org", async () => {
+  it("enforces strict tenant isolation with and without org context", async () => {
     if (!databaseUrl) {
       return;
     }
 
     const admin = await pool.query<{ id: string }>(
-      "insert into users(email, password_hash) values ('rls-admin@example.com', 'x') returning id"
+      "insert into users(email, password_hash) values ($1, 'x') returning id",
+      [`rls-admin-${Date.now()}@example.com`]
     );
     const other = await pool.query<{ id: string }>(
-      "insert into users(email, password_hash) values ('rls-other@example.com', 'x') returning id"
-    );
-
-    const orgA = await pool.query<{ id: string }>(
-      "insert into organizations(name, slug) values ('Org A', concat('org-a-', floor(random()*1000000)::int)) returning id"
-    );
-    const orgB = await pool.query<{ id: string }>(
-      "insert into organizations(name, slug) values ('Org B', concat('org-b-', floor(random()*1000000)::int)) returning id"
+      "insert into users(email, password_hash) values ($1, 'x') returning id",
+      [`rls-other-${Date.now()}@example.com`]
     );
 
     const adminId = admin.rows.at(0)?.id;
     const otherId = other.rows.at(0)?.id;
-    const orgAId = orgA.rows.at(0)?.id;
-    const orgBId = orgB.rows.at(0)?.id;
-    if (!adminId || !otherId || !orgAId || !orgBId) {
-      throw new Error("Failed to setup test fixture rows");
+    if (!adminId || !otherId) {
+      throw new Error("Failed to setup users");
     }
 
-    await pool.query("insert into memberships(organization_id, user_id, role_key) values ($1, $2, 'owner')", [
-      orgAId,
-      adminId,
-    ]);
-    await pool.query("insert into memberships(organization_id, user_id, role_key) values ($1, $2, 'owner')", [
-      orgBId,
-      otherId,
-    ]);
+    const orgAId = crypto.randomUUID();
+    const orgBId = crypto.randomUUID();
+
+    const setup = await pool.connect();
+    try {
+      await setup.query("begin");
+      await setup.query(
+        "select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)",
+        [adminId, orgAId]
+      );
+      await setup.query("insert into organizations(id, name, slug) values ($1, 'Org A', $2)", [
+        orgAId,
+        `org-a-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      ]);
+      await setup.query("insert into memberships(organization_id, user_id, role_key) values ($1, $2, 'owner')", [
+        orgAId,
+        adminId,
+      ]);
+      await setup.query(
+        "insert into workflows(organization_id, name, status, version, dsl, created_by_user_id) values ($1, 'Org A Workflow', 'published', 1, $2::jsonb, $3)",
+        [orgAId, JSON.stringify({ version: "v2", trigger: { type: "trigger.manual" }, nodes: [{ id: "n1", type: "agent.execute" }] }), adminId]
+      );
+
+      await setup.query(
+        "select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)",
+        [otherId, orgBId]
+      );
+      await setup.query("insert into organizations(id, name, slug) values ($1, 'Org B', $2)", [
+        orgBId,
+        `org-b-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      ]);
+      await setup.query("insert into memberships(organization_id, user_id, role_key) values ($1, $2, 'owner')", [
+        orgBId,
+        otherId,
+      ]);
+      await setup.query(
+        "insert into workflows(organization_id, name, status, version, dsl, created_by_user_id) values ($1, 'Org B Workflow', 'published', 1, $2::jsonb, $3)",
+        [orgBId, JSON.stringify({ version: "v2", trigger: { type: "trigger.manual" }, nodes: [{ id: "n1", type: "agent.execute" }] }), otherId]
+      );
+
+      await setup.query("commit");
+    } catch (error) {
+      await setup.query("rollback");
+      throw error;
+    } finally {
+      setup.release();
+    }
 
     const client = await pool.connect();
     try {
       await client.query("begin");
-      await client.query(
-        "select set_config('app.current_org_id', $1, true)",
-        [orgBId]
-      );
 
-      const hidden = await client.query("select id from organizations where id = $1", [orgAId]);
-      expect(hidden.rowCount).toBe(0);
+      const noContext = await client.query("select id from organizations where id = $1", [orgAId]);
+      expect(noContext.rowCount).toBe(0);
+
+      await client.query("select set_config('app.current_org_id', $1, true)", [orgBId]);
+      const wrongContext = await client.query("select id from organizations where id = $1", [orgAId]);
+      expect(wrongContext.rowCount).toBe(0);
+      const wrongWorkflowContext = await client.query("select id from workflows where organization_id = $1", [orgAId]);
+      expect(wrongWorkflowContext.rowCount).toBe(0);
+
+      await client.query("select set_config('app.current_org_id', $1, true)", [orgAId]);
+      const rightContext = await client.query("select id from organizations where id = $1", [orgAId]);
+      expect(rightContext.rowCount).toBe(1);
+      const rightWorkflowContext = await client.query("select id from workflows where organization_id = $1", [orgAId]);
+      expect(rightWorkflowContext.rowCount).toBe(1);
 
       await client.query("rollback");
     } finally {

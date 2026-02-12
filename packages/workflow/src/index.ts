@@ -20,3 +20,88 @@ export const workflowDslSchema = z.object({
 });
 
 export type WorkflowDsl = z.infer<typeof workflowDslSchema>;
+
+export type WorkflowExecutionStatus = "succeeded" | "failed";
+
+export type WorkflowExecutionStep = {
+  nodeId: string;
+  nodeType: WorkflowDsl["nodes"][number]["type"];
+  status: WorkflowExecutionStatus;
+  output?: unknown;
+  error?: string;
+};
+
+export type WorkflowExecutionResult = {
+  status: WorkflowExecutionStatus;
+  steps: WorkflowExecutionStep[];
+  output: {
+    completedNodeCount: number;
+    failedNodeId: string | null;
+  };
+};
+
+export function executeWorkflow(input: { dsl: WorkflowDsl; runInput?: unknown }): WorkflowExecutionResult {
+  const steps: WorkflowExecutionStep[] = [];
+
+  for (const node of input.dsl.nodes) {
+    try {
+      let output: unknown;
+      switch (node.type) {
+        case "http.request":
+          output = {
+            accepted: true,
+            requestId: `${node.id}-request`,
+          };
+          break;
+        case "agent.execute":
+          output = {
+            accepted: true,
+            taskId: `${node.id}-task`,
+          };
+          break;
+        case "condition":
+          output = {
+            branch: "true",
+          };
+          break;
+        case "parallel.join":
+          output = {
+            joined: true,
+          };
+          break;
+      }
+
+      steps.push({
+        nodeId: node.id,
+        nodeType: node.type,
+        status: "succeeded",
+        output,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Workflow node execution failed";
+      steps.push({
+        nodeId: node.id,
+        nodeType: node.type,
+        status: "failed",
+        error: message,
+      });
+      return {
+        status: "failed",
+        steps,
+        output: {
+          completedNodeCount: steps.filter((step) => step.status === "succeeded").length,
+          failedNodeId: node.id,
+        },
+      };
+    }
+  }
+
+  return {
+    status: "succeeded",
+    steps,
+    output: {
+      completedNodeCount: steps.length,
+      failedNodeId: null,
+    },
+  };
+}

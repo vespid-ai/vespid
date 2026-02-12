@@ -6,7 +6,10 @@ export function createStore(): AppStore {
   if (process.env.DATABASE_URL) {
     return new PgAppStore(process.env.DATABASE_URL);
   }
-  return new MemoryAppStore();
+  if (process.env.NODE_ENV === "test") {
+    return new MemoryAppStore();
+  }
+  throw new Error("DATABASE_URL is required outside test mode");
 }
 
 export { MemoryAppStore, PgAppStore };

@@ -1,56 +1,71 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { apiFetch } from "../../lib/api";
+import { getActiveOrgId, setActiveOrgId, subscribeActiveOrg } from "../../lib/org-context";
 
-function getApiBase(): string {
-  return process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3001";
-}
+type CreateOrgResponse = {
+  organization?: { id: string; slug: string; name: string };
+};
 
 export default function OrganizationPage() {
-  const [token, setToken] = useState("");
   const [orgName, setOrgName] = useState("Acme");
   const [orgSlug, setOrgSlug] = useState(`acme-${Date.now()}`);
   const [orgId, setOrgId] = useState("");
   const [inviteEmail, setInviteEmail] = useState("member@example.com");
   const [result, setResult] = useState<unknown>(null);
 
+  useEffect(() => {
+    const current = getActiveOrgId();
+    if (current) {
+      setOrgId(current);
+    }
+
+    return subscribeActiveOrg((value) => {
+      if (value) {
+        setOrgId(value);
+      }
+    });
+  }, []);
+
   async function createOrganization() {
-    const response = await fetch(`${getApiBase()}/v1/orgs`, {
+    const response = await apiFetch("/v1/orgs", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-      },
       body: JSON.stringify({ name: orgName, slug: orgSlug }),
     });
-    const payload = await response.json();
+    const payload = (await response.json()) as CreateOrgResponse;
     setResult(payload);
-    const id = (payload as { organization?: { id?: string } })?.organization?.id;
-    if (id) {
-      setOrgId(id);
+
+    const createdOrgId = payload.organization?.id;
+    if (createdOrgId) {
+      setOrgId(createdOrgId);
+      setActiveOrgId(createdOrgId);
     }
   }
 
   async function inviteMember() {
-    const response = await fetch(`${getApiBase()}/v1/orgs/${orgId}/invitations`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
+    if (!orgId) {
+      setResult({ code: "ORG_CONTEXT_REQUIRED", message: "Set an active org before inviting." });
+      return;
+    }
+
+    const response = await apiFetch(
+      `/v1/orgs/${orgId}/invitations`,
+      {
+        method: "POST",
+        body: JSON.stringify({ email: inviteEmail, roleKey: "member" }),
       },
-      body: JSON.stringify({ email: inviteEmail, roleKey: "member" }),
-    });
-    setResult(await response.json());
+      { orgScoped: true }
+    );
+    const payload = await response.json();
+    setResult(payload);
   }
 
   return (
     <main>
-      <h1>Organization Bootstrap</h1>
+      <h1>Organization</h1>
 
       <div className="card">
-        <label htmlFor="token">Bearer token</label>
-        <input id="token" value={token} onChange={(event) => setToken(event.target.value)} />
-
         <label htmlFor="orgName">Organization name</label>
         <input id="orgName" value={orgName} onChange={(event) => setOrgName(event.target.value)} />
 
@@ -61,8 +76,18 @@ export default function OrganizationPage() {
       </div>
 
       <div className="card">
-        <label htmlFor="orgId">Organization ID</label>
-        <input id="orgId" value={orgId} onChange={(event) => setOrgId(event.target.value)} />
+        <label htmlFor="orgId">Active organization ID</label>
+        <input
+          id="orgId"
+          value={orgId}
+          onChange={(event) => {
+            const value = event.target.value;
+            setOrgId(value);
+            if (value) {
+              setActiveOrgId(value);
+            }
+          }}
+        />
 
         <label htmlFor="inviteEmail">Invite email</label>
         <input id="inviteEmail" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />

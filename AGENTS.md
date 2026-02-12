@@ -27,20 +27,13 @@ Use this monorepo layout:
 - `scripts/` local/dev/CI utility scripts
 
 ## Build, Test, and Development Commands
-Current state (bootstrap): if tooling is not yet committed, use repository hygiene commands only:
-
-- `git status`
-- `git diff`
-- `git add <path>`
-- `git commit -m "type(scope): summary"`
-
-Once foundation tooling is committed, standardize on these commands and keep AGENTS in sync:
-
 - `pnpm install`
 - `pnpm build`
 - `pnpm test`
 - `pnpm lint`
 - `pnpm dev`
+- `pnpm migrate:check`
+- `pnpm migrate`
 
 ## Repository Truth & Priorities
 When documentation conflicts, trust in this order:
@@ -54,13 +47,18 @@ When documentation conflicts, trust in this order:
 - Treat organization isolation as non-negotiable; every tenant-scoped read/write must enforce org boundary.
 - Prefer typed module boundaries and explicit contracts over implicit shared state.
 - Workflow runtime uses Graph DSL v2 (new design), not Shrike GRAPH_V1 compatibility mode.
+- Workflow lifecycle baseline: `draft -> published`, with run state `queued -> running -> succeeded|failed`.
 - Drizzle is the default DB access path; use parameterized raw SQL only for proven complex queries.
 - Auth model is Email + OAuth first; enterprise SSO can be added later without breaking core auth contracts.
+- Auth runtime is dual-mode: short-lived Bearer access token + HttpOnly refresh cookie.
 - Billing model is Seat + Usage (Stripe), with idempotent webhook processing.
 - Node agent supports CLI-first execution with optional Docker isolation mode.
 
 ## Security & Multi-Tenant Guardrails
 - Never access tenant data without tenant context (`organization_id` + auth principal).
+- Org-scoped API routes must require `X-Org-Id` and membership validation.
+- Workflow APIs are org-scoped and require `X-Org-Id` with membership checks.
+- Temporary rollout mode `ORG_CONTEXT_ENFORCEMENT=warn` is allowed only for short observation windows and only for header fallback observation; membership checks stay enforced.
 - Enforce PostgreSQL RLS for tenant-scoped tables.
 - Encrypt secrets at rest (envelope encryption); never log plaintext credentials/tokens.
 - Keep audit logs for permission changes, credential changes, workflow publish/deploy actions, and billing mutations.

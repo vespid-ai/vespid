@@ -23,8 +23,39 @@ export type AuthSession = {
   token: string;
   userId: string;
   email: string;
+  sessionId: string;
+  tokenType: "access";
   issuedAt: number;
   expiresAt: number;
+};
+
+export type AccessTokenClaims = {
+  userId: string;
+  email: string;
+  sessionId: string;
+  tokenType: "access";
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type SessionRecord = {
+  id: string;
+  userId: string;
+  refreshTokenHash: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  userAgent: string | null;
+  ip: string | null;
+  createdAt: string;
+  lastUsedAt: string;
+};
+
+export type SessionCookieOptions = {
+  name: string;
+  path: string;
+  maxAgeSec: number;
+  secure: boolean;
+  sameSite: "Lax" | "Strict" | "None";
 };
 
 export type ApiError = {
@@ -39,3 +70,12 @@ export type PublicUser = {
   displayName: string | null;
   createdAt: string;
 };
+
+export type InvitationAcceptResult = {
+  invitationId: string;
+  organizationId: string;
+  membershipId: string;
+  accepted: boolean;
+};
+
+export type OrgContextError = "ORG_CONTEXT_REQUIRED" | "ORG_ACCESS_DENIED" | "INVALID_ORG_CONTEXT";

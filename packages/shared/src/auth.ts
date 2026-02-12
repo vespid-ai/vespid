@@ -1,12 +1,5 @@
 import crypto from "node:crypto";
-import type { AuthSession } from "./types.js";
-
-type TokenPayload = {
-  userId: string;
-  email: string;
-  issuedAt: number;
-  expiresAt: number;
-};
+import type { AccessTokenClaims, AuthSession } from "./types.js";
 
 function b64UrlEncode(input: string): string {
   return Buffer.from(input, "utf8").toString("base64url");
@@ -23,6 +16,7 @@ function hmac(content: string, secret: string): string {
 export function signAuthToken(input: {
   userId: string;
   email: string;
+  sessionId: string;
   ttlSec?: number;
   nowMs?: number;
   secret: string;
@@ -31,9 +25,11 @@ export function signAuthToken(input: {
   const issuedAt = Math.floor(nowMs / 1000);
   const expiresAt = issuedAt + (input.ttlSec ?? 60 * 60 * 8);
 
-  const payload: TokenPayload = {
+  const payload: AccessTokenClaims = {
     userId: input.userId,
     email: input.email,
+    sessionId: input.sessionId,
+    tokenType: "access",
     issuedAt,
     expiresAt,
   };
@@ -46,12 +42,14 @@ export function signAuthToken(input: {
     token: `${encoded}.${signature}`,
     userId: payload.userId,
     email: payload.email,
+    sessionId: payload.sessionId,
+    tokenType: payload.tokenType,
     issuedAt,
     expiresAt,
   };
 }
 
-export function verifyAuthToken(token: string, secret: string, nowSec = Math.floor(Date.now() / 1000)): TokenPayload | null {
+export function verifyAuthToken(token: string, secret: string, nowSec = Math.floor(Date.now() / 1000)): AccessTokenClaims | null {
   const [encoded, signature] = token.split(".");
   if (!encoded || !signature) {
     return null;
@@ -68,8 +66,11 @@ export function verifyAuthToken(token: string, secret: string, nowSec = Math.flo
   }
 
   try {
-    const payload = JSON.parse(b64UrlDecode(encoded)) as TokenPayload;
-    if (!payload.userId || !payload.email) {
+    const payload = JSON.parse(b64UrlDecode(encoded)) as AccessTokenClaims;
+    if (!payload.userId || !payload.email || !payload.sessionId) {
+      return null;
+    }
+    if (payload.tokenType !== "access") {
       return null;
     }
     if (payload.expiresAt <= nowSec) {
