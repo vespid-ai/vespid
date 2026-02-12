@@ -1,0 +1,20 @@
+{
+  "name": "vespid",
+  "private": true,
+  "packageManager": "pnpm@10.29.3",
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "dev": "pnpm --parallel --filter @vespid/api --filter @vespid/web --filter @vespid/worker dev",
+    "lint": "pnpm -r --if-present lint",
+    "test": "pnpm -r --if-present build && pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "migrate": "pnpm --filter @vespid/db migrate",
+    "migrate:check": "pnpm --filter @vespid/db migrate:check"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

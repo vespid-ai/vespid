@@ -1,0 +1,32 @@
+{
+  "name": "@vespid/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./repositories": "./src/repositories.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json -w",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude 'dist/**'",
+    "test:integration": "vitest run src/rls.integration.test.ts",
+    "migrate": "tsx src/migrate.ts",
+    "migrate:check": "tsx src/migration-check.ts"
+  },
+  "dependencies": {
+    "@vespid/shared": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.9",
+    "@types/pg": "^8.15.6"
+  }
+}

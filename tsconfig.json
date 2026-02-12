@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./apps/api" },
+    { "path": "./apps/web" },
+    { "path": "./apps/worker" },
+    { "path": "./apps/node-agent" },
+    { "path": "./packages/db" },
+    { "path": "./packages/shared" },
+    { "path": "./packages/workflow" },
+    { "path": "./packages/connectors" },
+    { "path": "./tests" }
+  ]
+}

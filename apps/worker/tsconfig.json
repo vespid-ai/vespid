@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "composite": true,
+    "baseUrl": ".",
+    "paths": {
+      "@vespid/workflow": ["../../packages/workflow/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
