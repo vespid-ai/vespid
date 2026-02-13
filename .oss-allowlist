@@ -6,6 +6,7 @@ NOTICE
 COPYRIGHT
 README.md
 AGENTS.md
+.oss-allowlist
 .gitignore
 pnpm-workspace.yaml
 pnpm-lock.yaml
