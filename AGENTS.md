@@ -54,6 +54,24 @@ When documentation conflicts, trust in this order:
 3. `AGENTS.md`
 4. README or ad-hoc notes
 
+## Multi-Repo Collaboration Model (AI-Facing)
+
+This product is developed across three sibling repositories (local default under `/Users/mangaohua/src`):
+
+- `vespid` (private, source of truth): `git@github.com:vespid-ai/vespid.git`
+- `vespid-community` (public, generated mirror + PR intake): `git@github.com:vespid-ai/vespid-community.git`
+- `vespid-enterprise` (private, proprietary modules): `git@github.com:vespid-ai/vespid-enterprise.git`
+
+Hard rules:
+- Community code MUST build/run with no enterprise packages installed.
+- Never add static dependencies from community code to enterprise code/packages.
+- Enterprise features integrate via an optional provider package loaded at runtime (for example `VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-ai/enterprise-provider`).
+- When a task spans multiple repos, implement it as separate commits/PRs in the correct repo (do not mix changes).
+
+Operational guardrails:
+- Before running commands, print the active repo root (`pwd` and `git rev-parse --show-toplevel`).
+- When referencing files across repos, always use absolute paths under `/Users/mangaohua/src/...` and label which repo each path belongs to.
+
 ## Open Source Governance (AI-Facing)
 - `Open Source Boundary Invariant`: Open Core separation is mandatory. Community code must remain buildable/runnable without enterprise modules.
 - `License-per-directory Rule`: Every package and directory scope must have explicit SPDX-aligned license ownership; do not introduce mixed-license ambiguity in a single module.
