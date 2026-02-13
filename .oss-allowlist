@@ -8,6 +8,7 @@ README.md
 AGENTS.md
 .gitignore
 pnpm-workspace.yaml
+pnpm-lock.yaml
 package.json
 tsconfig.json
 tsconfig.base.json
