@@ -69,10 +69,12 @@ jobs:
             echo "ENTERPRISE_NPM_TOKEN secret is required for enterprise integration workflow" >&2
             exit 1
           fi
-          cat > .npmrc <<'NPMRC'
-          @vespid-ai:registry=https://npm.pkg.github.com
-          //npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
-          NPMRC
+          # Write the actual token into workspace .npmrc so later steps don't depend
+          # on env substitution in npm config parsing.
+          printf '%s\n' \
+            '@vespid-ai:registry=https://npm.pkg.github.com' \
+            "//npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}" \
+            > .npmrc
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile

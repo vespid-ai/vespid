@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   cla:
     runs-on: ubuntu-latest
@@ -11,7 +15,10 @@ jobs:
       - name: CLA assistant
         uses: contributor-assistant/github-action@v2.6.1
         with:
-          path-to-cla-document: docs/open-source/cla-policy.md
+          path-to-document: docs/open-source/cla-policy.md
+          path-to-signatures: .github/cla/signatures.json
+          branch: cla-signatures
+          allowlist: mangaohua
           custom-notsigned-prcomment: |
             Thanks for the contribution. Please sign the CLA to continue the review.
           custom-allsigned-prcomment: |

@@ -10,6 +10,7 @@ const describeIf = runIntegration ? describe : describe.skip;
 
 describeIf("RLS integration", () => {
   let pool: Pool;
+  let appPool: Pool;
 
   beforeAll(async () => {
     if (!databaseUrl) {
@@ -17,9 +18,33 @@ describeIf("RLS integration", () => {
     }
     pool = new Pool({ connectionString: databaseUrl });
     await migrateUp(databaseUrl);
+
+    // In CI we connect as `postgres` (superuser with BYPASSRLS). RLS is not
+    // meaningful under superuser sessions, so create a restricted app role and
+    // run the RLS assertions through that role.
+    await pool.query(`
+      do $$
+      begin
+        if not exists (select 1 from pg_roles where rolname = 'vespid_app') then
+          create role vespid_app login password 'vespid_app' nosuperuser nocreatedb nocreaterole inherit noreplication;
+        end if;
+      end
+      $$;
+    `);
+    await pool.query(`grant usage on schema public to vespid_app;`);
+    await pool.query(`grant select, insert, update, delete on all tables in schema public to vespid_app;`);
+    await pool.query(`grant usage, select on all sequences in schema public to vespid_app;`);
+
+    const appUrl = new URL(databaseUrl);
+    appUrl.username = "vespid_app";
+    appUrl.password = "vespid_app";
+    appPool = new Pool({ connectionString: appUrl.toString() });
   });
 
   afterAll(async () => {
+    if (appPool) {
+      await appPool.end();
+    }
     if (pool) {
       await pool.end();
     }
@@ -30,11 +55,11 @@ describeIf("RLS integration", () => {
       return;
     }
 
-    const admin = await pool.query<{ id: string }>(
+    const admin = await appPool.query<{ id: string }>(
       "insert into users(email, password_hash) values ($1, 'x') returning id",
       [`rls-admin-${Date.now()}@example.com`]
     );
-    const other = await pool.query<{ id: string }>(
+    const other = await appPool.query<{ id: string }>(
       "insert into users(email, password_hash) values ($1, 'x') returning id",
       [`rls-other-${Date.now()}@example.com`]
     );
@@ -48,7 +73,7 @@ describeIf("RLS integration", () => {
     const orgAId = crypto.randomUUID();
     const orgBId = crypto.randomUUID();
 
-    const setup = await pool.connect();
+    const setup = await appPool.connect();
     try {
       await setup.query("begin");
       await setup.query(
@@ -93,7 +118,7 @@ describeIf("RLS integration", () => {
       setup.release();
     }
 
-    const client = await pool.connect();
+    const client = await appPool.connect();
     try {
       await client.query("begin");
 
