@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "./server.js";
 import { MemoryAppStore } from "./store/memory-store.js";
 import type { OAuthService, OAuthProvider } from "./oauth.js";
+import type { WorkflowRunQueueProducer } from "./queue/producer.js";
+import type { WorkflowRunJobPayload } from "@vespid/shared";
 
 function extractCookies(input: { headers: Record<string, unknown> }, names: string[]): string {
   const setCookieHeader = input.headers["set-cookie"];
@@ -49,12 +51,43 @@ function fakeOAuthService(): OAuthService {
   };
 }
 
+type FakeQueueProducer = WorkflowRunQueueProducer & {
+  enqueued: WorkflowRunJobPayload[];
+  setFailure(error: Error | null): void;
+};
+
+function createFakeQueueProducer(): FakeQueueProducer {
+  const enqueued: WorkflowRunJobPayload[] = [];
+  let failure: Error | null = null;
+  return {
+    enqueued,
+    setFailure(error) {
+      failure = error;
+    },
+    async enqueueWorkflowRun(input) {
+      if (failure) {
+        throw failure;
+      }
+      enqueued.push(input.payload);
+    },
+    async close() {
+      return;
+    },
+  };
+}
+
 describe("api hardening foundation", () => {
   const store = new MemoryAppStore();
+  const queueProducer = createFakeQueueProducer();
   let server: Awaited<ReturnType<typeof buildServer>>;
 
   beforeAll(async () => {
-    server = await buildServer({ store, oauthService: fakeOAuthService(), orgContextEnforcement: "strict" });
+    server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      orgContextEnforcement: "strict",
+      queueProducer,
+    });
   });
 
   afterAll(async () => {
@@ -447,6 +480,7 @@ describe("api hardening foundation", () => {
     expect(publishWorkflow.statusCode).toBe(200);
     expect((publishWorkflow.json() as { workflow: { status: string } }).workflow.status).toBe("published");
 
+    const enqueueCountBefore = queueProducer.enqueued.length;
     const runWorkflow = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
@@ -459,13 +493,18 @@ describe("api hardening foundation", () => {
       },
     });
     expect(runWorkflow.statusCode).toBe(201);
-    const runBody = runWorkflow.json() as {
-      run: { id: string; status: string };
-      execution: { status: string; steps: Array<unknown> };
-    };
-    expect(runBody.run.status).toBe("succeeded");
-    expect(runBody.execution.status).toBe("succeeded");
-    expect(runBody.execution.steps.length).toBe(2);
+    const runBody = runWorkflow.json() as { run: { id: string; status: string; attemptCount: number } };
+    expect(runBody.run.status).toBe("queued");
+    expect(runBody.run.attemptCount).toBe(0);
+    expect(queueProducer.enqueued.length).toBe(enqueueCountBefore + 1);
+    expect(queueProducer.enqueued[queueProducer.enqueued.length - 1]).toEqual(
+      expect.objectContaining({
+        runId: runBody.run.id,
+        organizationId: orgId,
+        workflowId,
+        requestedByUserId: expect.any(String),
+      })
+    );
 
     const getRun = await server.inject({
       method: "GET",
@@ -476,7 +515,82 @@ describe("api hardening foundation", () => {
       },
     });
     expect(getRun.statusCode).toBe(200);
-    expect((getRun.json() as { run: { id: string } }).run.id).toBe(runBody.run.id);
+    const fetchedRun = (getRun.json() as { run: { id: string; status: string } }).run;
+    expect(fetchedRun.id).toBe(runBody.run.id);
+    expect(fetchedRun.status).toBe("queued");
+  });
+
+  it("returns 503 and rolls back queued run when queue is unavailable", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `queue-down-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Queue Down Org",
+        slug: `queue-down-org-${Date.now()}`,
+      },
+    });
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const createWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Queue Down Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [{ id: "node-http", type: "http.request" }],
+        },
+      },
+    });
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publishWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishWorkflow.statusCode).toBe(200);
+
+    const sizeBefore = ((store as unknown as { workflowRuns: Map<string, unknown> }).workflowRuns).size;
+    queueProducer.setFailure(new Error("REDIS_DOWN"));
+
+    const runWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        input: { issueKey: "QUEUE-DOWN-1" },
+      },
+    });
+
+    expect(runWorkflow.statusCode).toBe(503);
+    expect((runWorkflow.json() as { code: string }).code).toBe("QUEUE_UNAVAILABLE");
+
+    const sizeAfter = ((store as unknown as { workflowRuns: Map<string, unknown> }).workflowRuns).size;
+    expect(sizeAfter).toBe(sizeBefore);
+    queueProducer.setFailure(null);
   });
 
   it("completes invitation accept flow and enforces email match", async () => {
@@ -581,12 +695,14 @@ describe("api hardening foundation", () => {
 
 describe("api rbac promotion flow", () => {
   let server: Awaited<ReturnType<typeof buildServer>>;
+  const queueProducer = createFakeQueueProducer();
 
   beforeAll(async () => {
     server = await buildServer({
       store: new MemoryAppStore(),
       oauthService: fakeOAuthService(),
       orgContextEnforcement: "strict",
+      queueProducer,
     });
   });
 
@@ -790,6 +906,7 @@ describe("api rbac promotion flow", () => {
 
 describe("api org context warn mode", () => {
   let server: Awaited<ReturnType<typeof buildServer>>;
+  const queueProducer = createFakeQueueProducer();
   let ownerToken: string;
   let outsiderToken: string;
   let orgId: string;
@@ -799,6 +916,7 @@ describe("api org context warn mode", () => {
       store: new MemoryAppStore(),
       oauthService: fakeOAuthService(),
       orgContextEnforcement: "warn",
+      queueProducer,
     });
 
     const owner = await server.inject({

@@ -10,9 +10,13 @@
     "start": "node dist/main.js",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --exclude 'dist/**' --passWithNoTests"
   },
   "dependencies": {
-    "@vespid/workflow": "workspace:*"
+    "@vespid/db": "workspace:*",
+    "@vespid/shared": "workspace:*",
+    "@vespid/workflow": "workspace:*",
+    "bullmq": "^5.69.1",
+    "ioredis": "^5.9.3"
   }
 }

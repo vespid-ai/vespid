@@ -19,7 +19,12 @@ import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from
 import { createStore } from "./store/index.js";
 import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
-import { executeWorkflow, workflowDslSchema } from "@vespid/workflow";
+import { workflowDslSchema } from "@vespid/workflow";
+import {
+  createBullMqWorkflowRunQueueProducer,
+  createInMemoryWorkflowRunQueueProducer,
+  type WorkflowRunQueueProducer,
+} from "./queue/producer.js";
 
 type AuthContext = {
   userId: string;
@@ -139,6 +144,10 @@ function orgContextInvalid(message = "Invalid organization context"): AppError {
 
 function orgAccessDenied(message = "You are not a member of this organization"): AppError {
   return new AppError(403, { code: "ORG_ACCESS_DENIED", message });
+}
+
+function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
+  return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
 }
 
 function base64UrlEncode(input: string): string {
@@ -306,6 +315,7 @@ export async function buildServer(input?: {
   store?: AppStore;
   oauthService?: OAuthService;
   orgContextEnforcement?: OrgContextEnforcement;
+  queueProducer?: WorkflowRunQueueProducer;
 }) {
   const server = Fastify({
     logger: {
@@ -328,6 +338,11 @@ export async function buildServer(input?: {
   const store = input?.store ?? createStore();
   const oauthService = input?.oauthService ?? createOAuthServiceFromEnv();
   const orgContextEnforcement: OrgContextEnforcement = input?.orgContextEnforcement ?? ORG_CONTEXT_ENFORCEMENT;
+  const queueProducer =
+    input?.queueProducer ??
+    (process.env.NODE_ENV === "test" && !process.env.REDIS_URL
+      ? createInMemoryWorkflowRunQueueProducer()
+      : createBullMqWorkflowRunQueueProducer());
   await store.ensureDefaultRoles();
 
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
@@ -609,9 +624,17 @@ export async function buildServer(input?: {
 
   server.setErrorHandler((error, _request, reply) => {
     const appError = error as Partial<AppErrorType> & { payload?: unknown };
+    const errorCode = (error as { code?: unknown }).code;
     if (typeof appError.statusCode === "number" && appError.payload) {
       return reply.status(appError.statusCode).send(appError.payload);
     }
+    if (typeof appError.statusCode === "number" && appError.statusCode >= 400 && appError.statusCode < 500) {
+      return reply.status(appError.statusCode).send({
+        code: typeof errorCode === "string" ? errorCode : "REQUEST_ERROR",
+        message: typeof appError.message === "string" ? appError.message : "Request error",
+      });
+    }
+    server.log.error({ err: error }, "unhandled application error");
     return reply.status(500).send({ code: "INTERNAL_ERROR", message: "Internal server error" });
   });
 
@@ -649,6 +672,10 @@ export async function buildServer(input?: {
       reply.header("x-org-context-warning", uniqueWarnings.join(","));
     }
     return payload;
+  });
+
+  server.addHook("onClose", async () => {
+    await queueProducer.close();
   });
 
   server.post("/v1/auth/signup", async (request, reply) => {
@@ -1056,81 +1083,54 @@ export async function buildServer(input?: {
       input: parsed.data.input,
     });
 
-    await store.markWorkflowRunRunning({
-      organizationId: orgContext.organizationId,
-      workflowId: workflow.id,
-      runId: run.id,
-      actorUserId: auth.userId,
-    });
-
     try {
-      const execution = executeWorkflow({
-        dsl: workflowDslSchema.parse(workflow.dsl),
-        runInput: parsed.data.input,
-      });
-
-      if (execution.status === "failed") {
-        const failedRun = await store.markWorkflowRunFailed({
-          organizationId: orgContext.organizationId,
-          workflowId: workflow.id,
+      await queueProducer.enqueueWorkflowRun({
+        payload: {
           runId: run.id,
-          actorUserId: auth.userId,
-          error: "Workflow execution failed",
-        });
-        server.log.warn(
-          {
-            event: "workflow_run_failed",
-            userId: auth.userId,
-            orgId: orgContext.organizationId,
-            workflowId: workflow.id,
-            runId: run.id,
-            requestId: request.id,
-            path: request.url,
-          },
-          "workflow run failed"
-        );
-        return reply.status(201).send({ run: failedRun, execution });
-      }
-
-      const succeededRun = await store.markWorkflowRunSucceeded({
-        organizationId: orgContext.organizationId,
-        workflowId: workflow.id,
-        runId: run.id,
-        actorUserId: auth.userId,
-        output: execution,
+          organizationId: run.organizationId,
+          workflowId: run.workflowId,
+          requestedByUserId: run.requestedByUserId,
+        },
+        maxAttempts: run.maxAttempts,
       });
-      return reply.status(201).send({ run: succeededRun, execution });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Workflow execution failed";
-      const failedRun = await store.markWorkflowRunFailed({
-        organizationId: orgContext.organizationId,
-        workflowId: workflow.id,
-        runId: run.id,
-        actorUserId: auth.userId,
-        error: message,
-      });
-      server.log.warn(
+      server.log.info(
         {
-          event: "workflow_run_failed",
+          event: "workflow_run_enqueued",
           userId: auth.userId,
           orgId: orgContext.organizationId,
           workflowId: workflow.id,
           runId: run.id,
-          reasonCode: "WORKFLOW_EXECUTION_ERROR",
           requestId: request.id,
           path: request.url,
+          method: request.method,
         },
-        "workflow run failed"
+        "workflow run enqueued"
       );
-      return reply.status(201).send({
-        run: failedRun,
-        execution: {
-          status: "failed",
-          steps: [],
-          output: { completedNodeCount: 0, failedNodeId: null },
-        },
+    } catch (error) {
+      await store.deleteQueuedWorkflowRun({
+        organizationId: orgContext.organizationId,
+        workflowId: workflow.id,
+        runId: run.id,
+        actorUserId: auth.userId,
       });
+      server.log.error(
+        {
+          event: "queue_unavailable",
+          userId: auth.userId,
+          orgId: orgContext.organizationId,
+          workflowId: workflow.id,
+          runId: run.id,
+          requestId: request.id,
+          path: request.url,
+          method: request.method,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "workflow queue unavailable"
+      );
+      throw queueUnavailable();
     }
+
+    return reply.status(201).send({ run });
   });
 
   server.get("/v1/orgs/:orgId/workflows/:workflowId/runs/:runId", async (request) => {

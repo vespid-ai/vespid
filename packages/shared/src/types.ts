@@ -79,3 +79,10 @@ export type InvitationAcceptResult = {
 };
 
 export type OrgContextError = "ORG_CONTEXT_REQUIRED" | "ORG_ACCESS_DENIED" | "INVALID_ORG_CONTEXT";
+
+export type WorkflowRunJobPayload = {
+  runId: string;
+  organizationId: string;
+  workflowId: string;
+  requestedByUserId: string;
+};

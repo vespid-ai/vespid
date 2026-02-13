@@ -47,7 +47,8 @@ When documentation conflicts, trust in this order:
 - Treat organization isolation as non-negotiable; every tenant-scoped read/write must enforce org boundary.
 - Prefer typed module boundaries and explicit contracts over implicit shared state.
 - Workflow runtime uses Graph DSL v2 (new design), not Shrike GRAPH_V1 compatibility mode.
-- Workflow lifecycle baseline: `draft -> published`, with run state `queued -> running -> succeeded|failed`.
+- Workflow lifecycle baseline: `draft -> published`, with run state `queued -> running -> succeeded|failed` (`/runs` enqueues, `apps/worker` executes).
+- Workflow queue runtime is Redis + BullMQ single stack. `POST /runs` must only succeed when enqueue succeeds; queue failures must return `503/QUEUE_UNAVAILABLE` and not leave fresh dirty queued runs.
 - Drizzle is the default DB access path; use parameterized raw SQL only for proven complex queries.
 - Auth model is Email + OAuth first; enterprise SSO can be added later without breaking core auth contracts.
 - Auth runtime is dual-mode: short-lived Bearer access token + HttpOnly refresh cookie.
@@ -59,6 +60,7 @@ When documentation conflicts, trust in this order:
 - Org-scoped API routes must require `X-Org-Id` and membership validation.
 - Workflow APIs are org-scoped and require `X-Org-Id` with membership checks.
 - Temporary rollout mode `ORG_CONTEXT_ENFORCEMENT=warn` is allowed only for short observation windows and only for header fallback observation; membership checks stay enforced.
+- Queue unavailability must fail fast (no sync execution fallback in API).
 - Enforce PostgreSQL RLS for tenant-scoped tables.
 - Encrypt secrets at rest (envelope encryption); never log plaintext credentials/tokens.
 - Keep audit logs for permission changes, credential changes, workflow publish/deploy actions, and billing mutations.

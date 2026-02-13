@@ -4,12 +4,12 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "dev": "dotenv -e .env -- pnpm --parallel --filter @vespid/api --filter @vespid/web --filter @vespid/worker dev",
+    "dev": "pnpm exec dotenv -e .env -- pnpm --parallel --filter @vespid/api --filter @vespid/web --filter @vespid/worker dev",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "migrate": "pnpm --filter @vespid/db migrate",
-    "migrate:check": "pnpm --filter @vespid/db migrate:check"
+    "migrate": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db migrate",
+    "migrate:check": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db migrate:check"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

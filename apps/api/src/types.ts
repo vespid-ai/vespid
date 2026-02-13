@@ -71,6 +71,9 @@ export type WorkflowRunRecord = {
   workflowId: string;
   triggerType: "manual";
   status: "queued" | "running" | "succeeded" | "failed";
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
   requestedByUserId: string;
   input: unknown;
   output: unknown;
@@ -150,7 +153,14 @@ export interface AppStore {
     triggerType: "manual";
     requestedByUserId: string;
     input?: unknown;
+    maxAttempts?: number;
   }): Promise<WorkflowRunRecord>;
+  deleteQueuedWorkflowRun(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+  }): Promise<boolean>;
   getWorkflowRunById(input: {
     organizationId: string;
     workflowId: string;
@@ -162,6 +172,14 @@ export interface AppStore {
     workflowId: string;
     runId: string;
     actorUserId: string;
+    attemptCount?: number;
+  }): Promise<WorkflowRunRecord | null>;
+  markWorkflowRunQueuedForRetry(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    error: string;
   }): Promise<WorkflowRunRecord | null>;
   markWorkflowRunSucceeded(input: {
     organizationId: string;

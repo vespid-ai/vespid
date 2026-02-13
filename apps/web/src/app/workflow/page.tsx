@@ -4,6 +4,12 @@ import { useState } from "react";
 import { apiFetch } from "../../lib/api";
 import { getActiveOrgId } from "../../lib/org-context";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export default function WorkflowPage() {
   const [workflowName, setWorkflowName] = useState("Issue triage");
   const [workflowId, setWorkflowId] = useState("");
@@ -94,7 +100,42 @@ export default function WorkflowPage() {
       },
       { orgScoped: true }
     );
-    setResult(await response.json());
+    const payload = await response.json();
+    if (!response.ok) {
+      const code = (payload as { code?: string }).code;
+      if (code === "QUEUE_UNAVAILABLE") {
+        setResult({
+          code,
+          message: "Workflow queue is unavailable. Please ensure Redis is running and retry.",
+        });
+        return;
+      }
+      setResult(payload);
+      return;
+    }
+
+    setResult(payload);
+
+    const runId = (payload as { run?: { id?: string } }).run?.id;
+    if (!runId) {
+      return;
+    }
+
+    for (let index = 0; index < 20; index += 1) {
+      await sleep(1000);
+      const runResponse = await apiFetch(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+      const runPayload = await runResponse.json();
+      setResult(runPayload);
+
+      const status = (runPayload as { run?: { status?: string } }).run?.status;
+      if (status === "succeeded" || status === "failed") {
+        break;
+      }
+    }
   }
 
   return (

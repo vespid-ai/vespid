@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
   authSessions,
@@ -317,6 +317,7 @@ export async function createWorkflowRun(
     triggerType: "manual";
     requestedByUserId: string;
     input?: unknown;
+    maxAttempts?: number;
   }
 ) {
   const [row] = await db
@@ -328,6 +329,7 @@ export async function createWorkflowRun(
       status: "queued",
       requestedByUserId: input.requestedByUserId,
       input: input.input ?? null,
+      maxAttempts: input.maxAttempts ?? 3,
     })
     .returning();
   if (!row) {
@@ -355,13 +357,108 @@ export async function getWorkflowRunById(
 
 export async function markWorkflowRunRunning(
   db: Db,
+  input: { organizationId: string; workflowId: string; runId: string; attemptCount?: number }
+) {
+  const updates: {
+    status: "running";
+    startedAt: Date;
+    error: null;
+    nextAttemptAt: null;
+    attemptCount?: number;
+  } = {
+    status: "running",
+    startedAt: new Date(),
+    error: null,
+    nextAttemptAt: null,
+  };
+  if (typeof input.attemptCount === "number") {
+    updates.attemptCount = input.attemptCount;
+  }
+
+  const [row] = await db
+    .update(workflowRuns)
+    .set(updates)
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.workflowId, input.workflowId),
+        eq(workflowRuns.id, input.runId)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function deleteQueuedWorkflowRun(
+  db: Db,
   input: { organizationId: string; workflowId: string; runId: string }
+) {
+  const [row] = await db
+    .delete(workflowRuns)
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.workflowId, input.workflowId),
+        eq(workflowRuns.id, input.runId),
+        eq(workflowRuns.status, "queued"),
+        eq(workflowRuns.attemptCount, 0)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function claimNextQueuedWorkflowRun(db: Db) {
+  return db.transaction(async (tx) => {
+    const [candidate] = await tx
+      .select({ id: workflowRuns.id })
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.status, "queued"),
+          or(isNull(workflowRuns.nextAttemptAt), lte(workflowRuns.nextAttemptAt, sql`now()`))
+        )
+      )
+      .orderBy(asc(workflowRuns.createdAt))
+      .limit(1)
+      .for("update", { skipLocked: true });
+
+    if (!candidate) {
+      return null;
+    }
+
+    const [claimed] = await tx
+      .update(workflowRuns)
+      .set({
+        status: "running",
+        attemptCount: sql`${workflowRuns.attemptCount} + 1`,
+        startedAt: sql`coalesce(${workflowRuns.startedAt}, now())`,
+        error: null,
+      })
+      .where(eq(workflowRuns.id, candidate.id))
+      .returning();
+
+    return claimed ?? null;
+  });
+}
+
+export async function markWorkflowRunQueuedForRetry(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    error: string;
+    nextAttemptAt?: Date | null;
+  }
 ) {
   const [row] = await db
     .update(workflowRuns)
     .set({
-      status: "running",
-      startedAt: new Date(),
+      status: "queued",
+      error: input.error,
+      nextAttemptAt: input.nextAttemptAt ?? null,
+      finishedAt: null,
     })
     .where(
       and(
@@ -384,6 +481,7 @@ export async function markWorkflowRunSucceeded(
       status: "succeeded",
       output: input.output,
       error: null,
+      nextAttemptAt: null,
       finishedAt: new Date(),
     })
     .where(
@@ -406,6 +504,7 @@ export async function markWorkflowRunFailed(
     .set({
       status: "failed",
       error: input.error,
+      nextAttemptAt: null,
       finishedAt: new Date(),
     })
     .where(

@@ -9,7 +9,9 @@ Vespid is a greenfield, international, multi-tenant SaaS automation platform.
 - Drizzle schema + SQL migrations + strict PostgreSQL RLS baseline
 - Minimal Next.js bootstrap pages for auth/org setup/invitation accept
 - CI baseline for migration + RLS + API integration + web checks
-- Workflow Core v2 baseline (create/publish/run/get-run for manual trigger)
+- Workflow Core v2 baseline (create/publish/enqueue-run/get-run for manual trigger)
+- Redis/BullMQ queue baseline (producer in API, consumer in worker, retry/backoff)
+- Worker async execution baseline (`queued -> running -> succeeded|failed`)
 
 ## Quick Start
 1. Install dependencies:
@@ -29,18 +31,22 @@ pnpm lint
 pnpm test
 pnpm build
 ```
-4. Run API and web locally:
+4. Run full local stack (api + web + worker):
 ```bash
-pnpm --filter @vespid/api dev
-pnpm --filter @vespid/web dev
+pnpm dev
+```
+5. Redis is required for workflow run enqueue/execution:
+```bash
+redis-server --port 6379
 ```
 
 ## Rollout Runbook
 - Org context rollout and rollback guide: `/docs/runbooks/org-context-rollout.md`
+- Workflow queue cutover and rollback guide: `/docs/runbooks/workflow-queue-cutover.md`
 
 ## Workflow Core APIs (Phase 2 Baseline)
 - `POST /v1/orgs/:orgId/workflows`
 - `GET /v1/orgs/:orgId/workflows/:workflowId`
 - `POST /v1/orgs/:orgId/workflows/:workflowId/publish`
-- `POST /v1/orgs/:orgId/workflows/:workflowId/runs`
+- `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (returns `queued`; returns `503/QUEUE_UNAVAILABLE` if queue is down)
 - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId`

@@ -333,6 +333,7 @@ export class MemoryAppStore implements AppStore {
     triggerType: "manual";
     requestedByUserId: string;
     input?: unknown;
+    maxAttempts?: number;
   }): Promise<WorkflowRunRecord> {
     const run: WorkflowRunRecord = {
       id: crypto.randomUUID(),
@@ -340,6 +341,9 @@ export class MemoryAppStore implements AppStore {
       workflowId: input.workflowId,
       triggerType: input.triggerType,
       status: "queued",
+      attemptCount: 0,
+      maxAttempts: input.maxAttempts ?? 3,
+      nextAttemptAt: null,
       requestedByUserId: input.requestedByUserId,
       input: input.input ?? null,
       output: null,
@@ -365,11 +369,28 @@ export class MemoryAppStore implements AppStore {
     return run;
   }
 
+  async deleteQueuedWorkflowRun(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+  }): Promise<boolean> {
+    const run = await this.getWorkflowRunById(input);
+    if (!run) {
+      return false;
+    }
+    if (run.status !== "queued" || run.attemptCount !== 0) {
+      return false;
+    }
+    return this.workflowRuns.delete(run.id);
+  }
+
   async markWorkflowRunRunning(input: {
     organizationId: string;
     workflowId: string;
     runId: string;
     actorUserId: string;
+    attemptCount?: number;
   }): Promise<WorkflowRunRecord | null> {
     const run = await this.getWorkflowRunById(input);
     if (!run) {
@@ -378,7 +399,31 @@ export class MemoryAppStore implements AppStore {
     const updated: WorkflowRunRecord = {
       ...run,
       status: "running",
+      attemptCount: input.attemptCount ?? run.attemptCount,
+      nextAttemptAt: null,
       startedAt: nowIso(),
+    };
+    this.workflowRuns.set(updated.id, updated);
+    return updated;
+  }
+
+  async markWorkflowRunQueuedForRetry(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    error: string;
+  }): Promise<WorkflowRunRecord | null> {
+    const run = await this.getWorkflowRunById(input);
+    if (!run) {
+      return null;
+    }
+    const updated: WorkflowRunRecord = {
+      ...run,
+      status: "queued",
+      error: input.error,
+      nextAttemptAt: null,
+      finishedAt: null,
     };
     this.workflowRuns.set(updated.id, updated);
     return updated;

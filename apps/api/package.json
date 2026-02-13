@@ -20,7 +20,9 @@
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",
     "arctic": "^3.7.0",
+    "bullmq": "^5.69.1",
     "fastify": "^5.6.1",
+    "ioredis": "^5.9.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {

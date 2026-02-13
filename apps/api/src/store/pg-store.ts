@@ -23,8 +23,10 @@ import {
   getWorkflowById as dbGetWorkflowById,
   publishWorkflow as dbPublishWorkflow,
   createWorkflowRun as dbCreateWorkflowRun,
+  deleteQueuedWorkflowRun as dbDeleteQueuedWorkflowRun,
   getWorkflowRunById as dbGetWorkflowRunById,
   markWorkflowRunRunning as dbMarkWorkflowRunRunning,
+  markWorkflowRunQueuedForRetry as dbMarkWorkflowRunQueuedForRetry,
   markWorkflowRunSucceeded as dbMarkWorkflowRunSucceeded,
   markWorkflowRunFailed as dbMarkWorkflowRunFailed,
 } from "@vespid/db";
@@ -416,6 +418,7 @@ export class PgAppStore implements AppStore {
     triggerType: "manual";
     requestedByUserId: string;
     input?: unknown;
+    maxAttempts?: number;
   }) {
     const row = await this.withOrgContext(
       { userId: input.requestedByUserId, organizationId: input.organizationId },
@@ -427,6 +430,9 @@ export class PgAppStore implements AppStore {
       workflowId: row.workflowId,
       triggerType: row.triggerType as "manual",
       status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
       requestedByUserId: row.requestedByUserId,
       input: row.input,
       output: row.output,
@@ -451,6 +457,9 @@ export class PgAppStore implements AppStore {
       workflowId: row.workflowId,
       triggerType: row.triggerType as "manual",
       status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
       requestedByUserId: row.requestedByUserId,
       input: row.input,
       output: row.output,
@@ -461,11 +470,30 @@ export class PgAppStore implements AppStore {
     };
   }
 
+  async deleteQueuedWorkflowRun(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbDeleteQueuedWorkflowRun(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          runId: input.runId,
+        })
+    );
+    return Boolean(row);
+  }
+
   async markWorkflowRunRunning(input: {
     organizationId: string;
     workflowId: string;
     runId: string;
     actorUserId: string;
+    attemptCount?: number;
   }) {
     const row = await this.withOrgContext(
       { userId: input.actorUserId, organizationId: input.organizationId },
@@ -480,6 +508,49 @@ export class PgAppStore implements AppStore {
       workflowId: row.workflowId,
       triggerType: row.triggerType as "manual",
       status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
+      requestedByUserId: row.requestedByUserId,
+      input: row.input,
+      output: row.output,
+      error: row.error,
+      createdAt: toIso(row.createdAt),
+      startedAt: row.startedAt ? toIso(row.startedAt) : null,
+      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+    };
+  }
+
+  async markWorkflowRunQueuedForRetry(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    error: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbMarkWorkflowRunQueuedForRetry(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          runId: input.runId,
+          error: input.error,
+          nextAttemptAt: null,
+        })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      triggerType: row.triggerType as "manual",
+      status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
       requestedByUserId: row.requestedByUserId,
       input: row.input,
       output: row.output,
@@ -510,6 +581,9 @@ export class PgAppStore implements AppStore {
       workflowId: row.workflowId,
       triggerType: row.triggerType as "manual",
       status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
       requestedByUserId: row.requestedByUserId,
       input: row.input,
       output: row.output,
@@ -540,6 +614,9 @@ export class PgAppStore implements AppStore {
       workflowId: row.workflowId,
       triggerType: row.triggerType as "manual",
       status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
       requestedByUserId: row.requestedByUserId,
       input: row.input,
       output: row.output,
