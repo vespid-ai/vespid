@@ -54,6 +54,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Open core boundary gate
+        run: pnpm check:boundary
+
+      - name: License SPDX gate
+        run: pnpm check:licenses
+
+      - name: Public mirror dry-run gate
+        run: pnpm check:mirror
+
+      - name: Secret scan gate
+        run: pnpm check:secrets
+
       - name: Migration contract check
         run: pnpm migrate:check
 
@@ -85,3 +97,6 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      - name: Generate SBOM
+        run: pnpm sbom:generate

@@ -2,6 +2,7 @@
   "name": "@vespid/api",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -16,6 +17,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
+    "@vespid/connectors": "workspace:*",
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",

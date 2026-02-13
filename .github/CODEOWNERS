@@ -1,0 +1,11 @@
+# Default ownership
+* @mangaohua
+
+# Enterprise paths require dedicated approval.
+packages/enterprise-* @mangaohua
+apps/api-enterprise/** @mangaohua
+enterprise/** @mangaohua
+
+# Governance and licensing policies
+/docs/open-source/** @mangaohua
+/COMMERCIAL-LICENSE.md @mangaohua

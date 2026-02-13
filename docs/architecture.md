@@ -5,12 +5,14 @@
 - `apps/web`: Next.js bootstrap UI for auth and org onboarding.
 - `apps/worker`: queue worker for async workflow run execution with retry/backoff.
 - `apps/node-agent`: CLI bootstrap for future node execution.
+- `apps/api`: supports optional enterprise provider injection (`VESPID_ENTERPRISE_PROVIDER_MODULE`) with community fallback.
 
 ## Packages
 - `packages/shared`: shared domain types, auth token utilities, error model.
 - `packages/db`: Drizzle schema, SQL migrations, tenant RLS baseline.
 - `packages/workflow`: workflow DSL v2 schema baseline.
 - `packages/connectors`: connector catalog baseline.
+- `packages/sdk-client`: Apache-licensed client SDK for ecosystem integrations.
 
 ## Security Baseline
 - Auth uses short-lived bearer access tokens plus HttpOnly refresh cookie sessions.
@@ -23,6 +25,7 @@
 - Workflow runtime baseline: API enqueues runs (`queued`) and `apps/worker` consumes runs asynchronously (`queued -> running -> succeeded/failed`) with retry backoff.
 - Queue runtime is Redis + BullMQ only (single stack). If Redis is unavailable, run creation fails fast with `503/QUEUE_UNAVAILABLE`; API rolls back the fresh queued run.
 - Queue observability uses structured events: `workflow_run_enqueued`, `workflow_run_started`, `workflow_run_retried`, `workflow_run_succeeded`, `workflow_run_failed`, `queue_unavailable`.
+- Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
 
@@ -46,3 +49,12 @@
   - `POST /v1/orgs/:orgId/workflows/:workflowId/publish` (`X-Org-Id` required)
   - `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (`X-Org-Id` required)
   - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId` (`X-Org-Id` required)
+- Metadata:
+  - `GET /v1/meta/capabilities`
+  - `GET /v1/meta/connectors`
+
+## Licensing Baseline
+- Community core: `AGPL-3.0-only`
+- SDK/client (`packages/sdk-*`): `Apache-2.0`
+- Enterprise modules: commercial proprietary terms
+- Public mirror publishing is gated by `.oss-allowlist` and CI dry-run checks.

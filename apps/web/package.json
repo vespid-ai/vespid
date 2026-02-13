@@ -2,6 +2,7 @@
   "name": "@vespid/web",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "next dev -p ${WEB_PORT:-3000}",
     "build": "next build",

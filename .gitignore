@@ -7,5 +7,7 @@ coverage
 dist
 .next
 out
+artifacts
+.community-mirror
 *.log
 .DS_Store

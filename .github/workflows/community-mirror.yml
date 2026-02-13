@@ -1,0 +1,50 @@
+name: Community Mirror
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Mirror dry-run gate
+        run: node scripts/check-oss-mirror-dry-run.mjs
+
+      - name: Prepare mirror snapshot
+        run: node scripts/prepare-community-mirror.mjs --out .community-mirror
+
+      - name: Push to public mirror
+        env:
+          COMMUNITY_MIRROR_TOKEN: ${{ secrets.COMMUNITY_MIRROR_TOKEN }}
+          COMMUNITY_REPO: ${{ vars.COMMUNITY_REPO }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ -z "${COMMUNITY_MIRROR_TOKEN}" ]; then
+            echo "COMMUNITY_MIRROR_TOKEN is not set. Skipping push."
+            exit 0
+          fi
+
+          TARGET_REPO="${COMMUNITY_REPO:-vespid-community}"
+          TARGET_URL="https://x-access-token:${COMMUNITY_MIRROR_TOKEN}@github.com/${REPO_OWNER}/${TARGET_REPO}.git"
+
+          cd .community-mirror
+          git init
+          git checkout -b main
+          git config user.name "vespid-mirror-bot"
+          git config user.email "vespid-mirror-bot@users.noreply.github.com"
+          git add .
+          git commit -m "chore: mirror from ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+          git remote add origin "${TARGET_URL}"
+          git push --force origin main

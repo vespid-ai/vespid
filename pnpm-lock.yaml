@@ -32,6 +32,9 @@ importers:
       '@fastify/cors':
         specifier: ^11.2.0
         version: 11.2.0
+      '@vespid/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@vespid/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -124,6 +127,8 @@ importers:
       drizzle-kit:
         specifier: ^0.31.9
         version: 0.31.9
+
+  packages/sdk-client: {}
 
   packages/shared:
     dependencies:
