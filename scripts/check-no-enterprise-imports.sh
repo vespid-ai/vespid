@@ -1,18 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v rg >/dev/null 2>&1; then
-  echo "rg is required for boundary checks" >&2
-  exit 1
-fi
+pattern='@vespid/enterprise-|apps/api-enterprise|packages/enterprise-|/enterprise/'
 
-matches=$(rg -n --hidden \
-  --glob '!**/node_modules/**' \
-  --glob '!**/dist/**' \
-  --glob '!**/.next/**' \
-  --glob '!**/*.md' \
-  "@vespid/enterprise-|apps/api-enterprise|packages/enterprise-|/enterprise/" \
-  apps packages tests || true)
+run_search() {
+  if command -v rg >/dev/null 2>&1; then
+    rg -n --hidden \
+      --glob '!**/node_modules/**' \
+      --glob '!**/dist/**' \
+      --glob '!**/.next/**' \
+      --glob '!**/*.md' \
+      "$pattern" \
+      apps packages tests
+    return 0
+  fi
+
+  # GitHub-hosted runners don't guarantee ripgrep. Fall back to git grep.
+  if command -v git >/dev/null 2>&1; then
+    # Keep it on tracked files to avoid scanning deps; drop markdown matches.
+    git grep -n -I -E "$pattern" -- apps packages tests | grep -v '\.md:' || true
+    return 0
+  fi
+
+  echo "Neither rg nor git is available for boundary checks" >&2
+  return 2
+}
+
+matches=$(run_search || true)
 
 if [[ -n "$matches" ]]; then
   echo "Found forbidden enterprise imports/references in community code:" >&2
