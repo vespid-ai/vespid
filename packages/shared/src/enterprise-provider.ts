@@ -1,9 +1,10 @@
 import {
   communityFeatureCapabilities,
+  type EnterpriseConnectorContract,
   type EnterpriseProvider,
   type FeatureCapability,
-  type EnterpriseConnectorContract,
-} from "@vespid/shared";
+  type WorkflowNodeExecutor,
+} from "./edition.js";
 
 export function createCommunityProvider(): EnterpriseProvider {
   return {
@@ -13,6 +14,9 @@ export function createCommunityProvider(): EnterpriseProvider {
       return [...communityFeatureCapabilities];
     },
     getEnterpriseConnectors() {
+      return [];
+    },
+    getWorkflowNodeExecutors() {
       return [];
     },
   };
@@ -29,6 +33,14 @@ function isEnterpriseConnector(value: unknown): value is EnterpriseConnectorCont
     typeof connector.displayName === "string" &&
     typeof connector.requiresSecret === "boolean"
   );
+}
+
+function isWorkflowNodeExecutor(value: unknown): value is WorkflowNodeExecutor {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const executor = value as Partial<WorkflowNodeExecutor>;
+  return typeof executor.nodeType === "string" && typeof executor.execute === "function";
 }
 
 function isEnterpriseProvider(value: unknown): value is EnterpriseProvider {
@@ -50,6 +62,10 @@ function isEnterpriseProvider(value: unknown): value is EnterpriseProvider {
   }
 
   if (provider.getEnterpriseConnectors !== undefined && typeof provider.getEnterpriseConnectors !== "function") {
+    return false;
+  }
+
+  if (provider.getWorkflowNodeExecutors !== undefined && typeof provider.getWorkflowNodeExecutors !== "function") {
     return false;
   }
 
@@ -81,7 +97,7 @@ export async function loadEnterpriseProvider(input: ProviderLoaderInput = {}): P
 
   try {
     const imported = await import(modulePath);
-    const candidate = imported.enterpriseProvider ?? imported.default;
+    const candidate = (imported as Record<string, unknown>).enterpriseProvider ?? (imported as Record<string, unknown>).default;
 
     if (!isEnterpriseProvider(candidate)) {
       input.logger?.warn(
@@ -127,3 +143,9 @@ export function resolveEnterpriseConnectors(provider: EnterpriseProvider): Enter
   const raw = provider.getEnterpriseConnectors?.() ?? [];
   return raw.filter((item) => isEnterpriseConnector(item));
 }
+
+export function resolveWorkflowNodeExecutors(provider: EnterpriseProvider): WorkflowNodeExecutor[] {
+  const raw = provider.getWorkflowNodeExecutors?.() ?? [];
+  return raw.filter((item) => isWorkflowNodeExecutor(item));
+}
+

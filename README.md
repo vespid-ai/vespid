@@ -12,6 +12,7 @@ Vespid is a greenfield, international, multi-tenant SaaS automation platform.
 - Workflow Core v2 baseline (create/publish/enqueue-run/get-run for manual trigger)
 - Redis/BullMQ queue baseline (producer in API, consumer in worker, retry/backoff)
 - Worker async execution baseline (`queued -> running -> succeeded|failed`)
+- Workflow run/node execution events persisted in Postgres (`workflow_run_events`)
 
 ## Quick Start
 1. Install dependencies:
@@ -78,6 +79,10 @@ Governance and policy references:
 - Community Docker images (API/Web/Worker)
 - Apache-licensed SDK packages (`@vespid/sdk-client`)
 
+## Public Mirror Policy
+`vespid-community` is a generated, read-only mirror of the private source-of-truth repository.
+Direct PR intake is not supported on the mirror because `main` is force-pushed by the mirror workflow.
+
 ## Commercial Licensing
 For enterprise modules, commercial terms, and private deployment rights:
 - `COMMERCIAL-LICENSE.md`
@@ -118,7 +123,9 @@ pnpm sbom:generate
 - `GET /v1/orgs/:orgId/workflows/:workflowId`
 - `POST /v1/orgs/:orgId/workflows/:workflowId/publish`
 - `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (returns `queued`; returns `503/QUEUE_UNAVAILABLE` if queue is down)
+- `GET /v1/orgs/:orgId/workflows/:workflowId/runs`
 - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId`
+- `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events`
 
 ## Summary (English Only)
 - Open Core licensing: community core is AGPL, SDK is Apache-2.0, enterprise modules are under a commercial license.

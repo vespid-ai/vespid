@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execSync } from "node:child_process";
 
@@ -28,7 +28,15 @@ function main() {
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const mirroredFiles = trackedFiles.filter((file) => isAllowed(file, allowlist));
+  const mirroredCandidates = trackedFiles.filter((file) => isAllowed(file, allowlist));
+  const mirroredFiles = [];
+  for (const file of mirroredCandidates) {
+    if (!existsSync(file)) {
+      console.warn(`Skipping missing file (dirty worktree?): ${file}`);
+      continue;
+    }
+    mirroredFiles.push(file);
+  }
 
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });

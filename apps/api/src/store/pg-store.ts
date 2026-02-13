@@ -24,7 +24,10 @@ import {
   publishWorkflow as dbPublishWorkflow,
   createWorkflowRun as dbCreateWorkflowRun,
   deleteQueuedWorkflowRun as dbDeleteQueuedWorkflowRun,
+  listWorkflowRuns as dbListWorkflowRuns,
   getWorkflowRunById as dbGetWorkflowRunById,
+  appendWorkflowRunEvent as dbAppendWorkflowRunEvent,
+  listWorkflowRunEvents as dbListWorkflowRunEvents,
   markWorkflowRunRunning as dbMarkWorkflowRunRunning,
   markWorkflowRunQueuedForRetry as dbMarkWorkflowRunQueuedForRetry,
   markWorkflowRunSucceeded as dbMarkWorkflowRunSucceeded,
@@ -443,6 +446,53 @@ export class PgAppStore implements AppStore {
     };
   }
 
+  async listWorkflowRuns(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }) {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+
+    const result = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowRuns(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          limit: input.limit,
+          cursor,
+        })
+    );
+
+    return {
+      runs: result.rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        workflowId: row.workflowId,
+        triggerType: row.triggerType as "manual",
+        status: row.status as "queued" | "running" | "succeeded" | "failed",
+        attemptCount: row.attemptCount,
+        maxAttempts: row.maxAttempts,
+        nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
+        requestedByUserId: row.requestedByUserId,
+        input: row.input,
+        output: row.output,
+        error: row.error,
+        createdAt: toIso(row.createdAt),
+        startedAt: row.startedAt ? toIso(row.startedAt) : null,
+        finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+      })),
+      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
+    };
+  }
+
   async getWorkflowRunById(input: { organizationId: string; workflowId: string; runId: string; actorUserId: string }) {
     const row = await this.withOrgContext(
       { userId: input.actorUserId, organizationId: input.organizationId },
@@ -467,6 +517,102 @@ export class PgAppStore implements AppStore {
       createdAt: toIso(row.createdAt),
       startedAt: row.startedAt ? toIso(row.startedAt) : null,
       finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+    };
+  }
+
+  async appendWorkflowRunEvent(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    attemptCount: number;
+    eventType: string;
+    nodeId?: string | null;
+    nodeType?: string | null;
+    level: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbAppendWorkflowRunEvent(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          runId: input.runId,
+          attemptCount: input.attemptCount,
+          eventType: input.eventType,
+          nodeId: input.nodeId ?? null,
+          nodeType: input.nodeType ?? null,
+          level: input.level,
+          message: input.message ?? null,
+          payload: input.payload ?? null,
+        })
+    );
+
+    if (!row) {
+      throw new Error("Failed to append workflow run event");
+    }
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      runId: row.runId,
+      attemptCount: row.attemptCount,
+      eventType: row.eventType,
+      nodeId: row.nodeId ?? null,
+      nodeType: row.nodeType ?? null,
+      level: row.level as "info" | "warn" | "error",
+      message: row.message ?? null,
+      payload: row.payload,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listWorkflowRunEvents(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }) {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+
+    const result = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowRunEvents(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          runId: input.runId,
+          limit: input.limit,
+          cursor,
+        })
+    );
+
+    return {
+      events: result.rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        workflowId: row.workflowId,
+        runId: row.runId,
+        attemptCount: row.attemptCount,
+        eventType: row.eventType,
+        nodeId: row.nodeId ?? null,
+        nodeType: row.nodeType ?? null,
+        level: row.level as "info" | "warn" | "error",
+        message: row.message ?? null,
+        payload: row.payload,
+        createdAt: toIso(row.createdAt),
+      })),
+      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
     };
   }
 

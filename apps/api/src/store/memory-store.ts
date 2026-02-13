@@ -8,6 +8,7 @@ import type {
   SessionRecord,
   UserRecord,
   WorkflowRecord,
+  WorkflowRunEventRecord,
   WorkflowRunRecord,
 } from "../types.js";
 
@@ -24,6 +25,7 @@ export class MemoryAppStore implements AppStore {
   private sessions = new Map<string, SessionRecord>();
   private workflows = new Map<string, WorkflowRecord>();
   private workflowRuns = new Map<string, WorkflowRunRecord>();
+  private workflowRunEvents = new Map<string, WorkflowRunEventRecord>();
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -356,6 +358,46 @@ export class MemoryAppStore implements AppStore {
     return run;
   }
 
+  async listWorkflowRuns(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ runs: WorkflowRunRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const limit = Math.min(200, Math.max(1, input.limit));
+    const cursorCreatedAt = input.cursor?.createdAt ? new Date(input.cursor.createdAt).getTime() : null;
+    const cursorId = input.cursor?.id ?? null;
+
+    const runs = [...this.workflowRuns.values()]
+      .filter((run) => run.organizationId === input.organizationId && run.workflowId === input.workflowId)
+      .filter((run) => {
+        if (!cursorCreatedAt || !cursorId) {
+          return true;
+        }
+        const createdAt = new Date(run.createdAt).getTime();
+        if (createdAt < cursorCreatedAt) {
+          return true;
+        }
+        if (createdAt === cursorCreatedAt && run.id < cursorId) {
+          return true;
+        }
+        return false;
+      })
+      .sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, limit);
+
+    const last = runs.length > 0 ? runs[runs.length - 1] : null;
+    const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+    return { runs, nextCursor };
+  }
+
   async getWorkflowRunById(input: {
     organizationId: string;
     workflowId: string;
@@ -367,6 +409,83 @@ export class MemoryAppStore implements AppStore {
       return null;
     }
     return run;
+  }
+
+  async appendWorkflowRunEvent(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    attemptCount: number;
+    eventType: string;
+    nodeId?: string | null;
+    nodeType?: string | null;
+    level: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }): Promise<WorkflowRunEventRecord> {
+    const event: WorkflowRunEventRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      runId: input.runId,
+      attemptCount: input.attemptCount,
+      eventType: input.eventType,
+      nodeId: input.nodeId ?? null,
+      nodeType: input.nodeType ?? null,
+      level: input.level,
+      message: input.message ?? null,
+      payload: input.payload ?? null,
+      createdAt: nowIso(),
+    };
+    this.workflowRunEvents.set(event.id, event);
+    return event;
+  }
+
+  async listWorkflowRunEvents(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ events: WorkflowRunEventRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const limit = Math.min(500, Math.max(1, input.limit));
+    const cursorCreatedAt = input.cursor?.createdAt ? new Date(input.cursor.createdAt).getTime() : null;
+    const cursorId = input.cursor?.id ?? null;
+
+    const events = [...this.workflowRunEvents.values()]
+      .filter(
+        (event) =>
+          event.organizationId === input.organizationId &&
+          event.workflowId === input.workflowId &&
+          event.runId === input.runId
+      )
+      .filter((event) => {
+        if (!cursorCreatedAt || !cursorId) {
+          return true;
+        }
+        const createdAt = new Date(event.createdAt).getTime();
+        if (createdAt > cursorCreatedAt) {
+          return true;
+        }
+        if (createdAt === cursorCreatedAt && event.id > cursorId) {
+          return true;
+        }
+        return false;
+      })
+      .sort((a, b) => {
+        const diff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return a.id.localeCompare(b.id);
+      })
+      .slice(0, limit);
+
+    const last = events.length > 0 ? events[events.length - 1] : null;
+    const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+    return { events, nextCursor };
   }
 
   async deleteQueuedWorkflowRun(input: {

@@ -4,6 +4,7 @@
 LICENSE
 NOTICE
 COPYRIGHT
+COMMERCIAL-LICENSE.md
 README.md
 AGENTS.md
 .oss-allowlist
@@ -46,3 +47,5 @@ scripts/check-secrets.sh
 scripts/create-sbom.mjs
 
 docker/community/
+
+tests/

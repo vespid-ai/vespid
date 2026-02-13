@@ -623,6 +623,131 @@ describe("api hardening foundation", () => {
     queueProducer.setFailure(null);
   });
 
+  it("lists workflow runs and run events with tenant isolation", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `runs-events-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Runs Events Org",
+        slug: `runs-events-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const workflowRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Runs Events Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [{ id: "n1", type: "agent.execute" }],
+        },
+      },
+    });
+    expect(workflowRes.statusCode).toBe(201);
+    const workflowId = (workflowRes.json() as { workflow: { id: string } }).workflow.id;
+
+    const publishRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishRes.statusCode).toBe(200);
+
+    const runRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {},
+    });
+    expect(runRes.statusCode).toBe(201);
+    const runId = (runRes.json() as { run: { id: string } }).run.id;
+    const ownerId = (ownerSignup.json() as { user: { id: string } }).user.id;
+
+    const listRuns = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs?limit=10`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listRuns.statusCode).toBe(200);
+    const listBody = listRuns.json() as { runs: Array<{ id: string }>; nextCursor: string | null };
+    expect(listBody.runs.some((run) => run.id === runId)).toBe(true);
+
+    await store.appendWorkflowRunEvent({
+      organizationId: orgId,
+      workflowId,
+      runId,
+      actorUserId: ownerId,
+      attemptCount: 0,
+      eventType: "run_started",
+      level: "info",
+      message: "test event",
+      payload: { ok: true },
+    });
+
+    const listEvents = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=10`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listEvents.statusCode).toBe(200);
+    const eventsBody = listEvents.json() as { events: Array<{ eventType: string }>; nextCursor: string | null };
+    expect(eventsBody.events.length).toBeGreaterThan(0);
+    expect(eventsBody.events[0]?.eventType).toBe("run_started");
+
+    const outsiderSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `runs-events-outsider-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    const outsiderToken = bearerToken(outsiderSignup.json() as { session: { token: string } });
+
+    const outsiderDenied = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=10`,
+      headers: {
+        authorization: `Bearer ${outsiderToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(outsiderDenied.statusCode).toBe(403);
+    expect((outsiderDenied.json() as { code: string }).code).toBe("ORG_ACCESS_DENIED");
+  });
+
   it("completes invitation accept flow and enforces email match", async () => {
     const ownerSignup = await server.inject({
       method: "POST",

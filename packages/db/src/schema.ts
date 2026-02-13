@@ -108,11 +108,39 @@ export const workflowRuns = pgTable("workflow_runs", {
   workflowRunsStatusIdx: index("workflow_runs_status_idx").on(table.status),
 }));
 
+export const workflowRunEvents = pgTable("workflow_run_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => workflowRuns.id, { onDelete: "cascade" }),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  eventType: text("event_type").notNull(),
+  nodeId: text("node_id"),
+  nodeType: text("node_type"),
+  level: text("level").notNull().default("info"),
+  message: text("message"),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workflowRunEventsOrgWorkflowRunCreatedAtIdx: index("workflow_run_events_org_workflow_run_created_at_idx").on(
+    table.organizationId,
+    table.workflowId,
+    table.runId,
+    table.createdAt
+  ),
+  workflowRunEventsOrgRunCreatedAtIdx: index("workflow_run_events_org_run_created_at_idx").on(
+    table.organizationId,
+    table.runId,
+    table.createdAt
+  ),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
+  workflowRunEvents: many(workflowRunEvents),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -170,6 +198,7 @@ export const workflowsRelations = relations(workflows, ({ one, many }) => ({
     references: [users.id],
   }),
   runs: many(workflowRuns),
+  events: many(workflowRunEvents),
 }));
 
 export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
@@ -187,6 +216,21 @@ export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
   }),
 }));
 
+export const workflowRunEventsRelations = relations(workflowRunEvents, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [workflowRunEvents.organizationId],
+    references: [organizations.id],
+  }),
+  workflow: one(workflows, {
+    fields: [workflowRunEvents.workflowId],
+    references: [workflows.id],
+  }),
+  run: one(workflowRuns, {
+    fields: [workflowRunEvents.runId],
+    references: [workflowRuns.id],
+  }),
+}));
+
 export type DbRole = typeof roles.$inferSelect;
 export type DbUser = typeof users.$inferSelect;
 export type DbOrganization = typeof organizations.$inferSelect;
@@ -195,3 +239,4 @@ export type DbOrganizationInvitation = typeof organizationInvitations.$inferSele
 export type DbAuthSession = typeof authSessions.$inferSelect;
 export type DbWorkflow = typeof workflows.$inferSelect;
 export type DbWorkflowRun = typeof workflowRuns.$inferSelect;
+export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;

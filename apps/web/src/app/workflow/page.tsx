@@ -15,6 +15,7 @@ export default function WorkflowPage() {
   const [workflowId, setWorkflowId] = useState("");
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
   const [result, setResult] = useState<unknown>(null);
+  const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
 
   function requiredOrgId(): string | null {
     const orgId = getActiveOrgId();
@@ -121,6 +122,8 @@ export default function WorkflowPage() {
       return;
     }
 
+    setEvents([]);
+
     for (let index = 0; index < 20; index += 1) {
       await sleep(1000);
       const runResponse = await apiFetch(
@@ -132,11 +135,29 @@ export default function WorkflowPage() {
       setResult(runPayload);
 
       const status = (runPayload as { run?: { status?: string } }).run?.status;
+
+      const eventsResponse = await apiFetch(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=200`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+      if (eventsResponse.ok) {
+        const eventsPayload = (await eventsResponse.json()) as { events?: Array<Record<string, unknown>> };
+        setEvents(eventsPayload.events ?? []);
+      }
+
       if (status === "succeeded" || status === "failed") {
         break;
       }
     }
   }
+
+  const eventsByAttempt = events.reduce<Record<string, Array<Record<string, unknown>>>>((acc, event) => {
+    const attempt = typeof event.attemptCount === "number" ? String(event.attemptCount) : "unknown";
+    acc[attempt] ??= [];
+    acc[attempt].push(event);
+    return acc;
+  }, {});
 
   return (
     <main>
@@ -172,6 +193,20 @@ export default function WorkflowPage() {
         <div className="card">
           <h2>Result</h2>
           <pre>{JSON.stringify(result, null, 2)}</pre>
+        </div>
+      ) : null}
+
+      {events.length > 0 ? (
+        <div className="card">
+          <h2>Run events</h2>
+          {Object.entries(eventsByAttempt)
+            .sort(([a], [b]) => Number(a) - Number(b))
+            .map(([attempt, items]) => (
+              <div key={attempt} style={{ marginBottom: "1rem" }}>
+                <strong>Attempt {attempt}</strong>
+                <pre style={{ marginTop: "0.5rem" }}>{JSON.stringify(items, null, 2)}</pre>
+              </div>
+            ))}
         </div>
       ) : null}
     </main>

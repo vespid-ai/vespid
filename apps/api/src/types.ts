@@ -83,6 +83,21 @@ export type WorkflowRunRecord = {
   finishedAt: string | null;
 };
 
+export type WorkflowRunEventRecord = {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  runId: string;
+  attemptCount: number;
+  eventType: string;
+  nodeId: string | null;
+  nodeType: string | null;
+  level: "info" | "warn" | "error";
+  message: string | null;
+  payload: unknown;
+  createdAt: string;
+};
+
 export interface AppStore {
   ensureDefaultRoles(): Promise<void>;
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
@@ -155,6 +170,13 @@ export interface AppStore {
     input?: unknown;
     maxAttempts?: number;
   }): Promise<WorkflowRunRecord>;
+  listWorkflowRuns(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ runs: WorkflowRunRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
   deleteQueuedWorkflowRun(input: {
     organizationId: string;
     workflowId: string;
@@ -167,6 +189,27 @@ export interface AppStore {
     runId: string;
     actorUserId: string;
   }): Promise<WorkflowRunRecord | null>;
+  appendWorkflowRunEvent(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    attemptCount: number;
+    eventType: string;
+    nodeId?: string | null;
+    nodeType?: string | null;
+    level: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }): Promise<WorkflowRunEventRecord>;
+  listWorkflowRunEvents(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ events: WorkflowRunEventRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
   markWorkflowRunRunning(input: {
     organizationId: string;
     workflowId: string;

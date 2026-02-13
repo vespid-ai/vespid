@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   release:
+    # This workflow is mirrored into the public community repository; never run it there.
+    if: github.repository == 'vespid-ai/vespid'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

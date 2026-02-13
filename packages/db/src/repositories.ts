@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
   authSessions,
@@ -8,6 +8,7 @@ import {
   organizations,
   roles,
   users,
+  workflowRunEvents,
   workflowRuns,
   workflows,
 } from "./schema.js";
@@ -355,6 +356,40 @@ export async function getWorkflowRunById(
   return row ?? null;
 }
 
+export async function listWorkflowRuns(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+) {
+  const limit = Math.min(200, Math.max(1, input.limit));
+
+  const baseWhere = and(eq(workflowRuns.organizationId, input.organizationId), eq(workflowRuns.workflowId, input.workflowId));
+  const cursorWhere = input.cursor
+    ? or(
+        lt(workflowRuns.createdAt, input.cursor.createdAt),
+        and(eq(workflowRuns.createdAt, input.cursor.createdAt), lt(workflowRuns.id, input.cursor.id))
+      )
+    : null;
+
+  const where = cursorWhere ? and(baseWhere, cursorWhere) : baseWhere;
+
+  const rows = await db
+    .select()
+    .from(workflowRuns)
+    .where(where)
+    .orderBy(desc(workflowRuns.createdAt), desc(workflowRuns.id))
+    .limit(limit);
+
+  const last = rows.length > 0 ? rows[rows.length - 1] : null;
+  const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+
+  return { rows, nextCursor };
+}
+
 export async function markWorkflowRunRunning(
   db: Db,
   input: { organizationId: string; workflowId: string; runId: string; attemptCount?: number }
@@ -387,6 +422,81 @@ export async function markWorkflowRunRunning(
     )
     .returning();
   return row ?? null;
+}
+
+export async function appendWorkflowRunEvent(
+  db: Db,
+  input: {
+    id?: string;
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    attemptCount: number;
+    eventType: string;
+    nodeId?: string | null;
+    nodeType?: string | null;
+    level: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(workflowRunEvents)
+    .values({
+      id: input.id,
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      runId: input.runId,
+      attemptCount: input.attemptCount,
+      eventType: input.eventType,
+      nodeId: input.nodeId ?? null,
+      nodeType: input.nodeType ?? null,
+      level: input.level,
+      message: input.message ?? null,
+      payload: input.payload ?? null,
+    })
+    .returning();
+  return row ?? null;
+}
+
+export async function listWorkflowRunEvents(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit));
+
+  const baseWhere = and(
+    eq(workflowRunEvents.organizationId, input.organizationId),
+    eq(workflowRunEvents.workflowId, input.workflowId),
+    eq(workflowRunEvents.runId, input.runId)
+  );
+
+  const cursorWhere = input.cursor
+    ? or(
+        gt(workflowRunEvents.createdAt, input.cursor.createdAt),
+        and(eq(workflowRunEvents.createdAt, input.cursor.createdAt), gt(workflowRunEvents.id, input.cursor.id))
+      )
+    : null;
+
+  const where = cursorWhere ? and(baseWhere, cursorWhere) : baseWhere;
+
+  const rows = await db
+    .select()
+    .from(workflowRunEvents)
+    .where(where)
+    .orderBy(asc(workflowRunEvents.createdAt), asc(workflowRunEvents.id))
+    .limit(limit);
+
+  const last = rows.length > 0 ? rows[rows.length - 1] : null;
+  const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+
+  return { rows, nextCursor };
 }
 
 export async function deleteQueuedWorkflowRun(

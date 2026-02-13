@@ -12,6 +12,9 @@ import {
   unauthorized,
   verifyAuthToken,
   type EnterpriseProvider,
+  loadEnterpriseProvider,
+  resolveEditionCapabilities,
+  resolveEnterpriseConnectors,
   type AppError as AppErrorType,
 } from "@vespid/shared";
 import { createConnectorCatalog } from "@vespid/connectors";
@@ -22,11 +25,6 @@ import { createStore } from "./store/index.js";
 import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
 import { workflowDslSchema } from "@vespid/workflow";
-import {
-  loadEnterpriseProvider,
-  resolveEditionCapabilities,
-  resolveEnterpriseConnectors,
-} from "./enterprise-provider.js";
 import {
   createBullMqWorkflowRunQueueProducer,
   createInMemoryWorkflowRunQueueProducer,
@@ -115,6 +113,16 @@ const createWorkflowRunSchema = z.object({
   input: z.unknown().optional(),
 });
 
+const listWorkflowRunsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().min(1).optional(),
+});
+
+const listWorkflowRunEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  cursor: z.string().min(1).optional(),
+});
+
 const oauthQuerySchema = z.object({
   code: z.string().min(1),
   state: z.string().min(1),
@@ -163,6 +171,18 @@ function base64UrlEncode(input: string): string {
 
 function base64UrlDecode(input: string): string {
   return Buffer.from(input, "base64url").toString("utf8");
+}
+
+function encodeCursor(value: unknown): string {
+  return base64UrlEncode(JSON.stringify(value));
+}
+
+function decodeCursor<T>(value: string): T | null {
+  try {
+    return JSON.parse(base64UrlDecode(value)) as T;
+  } catch {
+    return null;
+  }
 }
 
 function hmac(content: string, secret: string): string {
@@ -1185,6 +1205,88 @@ export async function buildServer(input?: {
     }
 
     return { run };
+  });
+
+  server.get("/v1/orgs/:orgId/workflows/:workflowId/runs", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const parsed = listWorkflowRunsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid list runs query", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const workflow = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+
+    const cursorPayload = parsed.data.cursor
+      ? decodeCursor<{ createdAt: string; id: string }>(parsed.data.cursor)
+      : null;
+
+    const result = await store.listWorkflowRuns({
+      organizationId: orgContext.organizationId,
+      workflowId: workflow.id,
+      actorUserId: auth.userId,
+      limit: parsed.data.limit ?? 50,
+      cursor: cursorPayload,
+    });
+
+    return {
+      runs: result.runs,
+      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
+    };
+  });
+
+  server.get("/v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string; runId?: string };
+    if (!params.orgId || !params.workflowId || !params.runId) {
+      throw badRequest("Missing orgId, workflowId, or runId");
+    }
+
+    const parsed = listWorkflowRunEventsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid list events query", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const run = await store.getWorkflowRunById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      runId: params.runId,
+      actorUserId: auth.userId,
+    });
+    if (!run) {
+      throw notFound("Workflow run not found");
+    }
+
+    const cursorPayload = parsed.data.cursor
+      ? decodeCursor<{ createdAt: string; id: string }>(parsed.data.cursor)
+      : null;
+
+    const result = await store.listWorkflowRunEvents({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      runId: params.runId,
+      actorUserId: auth.userId,
+      limit: parsed.data.limit ?? 200,
+      cursor: cursorPayload,
+    });
+
+    return {
+      events: result.events,
+      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
+    };
   });
 
   server.post("/v1/invitations/:token/accept", async (request) => {

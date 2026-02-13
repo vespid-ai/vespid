@@ -59,7 +59,7 @@ When documentation conflicts, trust in this order:
 This product is developed across three sibling repositories (local default under `/Users/mangaohua/src`):
 
 - `vespid` (private, source of truth): `git@github.com:vespid-ai/vespid.git`
-- `vespid-community` (public, generated mirror + PR intake): `git@github.com:vespid-ai/vespid-community.git`
+- `vespid-community` (public, generated read-only mirror): `git@github.com:vespid-ai/vespid-community.git`
 - `vespid-enterprise` (private, proprietary modules): `git@github.com:vespid-ai/vespid-enterprise.git`
 
 Hard rules:
@@ -85,6 +85,8 @@ Operational guardrails:
 - Prefer typed module boundaries and explicit contracts over implicit shared state.
 - Workflow runtime uses Graph DSL v2 (new design), not Shrike GRAPH_V1 compatibility mode.
 - Workflow lifecycle baseline: `draft -> published`, with run state `queued -> running -> succeeded|failed` (`/runs` enqueues, `apps/worker` executes).
+- Workflow execution emits run/node events persisted in PostgreSQL (`workflow_run_events`) and exposed via read APIs; events are tenant-scoped under RLS.
+- Workflow node execution supports a community baseline executor set, plus optional enterprise overrides via `EnterpriseProvider.getWorkflowNodeExecutors()`.
 - Workflow queue runtime is Redis + BullMQ single stack. `POST /runs` must only succeed when enqueue succeeds; queue failures must return `503/QUEUE_UNAVAILABLE` and not leave fresh dirty queued runs.
 - Drizzle is the default DB access path; use parameterized raw SQL only for proven complex queries.
 - Auth model is Email + OAuth first; enterprise SSO can be added later without breaking core auth contracts.

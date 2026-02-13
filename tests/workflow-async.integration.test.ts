@@ -166,5 +166,21 @@ describe("workflow async integration", () => {
 
     expect(finalStatus).toBe("succeeded");
     expect(finalAttemptCount).toBeGreaterThanOrEqual(1);
+
+    const eventsRes = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runBody.run.id}/events?limit=200`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(eventsRes.statusCode).toBe(200);
+    const eventsBody = eventsRes.json() as { events: Array<{ eventType: string; nodeId?: string | null }> };
+    const eventTypes = eventsBody.events.map((event) => event.eventType);
+    expect(eventTypes).toContain("run_started");
+    expect(eventTypes).toContain("run_succeeded");
+    expect(eventTypes).toContain("node_started");
+    expect(eventTypes).toContain("node_succeeded");
   });
 });

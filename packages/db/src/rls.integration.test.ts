@@ -72,6 +72,10 @@ describeIf("RLS integration", () => {
 
     const orgAId = crypto.randomUUID();
     const orgBId = crypto.randomUUID();
+    const workflowAId = crypto.randomUUID();
+    const workflowBId = crypto.randomUUID();
+    const runAId = crypto.randomUUID();
+    const runBId = crypto.randomUUID();
 
     const setup = await appPool.connect();
     try {
@@ -89,8 +93,25 @@ describeIf("RLS integration", () => {
         adminId,
       ]);
       await setup.query(
-        "insert into workflows(organization_id, name, status, version, dsl, created_by_user_id) values ($1, 'Org A Workflow', 'published', 1, $2::jsonb, $3)",
-        [orgAId, JSON.stringify({ version: "v2", trigger: { type: "trigger.manual" }, nodes: [{ id: "n1", type: "agent.execute" }] }), adminId]
+        "insert into workflows(id, organization_id, name, status, version, dsl, created_by_user_id) values ($1, $2, 'Org A Workflow', 'published', 1, $3::jsonb, $4)",
+        [
+          workflowAId,
+          orgAId,
+          JSON.stringify({
+            version: "v2",
+            trigger: { type: "trigger.manual" },
+            nodes: [{ id: "n1", type: "agent.execute" }],
+          }),
+          adminId,
+        ]
+      );
+      await setup.query(
+        "insert into workflow_runs(id, organization_id, workflow_id, trigger_type, status, requested_by_user_id, input) values ($1, $2, $3, 'manual', 'queued', $4, $5::jsonb)",
+        [runAId, orgAId, workflowAId, adminId, JSON.stringify({ hello: "org-a" })]
+      );
+      await setup.query(
+        "insert into workflow_run_events(organization_id, workflow_id, run_id, attempt_count, event_type, level, message) values ($1, $2, $3, 1, 'run_started', 'info', 'org-a-start')",
+        [orgAId, workflowAId, runAId]
       );
 
       await setup.query(
@@ -106,8 +127,25 @@ describeIf("RLS integration", () => {
         otherId,
       ]);
       await setup.query(
-        "insert into workflows(organization_id, name, status, version, dsl, created_by_user_id) values ($1, 'Org B Workflow', 'published', 1, $2::jsonb, $3)",
-        [orgBId, JSON.stringify({ version: "v2", trigger: { type: "trigger.manual" }, nodes: [{ id: "n1", type: "agent.execute" }] }), otherId]
+        "insert into workflows(id, organization_id, name, status, version, dsl, created_by_user_id) values ($1, $2, 'Org B Workflow', 'published', 1, $3::jsonb, $4)",
+        [
+          workflowBId,
+          orgBId,
+          JSON.stringify({
+            version: "v2",
+            trigger: { type: "trigger.manual" },
+            nodes: [{ id: "n1", type: "agent.execute" }],
+          }),
+          otherId,
+        ]
+      );
+      await setup.query(
+        "insert into workflow_runs(id, organization_id, workflow_id, trigger_type, status, requested_by_user_id, input) values ($1, $2, $3, 'manual', 'queued', $4, $5::jsonb)",
+        [runBId, orgBId, workflowBId, otherId, JSON.stringify({ hello: "org-b" })]
+      );
+      await setup.query(
+        "insert into workflow_run_events(organization_id, workflow_id, run_id, attempt_count, event_type, level, message) values ($1, $2, $3, 1, 'run_started', 'info', 'org-b-start')",
+        [orgBId, workflowBId, runBId]
       );
 
       await setup.query("commit");
@@ -130,12 +168,22 @@ describeIf("RLS integration", () => {
       expect(wrongContext.rowCount).toBe(0);
       const wrongWorkflowContext = await client.query("select id from workflows where organization_id = $1", [orgAId]);
       expect(wrongWorkflowContext.rowCount).toBe(0);
+      const wrongEventContext = await client.query(
+        "select id from workflow_run_events where organization_id = $1 and run_id = $2",
+        [orgAId, runAId]
+      );
+      expect(wrongEventContext.rowCount).toBe(0);
 
       await client.query("select set_config('app.current_org_id', $1, true)", [orgAId]);
       const rightContext = await client.query("select id from organizations where id = $1", [orgAId]);
       expect(rightContext.rowCount).toBe(1);
       const rightWorkflowContext = await client.query("select id from workflows where organization_id = $1", [orgAId]);
       expect(rightWorkflowContext.rowCount).toBe(1);
+      const rightEventContext = await client.query(
+        "select id from workflow_run_events where organization_id = $1 and run_id = $2",
+        [orgAId, runAId]
+      );
+      expect(rightEventContext.rowCount).toBe(1);
 
       await client.query("rollback");
     } finally {

@@ -10,6 +10,8 @@ on:
 
 jobs:
   integration:
+    # This workflow is mirrored into the public community repository; never run it there.
+    if: github.repository == 'vespid-ai/vespid'
     runs-on: ubuntu-latest
     permissions:
       contents: read

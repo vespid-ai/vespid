@@ -25,6 +25,8 @@
 - Workflow runtime baseline: API enqueues runs (`queued`) and `apps/worker` consumes runs asynchronously (`queued -> running -> succeeded/failed`) with retry backoff.
 - Queue runtime is Redis + BullMQ only (single stack). If Redis is unavailable, run creation fails fast with `503/QUEUE_UNAVAILABLE`; API rolls back the fresh queued run.
 - Queue observability uses structured events: `workflow_run_enqueued`, `workflow_run_started`, `workflow_run_retried`, `workflow_run_succeeded`, `workflow_run_failed`, `queue_unavailable`.
+- Workflow run/node execution events are persisted in PostgreSQL (`workflow_run_events`) with strict tenant RLS.
+  - Event payloads are capped via `WORKFLOW_EVENT_PAYLOAD_MAX_CHARS` to avoid oversized rows.
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
@@ -48,7 +50,9 @@
   - `GET /v1/orgs/:orgId/workflows/:workflowId` (`X-Org-Id` required)
   - `POST /v1/orgs/:orgId/workflows/:workflowId/publish` (`X-Org-Id` required)
   - `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/workflows/:workflowId/runs` (`X-Org-Id` required)
   - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events` (`X-Org-Id` required)
 - Metadata:
   - `GET /v1/meta/capabilities`
   - `GET /v1/meta/connectors`

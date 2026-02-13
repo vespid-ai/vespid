@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 
 function readAllowlist() {
@@ -24,6 +24,11 @@ function main() {
     .filter(Boolean);
 
   const mirroredFiles = trackedFiles.filter((file) => isAllowed(file, allowlist));
+  for (const file of mirroredFiles) {
+    if (!existsSync(file)) {
+      console.warn(`Mirror dry-run warning: missing file on disk (dirty worktree?): ${file}`);
+    }
+  }
   const leaked = mirroredFiles.filter((file) => isEnterprisePath(file));
 
   if (mirroredFiles.length === 0) {

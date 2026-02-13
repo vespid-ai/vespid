@@ -32,10 +32,34 @@ export type EnterpriseProviderContext = {
   userId?: string;
 };
 
+export type WorkflowNodeExecutorContext = {
+  organizationId: string;
+  workflowId: string;
+  runId: string;
+  attemptCount: number;
+  requestedByUserId: string;
+  nodeId: string;
+  nodeType: string;
+  node: unknown;
+  runInput?: unknown;
+};
+
+export type WorkflowNodeExecutorResult = {
+  status: "succeeded" | "failed";
+  output?: unknown;
+  error?: string;
+};
+
+export type WorkflowNodeExecutor = {
+  nodeType: string;
+  execute(context: WorkflowNodeExecutorContext): Promise<WorkflowNodeExecutorResult> | WorkflowNodeExecutorResult;
+};
+
 export type EnterpriseProvider = {
   edition: Edition;
   name: string;
   version?: string;
   getCapabilities(context?: EnterpriseProviderContext): FeatureCapability[];
   getEnterpriseConnectors?(context?: EnterpriseProviderContext): EnterpriseConnectorContract[];
+  getWorkflowNodeExecutors?(context?: EnterpriseProviderContext): WorkflowNodeExecutor[];
 };
