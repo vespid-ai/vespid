@@ -20,6 +20,8 @@ jobs:
       REDIS_URL: redis://localhost:6379
       AUTH_TOKEN_SECRET: ci-token-secret
       VESPID_ENTERPRISE_PROVIDER_MODULE: "@vespid-ai/enterprise-provider"
+      # Needed for npm/pnpm to expand ${ENTERPRISE_NPM_TOKEN} in .npmrc across steps.
+      ENTERPRISE_NPM_TOKEN: ${{ secrets.ENTERPRISE_NPM_TOKEN }}
 
     services:
       postgres:
@@ -62,17 +64,17 @@ jobs:
           registry-url: https://npm.pkg.github.com
 
       - name: Configure npm registry auth for enterprise scope
-        env:
-          ENTERPRISE_NPM_TOKEN: ${{ secrets.ENTERPRISE_NPM_TOKEN }}
         run: |
           if [ -z "${ENTERPRISE_NPM_TOKEN}" ]; then
             echo "ENTERPRISE_NPM_TOKEN secret is required for enterprise integration workflow" >&2
             exit 1
           fi
-          cat > .npmrc <<'NPMRC'
-          @vespid-ai:registry=https://npm.pkg.github.com
-          //npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
-          NPMRC
+          # Write the actual token into workspace .npmrc so later steps don't depend
+          # on env substitution in npm config parsing.
+          printf '%s\n' \
+            '@vespid-ai:registry=https://npm.pkg.github.com' \
+            \"//npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}\" \
+            > .npmrc
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
