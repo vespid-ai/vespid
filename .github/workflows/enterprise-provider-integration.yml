@@ -1,0 +1,84 @@
+name: Enterprise Provider Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider_version:
+        description: "Enterprise provider package version (e.g. 0.1.0 or latest)"
+        required: false
+        default: "latest"
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/vespid
+      REDIS_URL: redis://localhost:6379
+      AUTH_TOKEN_SECRET: ci-token-secret
+      VESPID_ENTERPRISE_PROVIDER_MODULE: "@vespid-enterprise/provider"
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vespid
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com
+
+      - name: Configure npm registry auth for enterprise scope
+        env:
+          ENTERPRISE_NPM_TOKEN: ${{ secrets.ENTERPRISE_NPM_TOKEN }}
+        run: |
+          if [ -z "${ENTERPRISE_NPM_TOKEN}" ]; then
+            echo "ENTERPRISE_NPM_TOKEN secret is required for enterprise integration workflow" >&2
+            exit 1
+          fi
+          cat > .npmrc <<'NPMRC'
+          @vespid-enterprise:registry=https://npm.pkg.github.com
+          //npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
+          NPMRC
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install enterprise provider package
+        run: pnpm add -Dw "@vespid-enterprise/provider@${{ github.event.inputs.provider_version || 'latest' }}"
+
+      - name: Verify enterprise module wiring
+        run: pnpm --filter @vespid/api test --run src/server.test.ts

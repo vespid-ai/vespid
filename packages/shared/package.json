@@ -2,6 +2,7 @@
   "name": "@vespid/shared",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -9,7 +10,8 @@
     ".": "./src/index.ts",
     "./auth": "./src/auth.ts",
     "./types": "./src/types.ts",
-    "./errors": "./src/errors.ts"
+    "./errors": "./src/errors.ts",
+    "./edition": "./src/edition.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

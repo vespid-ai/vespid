@@ -1,0 +1,10 @@
+Vespid is distributed under a mixed licensing model:
+
+- Community Core: AGPL-3.0-only
+- Ecosystem SDK/Client packages (packages/sdk-*): Apache-2.0
+- Enterprise extensions (private distribution): Commercial Proprietary License
+
+See:
+- LICENSE
+- COMMERCIAL-LICENSE.md
+- docs/open-source/licensing-and-boundary-policy.md

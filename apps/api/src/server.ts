@@ -11,8 +11,10 @@ import {
   signAuthToken,
   unauthorized,
   verifyAuthToken,
+  type EnterpriseProvider,
   type AppError as AppErrorType,
 } from "@vespid/shared";
+import { createConnectorCatalog } from "@vespid/connectors";
 import { generateCodeVerifier, generateState } from "arctic";
 import { z } from "zod";
 import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
@@ -20,6 +22,11 @@ import { createStore } from "./store/index.js";
 import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
 import { workflowDslSchema } from "@vespid/workflow";
+import {
+  loadEnterpriseProvider,
+  resolveEditionCapabilities,
+  resolveEnterpriseConnectors,
+} from "./enterprise-provider.js";
 import {
   createBullMqWorkflowRunQueueProducer,
   createInMemoryWorkflowRunQueueProducer,
@@ -316,6 +323,7 @@ export async function buildServer(input?: {
   oauthService?: OAuthService;
   orgContextEnforcement?: OrgContextEnforcement;
   queueProducer?: WorkflowRunQueueProducer;
+  enterpriseProvider?: EnterpriseProvider;
 }) {
   const server = Fastify({
     logger: {
@@ -343,6 +351,14 @@ export async function buildServer(input?: {
     (process.env.NODE_ENV === "test" && !process.env.REDIS_URL
       ? createInMemoryWorkflowRunQueueProducer()
       : createBullMqWorkflowRunQueueProducer());
+  const enterpriseProvider = await loadEnterpriseProvider({
+    ...(input?.enterpriseProvider ? { inlineProvider: input.enterpriseProvider } : {}),
+    logger: server.log,
+  });
+  const editionCapabilities = resolveEditionCapabilities(enterpriseProvider);
+  const connectorCatalog = createConnectorCatalog({
+    enterpriseConnectors: resolveEnterpriseConnectors(enterpriseProvider),
+  });
   await store.ensureDefaultRoles();
 
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
@@ -804,6 +820,23 @@ export async function buildServer(input?: {
     }
 
     return reply.redirect(authorizationUrl.toString());
+  });
+
+  server.get("/v1/meta/capabilities", async () => {
+    return {
+      edition: enterpriseProvider.edition,
+      capabilities: editionCapabilities,
+      provider: {
+        name: enterpriseProvider.name,
+        version: enterpriseProvider.version ?? null,
+      },
+    };
+  });
+
+  server.get("/v1/meta/connectors", async () => {
+    return {
+      connectors: connectorCatalog,
+    };
   });
 
   server.get("/v1/auth/oauth/:provider/callback", async (request, reply) => {

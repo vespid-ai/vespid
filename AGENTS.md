@@ -43,6 +43,14 @@ When documentation conflicts, trust in this order:
 3. `AGENTS.md`
 4. README or ad-hoc notes
 
+## Open Source Governance (AI-Facing)
+- `Open Source Boundary Invariant`: Open Core separation is mandatory. Community code must remain buildable/runnable without enterprise modules.
+- `License-per-directory Rule`: Every package and directory scope must have explicit SPDX-aligned license ownership; do not introduce mixed-license ambiguity in a single module.
+- `No community->enterprise import rule`: Any dependency from community modules to enterprise modules is forbidden.
+- `Public mirror release gate`: Public source publication must be generated only from `.oss-allowlist` and pass dry-run checks.
+- `CLA required for code contributions`: External code contributions must pass CLA checks before merge.
+- `Trademark protection required for distribution`: Distribution does not grant trademark rights; brand usage must follow trademark policy.
+
 ## Runtime Invariants (AI-Facing)
 - Treat organization isolation as non-negotiable; every tenant-scoped read/write must enforce org boundary.
 - Prefer typed module boundaries and explicit contracts over implicit shared state.
@@ -114,6 +122,7 @@ Update this file when any of the following changes:
 - Core commands (`pnpm dev/build/test/lint`) or script entrypoints
 - Runtime topology (apps/services added/removed)
 - Auth, tenancy, billing, or workflow contracts
+- Open source licensing, boundary policy, CLA flow, or trademark policy
 - Required environment variables
 - Release/deployment model changes (AWS/Cloudflare assumptions)
 

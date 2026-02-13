@@ -1,0 +1,20 @@
+name: CLA Check
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA assistant
+        uses: contributor-assistant/github-action@v2.6.1
+        with:
+          path-to-cla-document: docs/open-source/cla-policy.md
+          custom-notsigned-prcomment: |
+            Thanks for the contribution. Please sign the CLA to continue the review.
+          custom-allsigned-prcomment: |
+            CLA check passed.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,6 +5,7 @@ import { MemoryAppStore } from "./store/memory-store.js";
 import type { OAuthService, OAuthProvider } from "./oauth.js";
 import type { WorkflowRunQueueProducer } from "./queue/producer.js";
 import type { WorkflowRunJobPayload } from "@vespid/shared";
+import type { EnterpriseProvider } from "@vespid/shared";
 
 function extractCookies(input: { headers: Record<string, unknown> }, names: string[]): string {
   const setCookieHeader = input.headers["set-cookie"];
@@ -194,6 +195,34 @@ describe("api hardening foundation", () => {
 
     expect(exchangeFailed.statusCode).toBe(401);
     expect((exchangeFailed.json() as { code: string }).code).toBe("OAUTH_EXCHANGE_FAILED");
+  });
+
+  it("exposes community capabilities and connector catalog metadata", async () => {
+    const capabilities = await server.inject({
+      method: "GET",
+      url: "/v1/meta/capabilities",
+    });
+    expect(capabilities.statusCode).toBe(200);
+    const capabilitiesBody = capabilities.json() as {
+      edition: string;
+      capabilities: string[];
+      provider: { name: string; version: string | null };
+    };
+    expect(capabilitiesBody.edition).toBe("community");
+    expect(capabilitiesBody.capabilities).toContain("workflow_dsl_v2");
+    expect(capabilitiesBody.provider.name).toBe("community-core");
+
+    const connectors = await server.inject({
+      method: "GET",
+      url: "/v1/meta/connectors",
+    });
+    expect(connectors.statusCode).toBe(200);
+    const connectorsBody = connectors.json() as {
+      connectors: Array<{ id: string; source: string }>;
+    };
+    expect(connectorsBody.connectors.some((connector) => connector.id === "jira" && connector.source === "community")).toBe(
+      true
+    );
   });
 
   it("supports cookie refresh and revocable sessions", async () => {
@@ -904,6 +933,56 @@ describe("api rbac promotion flow", () => {
   });
 });
 
+describe("api enterprise provider integration", () => {
+  it("loads inline enterprise provider while preserving community baseline capabilities", async () => {
+    const provider: EnterpriseProvider = {
+      edition: "enterprise",
+      name: "enterprise-inline",
+      version: "0.4.0",
+      getCapabilities() {
+        return ["sso", "advanced_rbac"];
+      },
+      getEnterpriseConnectors() {
+        return [
+          {
+            id: "salesforce",
+            displayName: "Salesforce",
+            requiresSecret: true,
+          },
+        ];
+      },
+    };
+
+    const server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+      enterpriseProvider: provider,
+    });
+
+    const capabilities = await server.inject({
+      method: "GET",
+      url: "/v1/meta/capabilities",
+    });
+    expect(capabilities.statusCode).toBe(200);
+    const capabilitiesBody = capabilities.json() as { edition: string; capabilities: string[] };
+    expect(capabilitiesBody.edition).toBe("enterprise");
+    expect(capabilitiesBody.capabilities).toEqual(expect.arrayContaining(["tenant_rls", "sso", "advanced_rbac"]));
+
+    const connectors = await server.inject({
+      method: "GET",
+      url: "/v1/meta/connectors",
+    });
+    expect(connectors.statusCode).toBe(200);
+    const connectorBody = connectors.json() as { connectors: Array<{ id: string; source: string }> };
+    expect(connectorBody.connectors.some((connector) => connector.id === "salesforce" && connector.source === "enterprise")).toBe(
+      true
+    );
+
+    await server.close();
+  });
+});
+
 describe("api org context warn mode", () => {
   let server: Awaited<ReturnType<typeof buildServer>>;
   const queueProducer = createFakeQueueProducer();
@@ -1030,3 +1109,45 @@ describe("api org context warn mode", () => {
     expect((failed.json() as { code: string }).code).toBe("OAUTH_EXCHANGE_FAILED");
   });
 });
+
+const externalEnterpriseProviderModule = process.env.VESPID_ENTERPRISE_PROVIDER_MODULE;
+
+(externalEnterpriseProviderModule ? describe : describe.skip)(
+  "api external enterprise provider module integration",
+  () => {
+    it("loads enterprise provider from configured module path", async () => {
+      const server = await buildServer({
+        store: new MemoryAppStore(),
+        oauthService: fakeOAuthService(),
+        queueProducer: createFakeQueueProducer(),
+      });
+
+      const capabilities = await server.inject({
+        method: "GET",
+        url: "/v1/meta/capabilities",
+      });
+
+      expect(capabilities.statusCode).toBe(200);
+      const capabilitiesBody = capabilities.json() as {
+        edition: string;
+        capabilities: string[];
+        provider: { name: string };
+      };
+      expect(capabilitiesBody.edition).toBe("enterprise");
+      expect(capabilitiesBody.capabilities).toEqual(expect.arrayContaining(["sso", "advanced_rbac"]));
+      expect(capabilitiesBody.provider.name).toBe("vespid-enterprise");
+
+      const connectors = await server.inject({
+        method: "GET",
+        url: "/v1/meta/connectors",
+      });
+      expect(connectors.statusCode).toBe(200);
+      const connectorBody = connectors.json() as { connectors: Array<{ id: string; source: string }> };
+      expect(
+        connectorBody.connectors.some((connector) => connector.id === "salesforce" && connector.source === "enterprise")
+      ).toBe(true);
+
+      await server.close();
+    });
+  }
+);
