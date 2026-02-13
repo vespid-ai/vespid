@@ -1,5 +1,6 @@
 import type { WorkflowNodeExecutor } from "@vespid/shared";
-import { createGithubIssueCreateExecutor } from "./github-issue-create.js";
+import { createConnectorActionExecutor } from "./connector-action.js";
+import { createLegacyGithubIssueCreateExecutor } from "./github-issue-create.js";
 
 export function getCommunityWorkflowNodeExecutors(input?: {
   githubApiBaseUrl?: string;
@@ -21,7 +22,12 @@ export function getCommunityWorkflowNodeExecutors(input?: {
     },
     ...(input?.githubApiBaseUrl && input.loadConnectorSecretValue
       ? [
-          createGithubIssueCreateExecutor({
+          createConnectorActionExecutor({
+            githubApiBaseUrl: input.githubApiBaseUrl,
+            loadConnectorSecretValue: input.loadConnectorSecretValue,
+            ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+          }),
+          createLegacyGithubIssueCreateExecutor({
             githubApiBaseUrl: input.githubApiBaseUrl,
             loadConnectorSecretValue: input.loadConnectorSecretValue,
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),

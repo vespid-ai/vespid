@@ -212,11 +212,15 @@ describe("workflow async integration", () => {
           nodes: [
             {
               id: "node-github",
-              type: "connector.github.issue.create",
+              type: "connector.action",
               config: {
-                repo: "octo/test",
-                title: "Vespid CI Issue",
-                body: "Created by vespid workflow runtime test",
+                connectorId: "github",
+                actionId: "issue.create",
+                input: {
+                  repo: "octo/test",
+                  title: "Vespid CI Issue",
+                  body: "Created by vespid workflow runtime test",
+                },
                 auth: {
                   secretId,
                 },
@@ -301,7 +305,7 @@ describe("workflow async integration", () => {
     expect(eventTypes).toContain("node_succeeded");
 
     const githubSuccess = eventsBody.events.find(
-      (event) => event.eventType === "node_succeeded" && event.nodeType === "connector.github.issue.create"
+      (event) => event.eventType === "node_succeeded" && event.nodeId === "node-github"
     );
     expect(githubSuccess).toBeTruthy();
     const githubPayload = githubSuccess?.payload as { issueNumber?: unknown; url?: unknown } | undefined;

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import http from "node:http";
-import { createGithubIssueCreateExecutor } from "./github-issue-create.js";
+import { createConnectorActionExecutor } from "./connector-action.js";
 
 describe("github issue create executor", () => {
   let baseUrl: string;
@@ -47,7 +47,7 @@ describe("github issue create executor", () => {
 
   it("calls GitHub API with bearer token and returns issue metadata", async () => {
     const token = "ghp_unit_test_token";
-    const executor = createGithubIssueCreateExecutor({
+    const executor = createConnectorActionExecutor({
       githubApiBaseUrl: baseUrl,
       async loadConnectorSecretValue(input) {
         expect(input).toEqual(
@@ -68,13 +68,17 @@ describe("github issue create executor", () => {
       attemptCount: 1,
       requestedByUserId: "user-1",
       nodeId: "n1",
-      nodeType: "connector.github.issue.create",
+      nodeType: "connector.action",
       node: {
         id: "n1",
-        type: "connector.github.issue.create",
+        type: "connector.action",
         config: {
-          repo: "octo/test",
-          title: "Hello",
+          connectorId: "github",
+          actionId: "issue.create",
+          input: {
+            repo: "octo/test",
+            title: "Hello",
+          },
           auth: { secretId: "00000000-0000-0000-0000-000000000000" },
         },
       },
@@ -86,4 +90,3 @@ describe("github issue create executor", () => {
     expect(lastAuth).toBe(`Bearer ${token}`);
   });
 });
-

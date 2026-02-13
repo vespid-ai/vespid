@@ -46,11 +46,15 @@ export default function WorkflowPage() {
     if (includeGithub) {
       nodes.push({
         id: "node-github",
-        type: "connector.github.issue.create",
+        type: "connector.action",
         config: {
-          repo: githubRepo,
-          title: githubTitle,
-          body: githubBody,
+          connectorId: "github",
+          actionId: "issue.create",
+          input: {
+            repo: githubRepo,
+            title: githubTitle,
+            body: githubBody,
+          },
           auth: { secretId: githubSecretId },
         },
       });
