@@ -203,14 +203,15 @@ describe("api hardening foundation", () => {
       url: "/v1/meta/capabilities",
     });
     expect(capabilities.statusCode).toBe(200);
+    const expectsEnterprise = Boolean(process.env.VESPID_ENTERPRISE_PROVIDER_MODULE);
     const capabilitiesBody = capabilities.json() as {
       edition: string;
       capabilities: string[];
       provider: { name: string; version: string | null };
     };
-    expect(capabilitiesBody.edition).toBe("community");
+    expect(capabilitiesBody.edition).toBe(expectsEnterprise ? "enterprise" : "community");
     expect(capabilitiesBody.capabilities).toContain("workflow_dsl_v2");
-    expect(capabilitiesBody.provider.name).toBe("community-core");
+    expect(capabilitiesBody.provider.name).toBe(expectsEnterprise ? "vespid-enterprise" : "community-core");
 
     const connectors = await server.inject({
       method: "GET",
