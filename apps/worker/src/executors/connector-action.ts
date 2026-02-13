@@ -1,5 +1,6 @@
-import { z } from "zod";
 import type { WorkflowNodeExecutor } from "@vespid/shared";
+import { getCommunityConnectorAction } from "@vespid/connectors";
+import { z } from "zod";
 
 const connectorActionNodeSchema = z.object({
   id: z.string().min(1),
@@ -12,12 +13,6 @@ const connectorActionNodeSchema = z.object({
       secretId: z.string().uuid(),
     }),
   }),
-});
-
-const githubIssueCreateInputSchema = z.object({
-  repo: z.string().regex(/^[^/]+\/[^/]+$/),
-  title: z.string().min(1).max(256),
-  body: z.string().max(200_000).optional(),
 });
 
 export function createConnectorActionExecutor(input: {
@@ -37,66 +32,36 @@ export function createConnectorActionExecutor(input: {
 
       const { connectorId, actionId } = nodeParsed.data.config;
 
-      if (connectorId === "github" && actionId === "issue.create") {
-        const actionInputParsed = githubIssueCreateInputSchema.safeParse(nodeParsed.data.config.input);
-        if (!actionInputParsed.success) {
-          return { status: "failed", error: "INVALID_ACTION_INPUT" };
-        }
-
-        const token = await input.loadConnectorSecretValue({
-          organizationId: context.organizationId,
-          userId: context.requestedByUserId,
-          secretId: nodeParsed.data.config.auth.secretId,
-        });
-
-        const [owner, repo] = actionInputParsed.data.repo.split("/");
-        if (!owner || !repo) {
-          return { status: "failed", error: "INVALID_REPO" };
-        }
-
-        const url = new URL(`/repos/${owner}/${repo}/issues`, input.githubApiBaseUrl);
-        const response = await fetchImpl(url.toString(), {
-          method: "POST",
-          headers: {
-            accept: "application/vnd.github+json",
-            "content-type": "application/json",
-            authorization: `Bearer ${token}`,
-            "user-agent": "vespid-worker",
-          },
-          body: JSON.stringify({
-            title: actionInputParsed.data.title,
-            body: actionInputParsed.data.body ?? undefined,
-          }),
-        });
-
-        if (!response.ok) {
-          return { status: "failed", error: `GITHUB_REQUEST_FAILED:${response.status}` };
-        }
-
-        const payload = (await response.json()) as { number?: unknown; html_url?: unknown; url?: unknown };
-        const issueNumber = typeof payload.number === "number" ? payload.number : null;
-        const issueUrl =
-          typeof payload.html_url === "string"
-            ? payload.html_url
-            : typeof payload.url === "string"
-              ? payload.url
-              : null;
-
-        if (!issueNumber || !issueUrl) {
-          return { status: "failed", error: "GITHUB_RESPONSE_INVALID" };
-        }
-
-        return {
-          status: "succeeded",
-          output: {
-            issueNumber,
-            url: issueUrl,
-          },
-        };
+      const action = getCommunityConnectorAction({ connectorId, actionId });
+      if (!action) {
+        return { status: "failed", error: `ACTION_NOT_SUPPORTED:${connectorId}:${actionId}` };
       }
 
-      return { status: "failed", error: `ACTION_NOT_SUPPORTED:${connectorId}:${actionId}` };
+      const actionInputParsed = action.inputSchema.safeParse(nodeParsed.data.config.input);
+      if (!actionInputParsed.success) {
+        return { status: "failed", error: "INVALID_ACTION_INPUT" };
+      }
+
+      const secret = action.requiresSecret
+        ? await input.loadConnectorSecretValue({
+            organizationId: context.organizationId,
+            userId: context.requestedByUserId,
+            secretId: nodeParsed.data.config.auth.secretId,
+          })
+        : null;
+
+      return action.execute({
+        organizationId: context.organizationId,
+        userId: context.requestedByUserId,
+        connectorId,
+        actionId,
+        input: actionInputParsed.data,
+        secret,
+        env: {
+          githubApiBaseUrl: input.githubApiBaseUrl,
+        },
+        fetchImpl,
+      });
     },
   };
 }
-

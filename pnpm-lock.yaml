@@ -91,6 +91,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@vespid/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@vespid/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -110,7 +113,11 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  packages/connectors: {}
+  packages/connectors:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
 
   packages/db:
     dependencies:

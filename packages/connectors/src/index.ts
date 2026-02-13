@@ -12,6 +12,8 @@ export type ConnectorContract = ConnectorDefinition & {
   source: ConnectorSource;
 };
 
+export * from "./actions.js";
+
 export const defaultConnectors: ConnectorDefinition[] = [
   { id: "jira", displayName: "Jira", requiresSecret: true },
   { id: "github", displayName: "GitHub", requiresSecret: true },

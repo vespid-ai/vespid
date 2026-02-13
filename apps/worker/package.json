@@ -14,6 +14,7 @@
     "test": "vitest run --exclude 'dist/**' --passWithNoTests"
   },
   "dependencies": {
+    "@vespid/connectors": "workspace:*",
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",

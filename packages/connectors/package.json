@@ -15,5 +15,8 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'dist/**'"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
   }
 }
