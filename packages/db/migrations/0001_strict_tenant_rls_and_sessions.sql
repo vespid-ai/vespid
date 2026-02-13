@@ -39,6 +39,11 @@ for all
 using (organization_id = app.current_org_uuid())
 with check (organization_id = app.current_org_uuid());
 
+-- Enforce RLS even for table owners/superusers to avoid accidental bypass.
+alter table organizations force row level security;
+alter table memberships force row level security;
+alter table organization_invitations force row level security;
+
 create table if not exists auth_sessions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id) on delete cascade,
@@ -61,3 +66,5 @@ on auth_sessions
 for all
 using (user_id = app.current_user_uuid())
 with check (user_id = app.current_user_uuid());
+
+alter table auth_sessions force row level security;

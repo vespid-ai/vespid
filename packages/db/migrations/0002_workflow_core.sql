@@ -47,3 +47,6 @@ on workflow_runs
 for all
 using (organization_id = app.current_org_uuid())
 with check (organization_id = app.current_org_uuid());
+
+alter table workflows force row level security;
+alter table workflow_runs force row level security;
