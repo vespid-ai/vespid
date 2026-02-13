@@ -11,6 +11,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@vespid/api": "workspace:*"
+    "@vespid/api": "workspace:*",
+    "@vespid/connectors": "workspace:*",
+    "ws": "^8.18.3"
   }
 }

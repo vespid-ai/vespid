@@ -4,7 +4,8 @@
 - `apps/api`: Fastify API for auth/org/rbac foundation endpoints.
 - `apps/web`: Next.js bootstrap UI for auth and org onboarding.
 - `apps/worker`: queue worker for async workflow run execution with retry/backoff.
-- `apps/node-agent`: CLI bootstrap for future node execution.
+- `apps/gateway`: execution gateway for node-agent remote execution (WS for agents + internal dispatch from worker).
+- `apps/node-agent`: CLI node execution agent that connects to gateway.
 - `apps/api`: supports optional enterprise provider injection (`VESPID_ENTERPRISE_PROVIDER_MODULE`) with community fallback.
 
 ## Packages
@@ -29,10 +30,16 @@
   - Event payloads are capped via `WORKFLOW_EVENT_PAYLOAD_MAX_CHARS` to avoid oversized rows.
 - Connector secrets are encrypted at rest and scoped per organization (`connector_secrets`).
   - Encryption uses an environment-provided KEK (`SECRETS_KEK_ID`, `SECRETS_KEK_BASE64`).
+- Remote execution (MVP):
+  - Workflows may set `execution.mode="node"` for `agent.execute` and `connector.action`.
+  - `apps/worker` dispatches work to `apps/gateway`, which routes to any connected org-scoped node-agent.
+  - Gateway dispatch is protected by `GATEWAY_SERVICE_TOKEN`; agent auth uses long-lived agent tokens stored hashed.
+  - Pairing uses short-lived, single-use pairing tokens stored hashed.
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
 - See `/docs/runbooks/secrets-key-rotation.md` for KEK configuration and secret rotation guidance.
+- See `/docs/runbooks/node-agent-gateway-mvp.md` for node-agent + gateway remote execution operations.
 
 ## Foundation APIs
 - Auth:
@@ -61,6 +68,11 @@
   - `POST /v1/orgs/:orgId/secrets` (`X-Org-Id` required, owner/admin only)
   - `PUT /v1/orgs/:orgId/secrets/:secretId` (`X-Org-Id` required, owner/admin only)
   - `DELETE /v1/orgs/:orgId/secrets/:secretId` (`X-Org-Id` required, owner/admin only)
+- Agents:
+  - `GET /v1/orgs/:orgId/agents` (`X-Org-Id` required, owner/admin only)
+  - `POST /v1/orgs/:orgId/agents/pairing-tokens` (`X-Org-Id` required, owner/admin only)
+  - `POST /v1/orgs/:orgId/agents/:agentId/revoke` (`X-Org-Id` required, owner/admin only)
+  - `POST /v1/agents/pair` (pairing token only)
 - Metadata:
   - `GET /v1/meta/capabilities`
   - `GET /v1/meta/connectors`

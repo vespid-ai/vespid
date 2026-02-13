@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type {
   AppStore,
+  AgentPairingTokenRecord,
   ConnectorSecretRecord,
   InvitationAcceptResultRecord,
   InvitationRecord,
   MembershipRecord,
+  OrganizationAgentRecord,
   OrganizationRecord,
   SessionRecord,
   UserRecord,
@@ -37,6 +39,14 @@ export class MemoryAppStore implements AppStore {
     secretIv: Buffer;
     secretTag: Buffer;
   })>();
+  private agentPairingTokensByHash = new Map<string, AgentPairingTokenRecord>();
+  private organizationAgents = new Map<
+    string,
+    (OrganizationAgentRecord & {
+      tokenHash: string;
+    })
+  >();
+  private organizationAgentIdByTokenHash = new Map<string, string>();
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -734,6 +744,108 @@ export class MemoryAppStore implements AppStore {
       return false;
     }
     this.connectorSecrets.delete(input.secretId);
+    return true;
+  }
+
+  async createAgentPairingToken(input: {
+    organizationId: string;
+    actorUserId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<AgentPairingTokenRecord> {
+    const token: AgentPairingTokenRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt.toISOString(),
+      usedAt: null,
+      createdByUserId: input.actorUserId,
+      createdAt: nowIso(),
+    };
+    this.agentPairingTokensByHash.set(token.tokenHash, token);
+    return token;
+  }
+
+  async getAgentPairingTokenByHash(input: {
+    organizationId: string;
+    actorUserId?: string;
+    tokenHash: string;
+  }): Promise<AgentPairingTokenRecord | null> {
+    const token = this.agentPairingTokensByHash.get(input.tokenHash);
+    if (!token || token.organizationId !== input.organizationId) {
+      return null;
+    }
+    return token;
+  }
+
+  async consumeAgentPairingToken(input: { organizationId: string; tokenHash: string }): Promise<AgentPairingTokenRecord | null> {
+    const token = this.agentPairingTokensByHash.get(input.tokenHash);
+    if (!token || token.organizationId !== input.organizationId) {
+      return null;
+    }
+    if (token.usedAt) {
+      return null;
+    }
+    if (new Date(token.expiresAt).getTime() <= Date.now()) {
+      return null;
+    }
+
+    const updated: AgentPairingTokenRecord = {
+      ...token,
+      usedAt: nowIso(),
+    };
+    this.agentPairingTokensByHash.set(updated.tokenHash, updated);
+    return updated;
+  }
+
+  async createOrganizationAgent(input: {
+    organizationId: string;
+    name: string;
+    tokenHash: string;
+    createdByUserId: string;
+    capabilities?: unknown;
+  }): Promise<OrganizationAgentRecord> {
+    const agentId = crypto.randomUUID();
+    const agent: OrganizationAgentRecord = {
+      id: agentId,
+      organizationId: input.organizationId,
+      name: input.name,
+      revokedAt: null,
+      lastSeenAt: null,
+      capabilities: input.capabilities ?? null,
+      createdByUserId: input.createdByUserId,
+      createdAt: nowIso(),
+    };
+    this.organizationAgents.set(agent.id, { ...agent, tokenHash: input.tokenHash });
+    this.organizationAgentIdByTokenHash.set(input.tokenHash, agent.id);
+    return agent;
+  }
+
+  async listOrganizationAgents(input: { organizationId: string; actorUserId: string }): Promise<OrganizationAgentRecord[]> {
+    return [...this.organizationAgents.values()]
+      .filter((agent) => agent.organizationId === input.organizationId)
+      .map((agent) => ({
+        id: agent.id,
+        organizationId: agent.organizationId,
+        name: agent.name,
+        revokedAt: agent.revokedAt,
+        lastSeenAt: agent.lastSeenAt,
+        capabilities: agent.capabilities,
+        createdByUserId: agent.createdByUserId,
+        createdAt: agent.createdAt,
+      }));
+  }
+
+  async revokeOrganizationAgent(input: { organizationId: string; actorUserId: string; agentId: string }): Promise<boolean> {
+    const existing = this.organizationAgents.get(input.agentId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return false;
+    }
+    if (existing.revokedAt) {
+      return true;
+    }
+    const updated = { ...existing, revokedAt: nowIso() };
+    this.organizationAgents.set(updated.id, updated);
     return true;
   }
 

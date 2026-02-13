@@ -5,6 +5,7 @@
     { "path": "./apps/api" },
     { "path": "./apps/web" },
     { "path": "./apps/worker" },
+    { "path": "./apps/gateway" },
     { "path": "./apps/node-agent" },
     { "path": "./packages/db" },
     { "path": "./packages/shared" },

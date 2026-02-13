@@ -21,6 +21,7 @@ Use this monorepo layout:
 - `apps/web/` Next.js frontend (product UI + BFF-facing routes)
 - `apps/api/` Fastify control plane API (auth/org/workflow/connectors/billing)
 - `apps/worker/` queue consumers and workflow runtime execution
+- `apps/gateway/` execution gateway (WS for node-agents + internal dispatch for worker)
 - `apps/node-agent/` cross-platform node execution agent (CLI, optional Docker mode)
 - `packages/db/` Drizzle schema, migrations, RLS policies, DB utilities
 - `packages/workflow/` workflow DSL v2, runtime contracts, node specs
@@ -88,6 +89,7 @@ Operational guardrails:
 - Workflow execution emits run/node events persisted in PostgreSQL (`workflow_run_events`) and exposed via read APIs; events are tenant-scoped under RLS.
 - Workflow node execution supports a community baseline executor set, plus optional enterprise overrides via `EnterpriseProvider.getWorkflowNodeExecutors()`.
 - Workflow queue runtime is Redis + BullMQ single stack. `POST /runs` must only succeed when enqueue succeeds; queue failures must return `503/QUEUE_UNAVAILABLE` and not leave fresh dirty queued runs.
+- Optional remote execution uses `apps/gateway` + `apps/node-agent` for `agent.execute` and `connector.action` when `execution.mode="node"`.
 - Drizzle is the default DB access path; use parameterized raw SQL only for proven complex queries.
 - Auth model is Email + OAuth first; enterprise SSO can be added later without breaking core auth contracts.
 - Auth runtime is dual-mode: short-lived Bearer access token + HttpOnly refresh cookie.

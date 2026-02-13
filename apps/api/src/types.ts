@@ -109,6 +109,27 @@ export type ConnectorSecretRecord = {
   updatedAt: string;
 };
 
+export type OrganizationAgentRecord = {
+  id: string;
+  organizationId: string;
+  name: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+  capabilities: unknown;
+  createdByUserId: string;
+  createdAt: string;
+};
+
+export type AgentPairingTokenRecord = {
+  id: string;
+  organizationId: string;
+  tokenHash: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdByUserId: string;
+  createdAt: string;
+};
+
 export interface AppStore {
   ensureDefaultRoles(): Promise<void>;
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
@@ -272,5 +293,37 @@ export interface AppStore {
     organizationId: string;
     actorUserId: string;
     secretId: string;
+  }): Promise<boolean>;
+
+  createAgentPairingToken(input: {
+    organizationId: string;
+    actorUserId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<AgentPairingTokenRecord>;
+  getAgentPairingTokenByHash(input: {
+    organizationId: string;
+    actorUserId?: string;
+    tokenHash: string;
+  }): Promise<AgentPairingTokenRecord | null>;
+  consumeAgentPairingToken(input: {
+    organizationId: string;
+    tokenHash: string;
+  }): Promise<AgentPairingTokenRecord | null>;
+  createOrganizationAgent(input: {
+    organizationId: string;
+    name: string;
+    tokenHash: string;
+    createdByUserId: string;
+    capabilities?: unknown;
+  }): Promise<OrganizationAgentRecord>;
+  listOrganizationAgents(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<OrganizationAgentRecord[]>;
+  revokeOrganizationAgent(input: {
+    organizationId: string;
+    actorUserId: string;
+    agentId: string;
   }): Promise<boolean>;
 }

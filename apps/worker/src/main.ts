@@ -28,6 +28,7 @@ import {
   getWorkflowRetryAttempts,
 } from "./queue/config.js";
 import { getCommunityWorkflowNodeExecutors } from "./executors/community-executors.js";
+import { dispatchViaGateway } from "./gateway/client.js";
 
 type WorkflowRunJobLike = Pick<Job<WorkflowRunJobPayload>, "data" | "attemptsMade" | "opts">;
 type ExecutorRegistry = Map<string, WorkflowNodeExecutor>;
@@ -169,6 +170,8 @@ export async function processWorkflowRunJob(
       const communityExecutors = getCommunityWorkflowNodeExecutors({
         githubApiBaseUrl: getGithubApiBaseUrl(),
         loadConnectorSecretValue,
+        dispatchToGateway: dispatchViaGateway,
+        nodeExecTimeoutMs: envNumber("NODE_EXEC_TIMEOUT_MS", 60_000),
       });
 
       return buildExecutorRegistry({

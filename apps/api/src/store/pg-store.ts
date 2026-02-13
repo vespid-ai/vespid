@@ -22,6 +22,12 @@ import {
   touchAuthSession,
   updateMembershipRole,
   updateConnectorSecretValue as dbUpdateConnectorSecretValue,
+  createAgentPairingToken as dbCreateAgentPairingToken,
+  getAgentPairingTokenByHash as dbGetAgentPairingTokenByHash,
+  consumeAgentPairingToken as dbConsumeAgentPairingToken,
+  createOrganizationAgent as dbCreateOrganizationAgent,
+  listOrganizationAgents as dbListOrganizationAgents,
+  revokeOrganizationAgent as dbRevokeOrganizationAgent,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
   getWorkflowById as dbGetWorkflowById,
@@ -57,7 +63,7 @@ export class PgAppStore implements AppStore {
   }
 
   private async withOrgContext<T>(
-    input: { userId: string; organizationId: string },
+    input: { userId?: string; organizationId: string },
     fn: (db: ReturnType<typeof createDb>) => Promise<T>
   ): Promise<T> {
     return withTenantContext(this.pool, input, async (db) => fn(db));
@@ -882,6 +888,129 @@ export class PgAppStore implements AppStore {
     const row = await this.withOrgContext(
       { userId: input.actorUserId, organizationId: input.organizationId },
       async (db) => dbDeleteConnectorSecret(db, { organizationId: input.organizationId, secretId: input.secretId })
+    );
+    return Boolean(row);
+  }
+
+  async createAgentPairingToken(input: {
+    organizationId: string;
+    actorUserId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateAgentPairingToken(db, {
+          organizationId: input.organizationId,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+          createdByUserId: input.actorUserId,
+        })
+    );
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      tokenHash: row.tokenHash,
+      expiresAt: toIso(row.expiresAt),
+      usedAt: row.usedAt ? toIso(row.usedAt) : null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async getAgentPairingTokenByHash(input: { organizationId: string; actorUserId?: string; tokenHash: string }) {
+    const row = await this.withOrgContext(
+      input.actorUserId
+        ? { userId: input.actorUserId, organizationId: input.organizationId }
+        : { organizationId: input.organizationId },
+      async (db) => dbGetAgentPairingTokenByHash(db, { organizationId: input.organizationId, tokenHash: input.tokenHash })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      tokenHash: row.tokenHash,
+      expiresAt: toIso(row.expiresAt),
+      usedAt: row.usedAt ? toIso(row.usedAt) : null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async consumeAgentPairingToken(input: { organizationId: string; tokenHash: string }) {
+    const row = await this.withOrgContext(
+      { organizationId: input.organizationId },
+      async (db) => dbConsumeAgentPairingToken(db, { organizationId: input.organizationId, tokenHash: input.tokenHash })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      tokenHash: row.tokenHash,
+      expiresAt: toIso(row.expiresAt),
+      usedAt: row.usedAt ? toIso(row.usedAt) : null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async createOrganizationAgent(input: {
+    organizationId: string;
+    name: string;
+    tokenHash: string;
+    createdByUserId: string;
+    capabilities?: unknown;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.createdByUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateOrganizationAgent(db, {
+          organizationId: input.organizationId,
+          name: input.name,
+          tokenHash: input.tokenHash,
+          createdByUserId: input.createdByUserId,
+          capabilities: input.capabilities ?? null,
+        })
+    );
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      capabilities: row.capabilities,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listOrganizationAgents(input: { organizationId: string; actorUserId: string }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbListOrganizationAgents(db, { organizationId: input.organizationId })
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      capabilities: row.capabilities,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    }));
+  }
+
+  async revokeOrganizationAgent(input: { organizationId: string; actorUserId: string; agentId: string }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbRevokeOrganizationAgent(db, { organizationId: input.organizationId, agentId: input.agentId })
     );
     return Boolean(row);
   }

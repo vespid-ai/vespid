@@ -174,6 +174,34 @@ export const connectorSecrets = pgTable("connector_secrets", {
   connectorSecretsOrgConnectorIdx: index("connector_secrets_org_connector_idx").on(table.organizationId, table.connectorId),
 }));
 
+export const organizationAgents = pgTable("organization_agents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  capabilities: jsonb("capabilities"),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  organizationAgentsTokenHashUnique: uniqueIndex("organization_agents_token_hash_unique").on(table.tokenHash),
+  organizationAgentsOrgCreatedAtIdx: index("organization_agents_org_created_at_idx").on(table.organizationId, table.createdAt),
+}));
+
+export const agentPairingTokens = pgTable("agent_pairing_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentPairingTokensTokenHashUnique: uniqueIndex("agent_pairing_tokens_token_hash_unique").on(table.tokenHash),
+  agentPairingTokensOrgCreatedAtIdx: index("agent_pairing_tokens_org_created_at_idx").on(table.organizationId, table.createdAt),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
@@ -181,6 +209,8 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   workflowRuns: many(workflowRuns),
   workflowRunEvents: many(workflowRunEvents),
   connectorSecrets: many(connectorSecrets),
+  agents: many(organizationAgents),
+  agentPairingTokens: many(agentPairingTokens),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -281,3 +311,5 @@ export type DbWorkflow = typeof workflows.$inferSelect;
 export type DbWorkflowRun = typeof workflowRuns.$inferSelect;
 export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;
 export type DbConnectorSecret = typeof connectorSecrets.$inferSelect;
+export type DbOrganizationAgent = typeof organizationAgents.$inferSelect;
+export type DbAgentPairingToken = typeof agentPairingTokens.$inferSelect;

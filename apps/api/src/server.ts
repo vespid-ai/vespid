@@ -127,6 +127,13 @@ const rotateSecretSchema = z.object({
   value: z.string().min(1),
 });
 
+const agentPairSchema = z.object({
+  pairingToken: z.string().min(1),
+  name: z.string().min(1).max(120),
+  agentVersion: z.string().min(1).max(60),
+  capabilities: z.record(z.string(), z.unknown()).optional(),
+});
+
 const listWorkflowRunsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().min(1).optional(),
@@ -195,6 +202,18 @@ function secretValueRequired(): AppError {
   return new AppError(400, { code: "SECRET_VALUE_REQUIRED", message: "Secret value is required" });
 }
 
+function pairingTokenInvalid(message = "Pairing token is invalid"): AppError {
+  return new AppError(401, { code: "PAIRING_TOKEN_INVALID", message });
+}
+
+function pairingTokenExpired(message = "Pairing token is expired"): AppError {
+  return new AppError(400, { code: "PAIRING_TOKEN_EXPIRED", message });
+}
+
+function agentNotFound(message = "Agent not found"): AppError {
+  return new AppError(404, { code: "AGENT_NOT_FOUND", message });
+}
+
 function base64UrlEncode(input: string): string {
   return Buffer.from(input, "utf8").toString("base64url");
 }
@@ -230,6 +249,10 @@ function timingSafeEqual(left: string, right: string): boolean {
 
 function hashRefreshToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function sha256Hex(value: string): string {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function signRefreshToken(payload: RefreshTokenPayload, secret: string): string {
@@ -290,6 +313,12 @@ function parseInvitationTokenOrganizationId(token: string): string | null {
     return null;
   }
   return parsed.data;
+}
+
+function parsePairingTokenOrganizationId(token: string): string | null {
+  const [organizationId] = token.split(".");
+  const parsed = z.string().uuid().safeParse(organizationId);
+  return parsed.success ? parsed.data : null;
 }
 
 function parseOrgHeaderValue(value: unknown): string {
@@ -1193,6 +1222,136 @@ export async function buildServer(input?: {
     }
 
     return { ok: true };
+  });
+
+  server.get("/v1/orgs/:orgId/agents", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage agents");
+    }
+
+    const agents = await store.listOrganizationAgents({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
+    const nowMs = Date.now();
+    const onlineWindowMs = 45_000;
+
+    return {
+      agents: agents.map((agent) => {
+        const lastSeenMs = agent.lastSeenAt ? new Date(agent.lastSeenAt).getTime() : null;
+        const online = Boolean(lastSeenMs && nowMs - lastSeenMs < onlineWindowMs);
+        const status = agent.revokedAt ? "revoked" : online ? "online" : "offline";
+        return {
+          id: agent.id,
+          name: agent.name,
+          status,
+          lastSeenAt: agent.lastSeenAt,
+          createdAt: agent.createdAt,
+          revokedAt: agent.revokedAt,
+        };
+      }),
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/agents/pairing-tokens", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage agents");
+    }
+
+    const token = `${orgContext.organizationId}.${crypto.randomBytes(24).toString("base64url")}`;
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    await store.createAgentPairingToken({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      tokenHash: sha256Hex(token),
+      expiresAt,
+    });
+
+    return reply.status(201).send({ token, expiresAt: expiresAt.toISOString() });
+  });
+
+  server.post("/v1/orgs/:orgId/agents/:agentId/revoke", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; agentId?: string };
+    if (!params.orgId || !params.agentId) {
+      throw badRequest("Missing orgId or agentId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage agents");
+    }
+
+    const ok = await store.revokeOrganizationAgent({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      agentId: params.agentId,
+    });
+
+    if (!ok) {
+      throw agentNotFound();
+    }
+
+    return { ok: true };
+  });
+
+  server.post("/v1/agents/pair", async (request, reply) => {
+    const parsed = agentPairSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid agent pairing payload", parsed.error.flatten());
+    }
+
+    const orgId = parsePairingTokenOrganizationId(parsed.data.pairingToken);
+    if (!orgId) {
+      throw pairingTokenInvalid("Pairing token is malformed");
+    }
+
+    const tokenHash = sha256Hex(parsed.data.pairingToken);
+    const existing = await store.getAgentPairingTokenByHash({ organizationId: orgId, tokenHash });
+    if (!existing) {
+      throw pairingTokenInvalid();
+    }
+    if (existing.usedAt) {
+      throw pairingTokenInvalid("Pairing token has already been used");
+    }
+    if (new Date(existing.expiresAt).getTime() <= Date.now()) {
+      throw pairingTokenExpired();
+    }
+
+    const consumed = await store.consumeAgentPairingToken({ organizationId: orgId, tokenHash });
+    if (!consumed) {
+      throw pairingTokenInvalid();
+    }
+
+    const agentToken = `${orgId}.${crypto.randomBytes(32).toString("base64url")}`;
+    const agent = await store.createOrganizationAgent({
+      organizationId: orgId,
+      name: parsed.data.name,
+      tokenHash: sha256Hex(agentToken),
+      createdByUserId: existing.createdByUserId,
+      capabilities: parsed.data.capabilities ?? null,
+    });
+
+    const gatewayWsUrl = process.env.GATEWAY_WS_URL ?? "ws://localhost:3002/ws";
+
+    return reply.status(201).send({
+      agentId: agent.id,
+      agentToken,
+      organizationId: orgId,
+      gatewayWsUrl,
+    });
   });
 
   server.post("/v1/orgs/:orgId/workflows", async (request, reply) => {

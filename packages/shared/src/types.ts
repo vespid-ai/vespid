@@ -86,3 +86,55 @@ export type WorkflowRunJobPayload = {
   workflowId: string;
   requestedByUserId: string;
 };
+
+export type GatewayExecutionKind = "connector.action" | "agent.execute";
+
+export type GatewayDispatchRequest = {
+  organizationId: string;
+  requestedByUserId: string;
+  runId: string;
+  workflowId: string;
+  nodeId: string;
+  nodeType: string;
+  attemptCount: number;
+  kind: GatewayExecutionKind;
+  payload: unknown;
+  secret?: string;
+  timeoutMs?: number;
+};
+
+export type GatewayDispatchResponse = {
+  status: "succeeded" | "failed";
+  output?: unknown;
+  error?: string;
+};
+
+export type GatewayAgentHelloMessage = {
+  type: "hello";
+  agentVersion: string;
+  name: string;
+  capabilities?: Record<string, unknown>;
+};
+
+export type GatewayAgentPingMessage = {
+  type: "ping";
+  ts: number;
+};
+
+export type GatewayAgentExecuteResultMessage = {
+  type: "execute_result";
+  requestId: string;
+  status: "succeeded" | "failed";
+  output?: unknown;
+  error?: string;
+};
+
+export type GatewayServerExecuteMessage = {
+  type: "execute";
+  requestId: string;
+  organizationId: string;
+  userId: string;
+  kind: GatewayExecutionKind;
+  payload: unknown;
+  secret?: string;
+};

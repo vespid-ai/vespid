@@ -1,10 +1,14 @@
 import type { WorkflowNodeExecutor } from "@vespid/shared";
 import { createConnectorActionExecutor } from "./connector-action.js";
 import { createLegacyGithubIssueCreateExecutor } from "./github-issue-create.js";
+import { createAgentExecuteExecutor } from "./agent-execute.js";
+import type { GatewayDispatchRequest, GatewayDispatchResponse } from "@vespid/shared";
 
 export function getCommunityWorkflowNodeExecutors(input?: {
   githubApiBaseUrl?: string;
   loadConnectorSecretValue?: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
+  dispatchToGateway?: (input: GatewayDispatchRequest) => Promise<GatewayDispatchResponse>;
+  nodeExecTimeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor[] {
   return [
@@ -25,6 +29,8 @@ export function getCommunityWorkflowNodeExecutors(input?: {
           createConnectorActionExecutor({
             githubApiBaseUrl: input.githubApiBaseUrl,
             loadConnectorSecretValue: input.loadConnectorSecretValue,
+            ...(input.dispatchToGateway ? { dispatchToGateway: input.dispatchToGateway } : {}),
+            ...(input.nodeExecTimeoutMs ? { nodeExecTimeoutMs: input.nodeExecTimeoutMs } : {}),
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),
           createLegacyGithubIssueCreateExecutor({
@@ -34,18 +40,10 @@ export function getCommunityWorkflowNodeExecutors(input?: {
           }),
         ]
       : []),
-    {
-      nodeType: "agent.execute",
-      async execute(context) {
-        return {
-          status: "succeeded",
-          output: {
-            accepted: true,
-            taskId: `${context.nodeId}-task`,
-          },
-        };
-      },
-    },
+    createAgentExecuteExecutor({
+      ...(input?.dispatchToGateway ? { dispatchToGateway: input.dispatchToGateway } : {}),
+      ...(input?.nodeExecTimeoutMs ? { nodeExecTimeoutMs: input.nodeExecTimeoutMs } : {}),
+    }),
     {
       nodeType: "condition",
       async execute() {

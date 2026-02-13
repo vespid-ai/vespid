@@ -289,6 +289,97 @@ describe("api hardening foundation", () => {
     expect(denied.statusCode).toBe(401);
   });
 
+  it("supports agent pairing tokens and agent lifecycle APIs", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `agent-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = bearerToken(signup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+      payload: {
+        name: "Agent Org",
+        slug: `agent-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const pairing = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(pairing.statusCode).toBe(201);
+    const pairingBody = pairing.json() as { token: string; expiresAt: string };
+    expect(pairingBody.token).toContain(`${orgId}.`);
+
+    const pairAgent = await server.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken: pairingBody.token,
+        name: "test-agent",
+        agentVersion: "0.0.0-test",
+        capabilities: { kinds: ["connector.action", "agent.execute"] },
+      },
+    });
+    expect(pairAgent.statusCode).toBe(201);
+    const pairAgentBody = pairAgent.json() as { agentId: string; agentToken: string; organizationId: string; gatewayWsUrl: string };
+    expect(pairAgentBody.organizationId).toBe(orgId);
+    expect(pairAgentBody.agentToken).toContain(`${orgId}.`);
+    expect(pairAgentBody.gatewayWsUrl.length).toBeGreaterThan(5);
+
+    const listAgents = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/agents`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listAgents.statusCode).toBe(200);
+    const listBody = listAgents.json() as { agents: Array<{ id: string; status: string }> };
+    expect(listBody.agents.some((agent) => agent.id === pairAgentBody.agentId)).toBe(true);
+
+    const revoke = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/${pairAgentBody.agentId}/revoke`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(revoke.statusCode).toBe(200);
+    expect(revoke.json()).toEqual({ ok: true });
+
+    const pairingReuse = await server.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken: pairingBody.token,
+        name: "reuse-agent",
+        agentVersion: "0.0.0-test",
+        capabilities: { kinds: ["connector.action", "agent.execute"] },
+      },
+    });
+    expect(pairingReuse.statusCode).toBe(401);
+    expect((pairingReuse.json() as { code?: string }).code).toBe("PAIRING_TOKEN_INVALID");
+  });
+
   it("requires X-Org-Id and blocks cross-org access", async () => {
     const owner = await server.inject({
       method: "POST",

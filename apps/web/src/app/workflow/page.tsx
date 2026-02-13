@@ -17,6 +17,7 @@ export default function WorkflowPage() {
   const [result, setResult] = useState<unknown>(null);
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
   const [includeGithub, setIncludeGithub] = useState(false);
+  const [runOnNodeAgent, setRunOnNodeAgent] = useState(false);
   const [githubSecretId, setGithubSecretId] = useState("");
   const [githubRepo, setGithubRepo] = useState("octo/test");
   const [githubTitle, setGithubTitle] = useState("Vespid Issue");
@@ -56,12 +57,17 @@ export default function WorkflowPage() {
             body: githubBody,
           },
           auth: { secretId: githubSecretId },
+          execution: { mode: runOnNodeAgent ? "node" : "cloud" },
         },
       });
     } else {
       nodes.push({ id: "node-http", type: "http.request" });
     }
-    nodes.push({ id: "node-agent", type: "agent.execute" });
+    nodes.push({
+      id: "node-agent",
+      type: "agent.execute",
+      config: { execution: { mode: runOnNodeAgent ? "node" : "cloud" } },
+    });
 
     const response = await apiFetch(
       `/v1/orgs/${orgId}/workflows`,
@@ -207,6 +213,15 @@ export default function WorkflowPage() {
             onChange={(event) => setIncludeGithub(event.target.checked)}
           />
           Include GitHub create-issue node
+        </label>
+
+        <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={runOnNodeAgent}
+            onChange={(event) => setRunOnNodeAgent(event.target.checked)}
+          />
+          Run nodes on node-agent (remote)
         </label>
 
         {includeGithub ? (

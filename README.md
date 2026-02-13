@@ -13,6 +13,8 @@ Vespid is a greenfield, international, multi-tenant SaaS automation platform.
 - Redis/BullMQ queue baseline (producer in API, consumer in worker, retry/backoff)
 - Worker async execution baseline (`queued -> running -> succeeded|failed`)
 - Workflow run/node execution events persisted in Postgres (`workflow_run_events`)
+- Encrypted connector secrets (org-scoped) for connector actions
+- Node-agent remote execution MVP (gateway + agent pairing + remote `agent.execute` and `connector.action`)
 
 ## Quick Start
 1. Install dependencies:
@@ -33,7 +35,7 @@ pnpm lint
 pnpm test
 pnpm build
 ```
-4. Run full local stack (api + web + worker):
+4. Run full local stack (api + web + worker + gateway):
 ```bash
 pnpm dev
 ```
@@ -46,6 +48,7 @@ redis-server --port 6379
 - Org context rollout and rollback guide: `/docs/runbooks/org-context-rollout.md`
 - Workflow queue cutover and rollback guide: `/docs/runbooks/workflow-queue-cutover.md`
 - Secrets KEK configuration and secret rotation guide: `/docs/runbooks/secrets-key-rotation.md`
+- Node-agent + gateway remote execution guide: `/docs/runbooks/node-agent-gateway-mvp.md`
 - Enterprise provider integration guide: `/docs/runbooks/enterprise-provider-integration.md`
 
 ## Open Core Licensing
@@ -53,7 +56,7 @@ Vespid uses an Open Core model.
 
 | Area | License | Distribution |
 |---|---|---|
-| Community Core (`apps/api`, `apps/web`, `apps/worker`, `apps/node-agent`, `packages/db`, `packages/workflow`, `packages/shared`, `packages/connectors`) | AGPL-3.0-only | Public |
+| Community Core (`apps/api`, `apps/web`, `apps/worker`, `apps/gateway`, `apps/node-agent`, `packages/db`, `packages/workflow`, `packages/shared`, `packages/connectors`) | AGPL-3.0-only | Public |
 | SDK/Client (`packages/sdk-*`) | Apache-2.0 | Public |
 | Enterprise modules (`packages/enterprise-*`, `apps/api-enterprise`, private enterprise repos) | Commercial Proprietary | Private |
 
@@ -128,6 +131,20 @@ pnpm sbom:generate
 - `GET /v1/orgs/:orgId/workflows/:workflowId/runs`
 - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId`
 - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events`
+
+## Node-Agent Remote Execution (MVP)
+Remote execution is optional per node via `execution.mode="node"` for:
+- `connector.action`
+- `agent.execute`
+
+Pairing flow:
+1. Create a pairing token (owner/admin):
+   - Web: `/agents`
+   - API: `POST /v1/orgs/:orgId/agents/pairing-tokens` (with `X-Org-Id`)
+2. Pair and start a local agent:
+```bash
+pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001
+```
 
 ## Summary (English Only)
 - Open Core licensing: community core is AGPL, SDK is Apache-2.0, enterprise modules are under a commercial license.

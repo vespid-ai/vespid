@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "build": "pnpm -r --if-present build",
-    "dev": "pnpm exec dotenv -e .env -- pnpm --parallel --filter @vespid/api --filter @vespid/web --filter @vespid/worker dev",
+    "dev": "pnpm exec dotenv -e .env -- pnpm --parallel --filter @vespid/api --filter @vespid/web --filter @vespid/worker --filter @vespid/gateway dev",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",

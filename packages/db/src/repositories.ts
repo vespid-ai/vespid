@@ -3,7 +3,9 @@ import { and, asc, desc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
   authSessions,
+  agentPairingTokens,
   connectorSecrets,
+  organizationAgents,
   memberships,
   organizationInvitations,
   organizations,
@@ -768,6 +770,128 @@ export async function deleteConnectorSecret(
   const [row] = await db
     .delete(connectorSecrets)
     .where(and(eq(connectorSecrets.organizationId, input.organizationId), eq(connectorSecrets.id, input.secretId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function createAgentPairingToken(
+  db: Db,
+  input: { organizationId: string; tokenHash: string; expiresAt: Date; createdByUserId: string }
+) {
+  const [row] = await db
+    .insert(agentPairingTokens)
+    .values({
+      organizationId: input.organizationId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt,
+      createdByUserId: input.createdByUserId,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create agent pairing token");
+  }
+  return row;
+}
+
+export async function getAgentPairingTokenByHash(db: Db, input: { organizationId: string; tokenHash: string }) {
+  const [row] = await db
+    .select()
+    .from(agentPairingTokens)
+    .where(and(eq(agentPairingTokens.organizationId, input.organizationId), eq(agentPairingTokens.tokenHash, input.tokenHash)));
+  return row ?? null;
+}
+
+export async function consumeAgentPairingToken(
+  db: Db,
+  input: { organizationId: string; tokenHash: string }
+) {
+  const [row] = await db
+    .update(agentPairingTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(agentPairingTokens.organizationId, input.organizationId),
+        eq(agentPairingTokens.tokenHash, input.tokenHash),
+        isNull(agentPairingTokens.usedAt),
+        gt(agentPairingTokens.expiresAt, sql`now()`)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function createOrganizationAgent(
+  db: Db,
+  input: {
+    id?: string;
+    organizationId: string;
+    name: string;
+    tokenHash: string;
+    createdByUserId: string;
+    capabilities?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(organizationAgents)
+    .values({
+      id: input.id,
+      organizationId: input.organizationId,
+      name: input.name,
+      tokenHash: input.tokenHash,
+      revokedAt: null,
+      lastSeenAt: new Date(),
+      capabilities: (input.capabilities ?? null) as any,
+      createdByUserId: input.createdByUserId,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create organization agent");
+  }
+  return row;
+}
+
+export async function getOrganizationAgentByTokenHash(
+  db: Db,
+  input: { organizationId: string; tokenHash: string }
+) {
+  const [row] = await db
+    .select()
+    .from(organizationAgents)
+    .where(
+      and(eq(organizationAgents.organizationId, input.organizationId), eq(organizationAgents.tokenHash, input.tokenHash))
+    );
+  return row ?? null;
+}
+
+export async function listOrganizationAgents(db: Db, input: { organizationId: string }) {
+  const rows = await db
+    .select()
+    .from(organizationAgents)
+    .where(eq(organizationAgents.organizationId, input.organizationId))
+    .orderBy(desc(organizationAgents.createdAt));
+  return rows;
+}
+
+export async function touchOrganizationAgentLastSeen(
+  db: Db,
+  input: { organizationId: string; agentId: string }
+) {
+  const [row] = await db
+    .update(organizationAgents)
+    .set({ lastSeenAt: new Date() })
+    .where(and(eq(organizationAgents.organizationId, input.organizationId), eq(organizationAgents.id, input.agentId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function revokeOrganizationAgent(
+  db: Db,
+  input: { organizationId: string; agentId: string }
+) {
+  const [row] = await db
+    .update(organizationAgents)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(organizationAgents.organizationId, input.organizationId), eq(organizationAgents.id, input.agentId)))
     .returning();
   return row ?? null;
 }

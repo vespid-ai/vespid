@@ -8,7 +8,19 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1), type: z.literal("http.request") }),
-  z.object({ id: z.string().min(1), type: z.literal("agent.execute") }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("agent.execute"),
+    config: z
+      .object({
+        execution: z
+          .object({
+            mode: z.enum(["cloud", "node"]).default("cloud"),
+          })
+          .optional(),
+      })
+      .optional(),
+  }),
   z.object({
     id: z.string().min(1),
     type: z.literal("connector.action"),
@@ -19,6 +31,11 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
       auth: z.object({
         secretId: z.string().uuid(),
       }),
+      execution: z
+        .object({
+          mode: z.enum(["cloud", "node"]).default("cloud"),
+        })
+        .optional(),
     }),
   }),
   // Backward-compatible node type. Prefer `connector.action`.

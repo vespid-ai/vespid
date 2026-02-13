@@ -26,6 +26,7 @@ tsconfig.base.json
 apps/api/
 apps/web/
 apps/worker/
+apps/gateway/
 apps/node-agent/
 
 packages/db/
