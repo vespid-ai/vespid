@@ -86,3 +86,9 @@ jobs:
 
       - name: Verify enterprise module wiring
         run: pnpm --filter @vespid/api test --run src/server.test.ts
+
+      - name: Apply migrations
+        run: pnpm --filter @vespid/db migrate
+
+      - name: Verify worker uses enterprise executor overrides (async integration)
+        run: pnpm --filter @vespid/tests test -- workflow-async.integration.test.ts

@@ -176,11 +176,30 @@ describe("workflow async integration", () => {
       },
     });
     expect(eventsRes.statusCode).toBe(200);
-    const eventsBody = eventsRes.json() as { events: Array<{ eventType: string; nodeId?: string | null }> };
+    const eventsBody = eventsRes.json() as {
+      events: Array<{ eventType: string; nodeType?: string | null; payload?: unknown }>;
+    };
     const eventTypes = eventsBody.events.map((event) => event.eventType);
     expect(eventTypes).toContain("run_started");
     expect(eventTypes).toContain("run_succeeded");
     expect(eventTypes).toContain("node_started");
     expect(eventTypes).toContain("node_succeeded");
+
+    const agentSuccess = eventsBody.events.find(
+      (event) => event.eventType === "node_succeeded" && event.nodeType === "agent.execute"
+    );
+    expect(agentSuccess).toBeTruthy();
+
+    const payload = agentSuccess?.payload as { taskId?: unknown } | undefined;
+    const taskId = typeof payload?.taskId === "string" ? payload.taskId : null;
+    expect(taskId).not.toBeNull();
+
+    const expectsEnterprise = Boolean(process.env.VESPID_ENTERPRISE_PROVIDER_MODULE);
+    if (expectsEnterprise) {
+      expect(taskId).toContain("enterprise-task");
+    } else {
+      expect(taskId).toContain("-task");
+      expect(taskId).not.toContain("enterprise-task");
+    }
   });
 });
