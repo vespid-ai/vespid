@@ -88,16 +88,16 @@ To load private enterprise features in API runtime:
 
 1. Install private package access in `.npmrc`:
 ```ini
-@vespid-enterprise:registry=https://npm.pkg.github.com
+@vespid-ai:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
 ```
 2. Install provider package:
 ```bash
-pnpm add -Dw @vespid-enterprise/provider@latest
+pnpm add -Dw @vespid-ai/enterprise-provider@latest
 ```
 3. Configure runtime:
 ```bash
-export VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-enterprise/provider
+export VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-ai/enterprise-provider
 ```
 
 Validation endpoints:

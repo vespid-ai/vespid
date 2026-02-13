@@ -19,7 +19,7 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/vespid
       REDIS_URL: redis://localhost:6379
       AUTH_TOKEN_SECRET: ci-token-secret
-      VESPID_ENTERPRISE_PROVIDER_MODULE: "@vespid-enterprise/provider"
+      VESPID_ENTERPRISE_PROVIDER_MODULE: "@vespid-ai/enterprise-provider"
 
     services:
       postgres:
@@ -70,7 +70,7 @@ jobs:
             exit 1
           fi
           cat > .npmrc <<'NPMRC'
-          @vespid-enterprise:registry=https://npm.pkg.github.com
+          @vespid-ai:registry=https://npm.pkg.github.com
           //npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
           NPMRC
 
@@ -78,7 +78,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install enterprise provider package
-        run: pnpm add -Dw "@vespid-enterprise/provider@${{ github.event.inputs.provider_version || 'latest' }}"
+        run: pnpm add -Dw "@vespid-ai/enterprise-provider@${{ github.event.inputs.provider_version || 'latest' }}"
 
       - name: Verify enterprise module wiring
         run: pnpm --filter @vespid/api test --run src/server.test.ts

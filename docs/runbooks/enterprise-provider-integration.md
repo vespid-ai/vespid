@@ -5,22 +5,22 @@ Wire a private enterprise provider package into community API runtime without ch
 
 ## Prerequisites
 - Access token with `read:packages` for `npm.pkg.github.com`.
-- Private package published: `@vespid-enterprise/provider`.
+- Private package published: `@vespid-ai/enterprise-provider`.
 - Community repo already installed with workspace dependencies.
 
 ## Setup
 1. Create project `.npmrc`:
    ```ini
-   @vespid-enterprise:registry=https://npm.pkg.github.com
+   @vespid-ai:registry=https://npm.pkg.github.com
    //npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
    ```
 2. Install provider package:
    ```bash
-   pnpm add -Dw @vespid-enterprise/provider@latest
+   pnpm add -Dw @vespid-ai/enterprise-provider@latest
    ```
 3. Set runtime module path:
    ```bash
-   export VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-enterprise/provider
+   export VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-ai/enterprise-provider
    ```
 4. Start API and verify:
    - `GET /v1/meta/capabilities` returns `edition: "enterprise"`
