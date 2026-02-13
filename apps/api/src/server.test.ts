@@ -846,6 +846,121 @@ describe("api hardening foundation", () => {
     expect(mismatch.statusCode).toBe(403);
   });
 
+  it("manages connector secrets (metadata only) and enforces admin-only access", async () => {
+    const priorKek = process.env.SECRETS_KEK_BASE64;
+    const priorKekId = process.env.SECRETS_KEK_ID;
+    process.env.SECRETS_KEK_ID = "test-kek-v1";
+    process.env.SECRETS_KEK_BASE64 = Buffer.alloc(32, 7).toString("base64");
+
+    try {
+      const ownerSignup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: { email: `secrets-owner-${Date.now()}@example.com`, password: "Password123" },
+      });
+      const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+      const orgRes = await server.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { name: "Secrets Org", slug: `secrets-org-${Date.now()}` },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+      const created = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { connectorId: "github", name: "token", value: "ghp_test_token" },
+      });
+      expect(created.statusCode).toBe(201);
+      const createdBody = created.json() as { secret: { id: string; connectorId: string; name: string; value?: unknown } };
+      expect(createdBody.secret.connectorId).toBe("github");
+      expect(createdBody.secret.name).toBe("token");
+      expect("value" in createdBody.secret).toBe(false);
+
+      const list = await server.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(list.statusCode).toBe(200);
+      const listBody = list.json() as { secrets: Array<{ id: string; connectorId: string; name: string; value?: unknown }> };
+      expect(listBody.secrets.length).toBe(1);
+      expect(listBody.secrets[0]?.id).toBe(createdBody.secret.id);
+      expect("value" in (listBody.secrets[0] ?? {})).toBe(false);
+
+      const duplicate = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { connectorId: "github", name: "token", value: "ghp_other" },
+      });
+      expect(duplicate.statusCode).toBe(409);
+      expect((duplicate.json() as { code: string }).code).toBe("SECRET_ALREADY_EXISTS");
+
+      const memberEmail = `secrets-member-${Date.now()}@example.com`;
+      const invite = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/invitations`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { email: memberEmail, roleKey: "member" },
+      });
+      expect(invite.statusCode).toBe(201);
+      const inviteToken = (invite.json() as { invitation: { token: string } }).invitation.token;
+
+      const memberSignup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: { email: memberEmail, password: "Password123" },
+      });
+      const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+      const accept = await server.inject({
+        method: "POST",
+        url: `/v1/invitations/${inviteToken}/accept`,
+        headers: { authorization: `Bearer ${memberToken}` },
+      });
+      expect(accept.statusCode).toBe(200);
+
+      const memberDenied = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+        payload: { connectorId: "github", name: "member-token", value: "should-fail" },
+      });
+      expect(memberDenied.statusCode).toBe(403);
+
+      const rotated = await server.inject({
+        method: "PUT",
+        url: `/v1/orgs/${orgId}/secrets/${createdBody.secret.id}`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { value: "ghp_rotated" },
+      });
+      expect(rotated.statusCode).toBe(200);
+
+      const deleted = await server.inject({
+        method: "DELETE",
+        url: `/v1/orgs/${orgId}/secrets/${createdBody.secret.id}`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect((deleted.json() as { ok: boolean }).ok).toBe(true);
+    } finally {
+      if (priorKek === undefined) {
+        delete process.env.SECRETS_KEK_BASE64;
+      } else {
+        process.env.SECRETS_KEK_BASE64 = priorKek;
+      }
+      if (priorKekId === undefined) {
+        delete process.env.SECRETS_KEK_ID;
+      } else {
+        process.env.SECRETS_KEK_ID = priorKekId;
+      }
+    }
+  });
+
 });
 
 describe("api rbac promotion flow", () => {

@@ -9,6 +9,18 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
 export const workflowNodeSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1), type: z.literal("http.request") }),
   z.object({ id: z.string().min(1), type: z.literal("agent.execute") }),
+  z.object({
+      id: z.string().min(1),
+      type: z.literal("connector.github.issue.create"),
+      config: z.object({
+      repo: z.string().regex(/^[^/]+\/[^/]+$/),
+      title: z.string().min(1).max(256),
+      body: z.string().max(200_000).optional(),
+      auth: z.object({
+        secretId: z.string().uuid(),
+      }),
+    }),
+  }),
   z.object({ id: z.string().min(1), type: z.literal("condition") }),
   z.object({ id: z.string().min(1), type: z.literal("parallel.join") }),
 ]);
@@ -57,6 +69,13 @@ export function executeWorkflow(input: { dsl: WorkflowDsl; runInput?: unknown })
           output = {
             accepted: true,
             taskId: `${node.id}-task`,
+          };
+          break;
+        case "connector.github.issue.create":
+          output = {
+            accepted: true,
+            issueNumber: 1,
+            url: `https://github.example/${node.config.repo}/issues/1`,
           };
           break;
         case "condition":

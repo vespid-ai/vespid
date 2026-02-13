@@ -1,11 +1,84 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import net from "node:net";
+import http from "node:http";
+import crypto from "node:crypto";
 import { buildServer } from "../apps/api/src/server.js";
 import { migrateUp } from "../packages/db/src/migrate.js";
 import { startWorkflowWorker } from "../apps/worker/src/main.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
+
+async function startGithubStub() {
+  let lastAuth: string | null = null;
+  let lastBody: unknown = null;
+  const expectedToken = `ghp_${crypto.randomBytes(12).toString("hex")}`;
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (req.method !== "POST" || !url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/issues$/)) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+
+    lastAuth = req.headers.authorization ?? null;
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const raw = Buffer.concat(chunks).toString("utf8");
+    lastBody = raw.length > 0 ? JSON.parse(raw) : null;
+
+    if (req.headers.authorization !== `Bearer ${expectedToken}`) {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "bad token" }));
+      return;
+    }
+
+    res.statusCode = 201;
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        number: 42,
+        html_url: "https://github.local/issues/42",
+      })
+    );
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to start github stub server");
+  }
+
+  return {
+    expectedToken,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    getLastAuth() {
+      return lastAuth;
+    },
+    getLastBody() {
+      return lastBody;
+    },
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
 
 function randomSlug(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -38,6 +111,7 @@ describe("workflow async integration", () => {
   let available = false;
   let server: Awaited<ReturnType<typeof buildServer>> | null = null;
   let workerRuntime: Awaited<ReturnType<typeof startWorkflowWorker>> | null = null;
+  let githubStub: Awaited<ReturnType<typeof startGithubStub>> | null = null;
 
   beforeAll(async () => {
     if (!databaseUrl || !redisUrl) {
@@ -49,6 +123,13 @@ describe("workflow async integration", () => {
     }
 
     await migrateUp(databaseUrl);
+
+    process.env.SECRETS_KEK_ID = "ci-kek-v1";
+    process.env.SECRETS_KEK_BASE64 = Buffer.alloc(32, 9).toString("base64");
+
+    githubStub = await startGithubStub();
+    process.env.GITHUB_API_BASE_URL = githubStub.baseUrl;
+
     server = await buildServer();
     workerRuntime = await startWorkflowWorker();
     available = true;
@@ -60,6 +141,9 @@ describe("workflow async integration", () => {
     }
     if (server) {
       await server.close();
+    }
+    if (githubStub) {
+      await githubStub.close();
     }
   });
 
@@ -93,6 +177,26 @@ describe("workflow async integration", () => {
     expect(orgRes.statusCode).toBe(201);
     const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
 
+    if (!githubStub) {
+      throw new Error("GitHub stub server is not available");
+    }
+
+    const secretCreate = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/secrets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        connectorId: "github",
+        name: "token",
+        value: githubStub.expectedToken,
+      },
+    });
+    expect(secretCreate.statusCode).toBe(201);
+    const secretId = (secretCreate.json() as { secret: { id: string } }).secret.id;
+
     const createWorkflow = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/workflows`,
@@ -106,7 +210,18 @@ describe("workflow async integration", () => {
           version: "v2",
           trigger: { type: "trigger.manual" },
           nodes: [
-            { id: "node-http", type: "http.request" },
+            {
+              id: "node-github",
+              type: "connector.github.issue.create",
+              config: {
+                repo: "octo/test",
+                title: "Vespid CI Issue",
+                body: "Created by vespid workflow runtime test",
+                auth: {
+                  secretId,
+                },
+              },
+            },
             { id: "node-agent", type: "agent.execute" },
           ],
         },
@@ -185,6 +300,14 @@ describe("workflow async integration", () => {
     expect(eventTypes).toContain("node_started");
     expect(eventTypes).toContain("node_succeeded");
 
+    const githubSuccess = eventsBody.events.find(
+      (event) => event.eventType === "node_succeeded" && event.nodeType === "connector.github.issue.create"
+    );
+    expect(githubSuccess).toBeTruthy();
+    const githubPayload = githubSuccess?.payload as { issueNumber?: unknown; url?: unknown } | undefined;
+    expect(typeof githubPayload?.issueNumber).toBe("number");
+    expect(typeof githubPayload?.url).toBe("string");
+
     const agentSuccess = eventsBody.events.find(
       (event) => event.eventType === "node_succeeded" && event.nodeType === "agent.execute"
     );
@@ -193,6 +316,15 @@ describe("workflow async integration", () => {
     const payload = agentSuccess?.payload as { taskId?: unknown } | undefined;
     const taskId = typeof payload?.taskId === "string" ? payload.taskId : null;
     expect(taskId).not.toBeNull();
+
+    const serializedEvents = JSON.stringify(eventsBody.events);
+    expect(serializedEvents).not.toContain(githubStub.expectedToken);
+    expect(githubStub.getLastAuth()).toBe(`Bearer ${githubStub.expectedToken}`);
+    expect(githubStub.getLastBody()).toEqual(
+      expect.objectContaining({
+        title: "Vespid CI Issue",
+      })
+    );
 
     const expectsEnterprise = Boolean(process.env.VESPID_ENTERPRISE_PROVIDER_MODULE);
     if (expectsEnterprise) {

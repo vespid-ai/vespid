@@ -113,6 +113,20 @@ const createWorkflowRunSchema = z.object({
   input: z.unknown().optional(),
 });
 
+const listSecretsQuerySchema = z.object({
+  connectorId: z.string().min(1).optional(),
+});
+
+const createSecretSchema = z.object({
+  connectorId: z.enum(["github"]),
+  name: z.string().min(1).max(80),
+  value: z.string().min(1),
+});
+
+const rotateSecretSchema = z.object({
+  value: z.string().min(1),
+});
+
 const listWorkflowRunsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().min(1).optional(),
@@ -163,6 +177,22 @@ function orgAccessDenied(message = "You are not a member of this organization"):
 
 function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
   return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
+}
+
+function secretsNotConfigured(): AppError {
+  return new AppError(503, { code: "SECRETS_NOT_CONFIGURED", message: "Secrets KEK is not configured" });
+}
+
+function secretNotFound(): AppError {
+  return new AppError(404, { code: "SECRET_NOT_FOUND", message: "Secret not found" });
+}
+
+function secretAlreadyExists(): AppError {
+  return new AppError(409, { code: "SECRET_ALREADY_EXISTS", message: "Secret already exists" });
+}
+
+function secretValueRequired(): AppError {
+  return new AppError(400, { code: "SECRET_VALUE_REQUIRED", message: "Secret value is required" });
 }
 
 function base64UrlEncode(input: string): string {
@@ -1029,6 +1059,140 @@ export async function buildServer(input?: {
     }
 
     return { membership: updated };
+  });
+
+  server.get("/v1/orgs/:orgId/secrets", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const parsed = listSecretsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid list secrets query", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    const secrets = await store.listConnectorSecrets({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      connectorId: parsed.data.connectorId ?? null,
+    });
+
+    return { secrets };
+  });
+
+  server.post("/v1/orgs/:orgId/secrets", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    const parsed = createSecretSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid secret payload", parsed.error.flatten());
+    }
+    if (parsed.data.value.trim().length === 0) {
+      throw secretValueRequired();
+    }
+
+    try {
+      const secret = await store.createConnectorSecret({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        connectorId: parsed.data.connectorId,
+        name: parsed.data.name,
+        value: parsed.data.value,
+      });
+      return reply.status(201).send({ secret });
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === "SECRET_ALREADY_EXISTS") {
+          throw secretAlreadyExists();
+        }
+        if (error.message === "SECRETS_KEK_BASE64_REQUIRED" || error.message === "SECRETS_KEK_BASE64_INVALID") {
+          throw secretsNotConfigured();
+        }
+      }
+      throw error;
+    }
+  });
+
+  server.put("/v1/orgs/:orgId/secrets/:secretId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; secretId?: string };
+    if (!params.orgId || !params.secretId) {
+      throw badRequest("Missing orgId or secretId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    const parsed = rotateSecretSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid secret payload", parsed.error.flatten());
+    }
+    if (parsed.data.value.trim().length === 0) {
+      throw secretValueRequired();
+    }
+
+    try {
+      const secret = await store.rotateConnectorSecret({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        secretId: params.secretId,
+        value: parsed.data.value,
+      });
+      if (!secret) {
+        throw secretNotFound();
+      }
+      return { secret };
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === "SECRETS_KEK_BASE64_REQUIRED" || error.message === "SECRETS_KEK_BASE64_INVALID") {
+          throw secretsNotConfigured();
+        }
+      }
+      throw error;
+    }
+  });
+
+  server.delete("/v1/orgs/:orgId/secrets/:secretId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; secretId?: string };
+    if (!params.orgId || !params.secretId) {
+      throw badRequest("Missing orgId or secretId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    const ok = await store.deleteConnectorSecret({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      secretId: params.secretId,
+    });
+
+    if (!ok) {
+      throw secretNotFound();
+    }
+
+    return { ok: true };
   });
 
   server.post("/v1/orgs/:orgId/workflows", async (request, reply) => {

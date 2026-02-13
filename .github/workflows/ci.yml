@@ -35,6 +35,7 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/vespid
       REDIS_URL: redis://localhost:6379
       AUTH_TOKEN_SECRET: ci-token-secret
+      SECRETS_KEK_ID: ci-kek-v1
 
     steps:
       - name: Checkout
@@ -53,6 +54,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+
+      - name: Generate secrets KEK
+        run: echo "SECRETS_KEK_BASE64=$(node -e \"process.stdout.write(require('crypto').randomBytes(32).toString('base64'))\")" >> $GITHUB_ENV
 
       - name: Open core boundary gate
         run: pnpm check:boundary

@@ -17,6 +17,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <nav style={{ display: "flex", gap: "1rem", padding: "0.75rem 1rem", borderBottom: "1px solid #ddd" }}>
           <Link href="/auth">Auth</Link>
           <Link href="/org">Org</Link>
+          <Link href="/secrets">Secrets</Link>
           <Link href="/workflow">Workflow</Link>
         </nav>
         {children}

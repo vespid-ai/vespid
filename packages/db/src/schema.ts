@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import {
+  customType,
   index,
   integer,
   jsonb,
@@ -9,6 +10,19 @@ import {
   uuid,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+
+// Drizzle pg-core doesn't expose a bytea helper in all versions; define a small custom type.
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+  toDriver(value) {
+    return value;
+  },
+  fromDriver(value) {
+    return Buffer.isBuffer(value) ? value : Buffer.from(value as Uint8Array);
+  },
+});
 
 export const roles = pgTable("roles", {
   key: text("key").primaryKey(),
@@ -135,12 +149,38 @@ export const workflowRunEvents = pgTable("workflow_run_events", {
   ),
 }));
 
+export const connectorSecrets = pgTable("connector_secrets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  connectorId: text("connector_id").notNull(),
+  name: text("name").notNull(),
+  kekId: text("kek_id").notNull(),
+  dekCiphertext: bytea("dek_ciphertext").notNull(),
+  dekIv: bytea("dek_iv").notNull(),
+  dekTag: bytea("dek_tag").notNull(),
+  secretCiphertext: bytea("secret_ciphertext").notNull(),
+  secretIv: bytea("secret_iv").notNull(),
+  secretTag: bytea("secret_tag").notNull(),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  updatedByUserId: uuid("updated_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  connectorSecretsOrgConnectorNameUnique: uniqueIndex("connector_secrets_org_connector_name_unique").on(
+    table.organizationId,
+    table.connectorId,
+    table.name
+  ),
+  connectorSecretsOrgConnectorIdx: index("connector_secrets_org_connector_idx").on(table.organizationId, table.connectorId),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
   workflowRunEvents: many(workflowRunEvents),
+  connectorSecrets: many(connectorSecrets),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -240,3 +280,4 @@ export type DbAuthSession = typeof authSessions.$inferSelect;
 export type DbWorkflow = typeof workflows.$inferSelect;
 export type DbWorkflowRun = typeof workflowRuns.$inferSelect;
 export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;
+export type DbConnectorSecret = typeof connectorSecrets.$inferSelect;

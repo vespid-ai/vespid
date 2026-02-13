@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type {
   AppStore,
+  ConnectorSecretRecord,
   InvitationAcceptResultRecord,
   InvitationRecord,
   MembershipRecord,
@@ -26,6 +28,15 @@ export class MemoryAppStore implements AppStore {
   private workflows = new Map<string, WorkflowRecord>();
   private workflowRuns = new Map<string, WorkflowRunRecord>();
   private workflowRunEvents = new Map<string, WorkflowRunEventRecord>();
+  private connectorSecrets = new Map<string, (ConnectorSecretRecord & {
+    kekId: string;
+    dekCiphertext: Buffer;
+    dekIv: Buffer;
+    dekTag: Buffer;
+    secretCiphertext: Buffer;
+    secretIv: Buffer;
+    secretTag: Buffer;
+  })>();
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -589,6 +600,141 @@ export class MemoryAppStore implements AppStore {
     };
     this.workflowRuns.set(updated.id, updated);
     return updated;
+  }
+
+  async listConnectorSecrets(input: {
+    organizationId: string;
+    actorUserId: string;
+    connectorId?: string | null;
+  }): Promise<ConnectorSecretRecord[]> {
+    const rows: ConnectorSecretRecord[] = [];
+    for (const secret of this.connectorSecrets.values()) {
+      if (secret.organizationId !== input.organizationId) {
+        continue;
+      }
+      if (input.connectorId && secret.connectorId !== input.connectorId) {
+        continue;
+      }
+      rows.push({
+        id: secret.id,
+        organizationId: secret.organizationId,
+        connectorId: secret.connectorId,
+        name: secret.name,
+        createdByUserId: secret.createdByUserId,
+        updatedByUserId: secret.updatedByUserId,
+        createdAt: secret.createdAt,
+        updatedAt: secret.updatedAt,
+      });
+    }
+    rows.sort((a, b) => `${a.connectorId}:${a.name}`.localeCompare(`${b.connectorId}:${b.name}`));
+    return rows;
+  }
+
+  async createConnectorSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    connectorId: string;
+    name: string;
+    value: string;
+  }): Promise<ConnectorSecretRecord> {
+    for (const secret of this.connectorSecrets.values()) {
+      if (
+        secret.organizationId === input.organizationId &&
+        secret.connectorId === input.connectorId &&
+        secret.name === input.name
+      ) {
+        throw new Error("SECRET_ALREADY_EXISTS");
+      }
+    }
+
+    const kek = parseKekFromEnv();
+    const encrypted = encryptSecret({ plaintext: input.value, kek });
+    const now = nowIso();
+
+    const record: ConnectorSecretRecord & {
+      kekId: string;
+      dekCiphertext: Buffer;
+      dekIv: Buffer;
+      dekTag: Buffer;
+      secretCiphertext: Buffer;
+      secretIv: Buffer;
+      secretTag: Buffer;
+    } = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      connectorId: input.connectorId,
+      name: input.name,
+      kekId: encrypted.kekId,
+      dekCiphertext: encrypted.dekCiphertext,
+      dekIv: encrypted.dekIv,
+      dekTag: encrypted.dekTag,
+      secretCiphertext: encrypted.secretCiphertext,
+      secretIv: encrypted.secretIv,
+      secretTag: encrypted.secretTag,
+      createdByUserId: input.actorUserId,
+      updatedByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.connectorSecrets.set(record.id, record);
+    return {
+      id: record.id,
+      organizationId: record.organizationId,
+      connectorId: record.connectorId,
+      name: record.name,
+      createdByUserId: record.createdByUserId,
+      updatedByUserId: record.updatedByUserId,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    };
+  }
+
+  async rotateConnectorSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    secretId: string;
+    value: string;
+  }): Promise<ConnectorSecretRecord | null> {
+    const existing = this.connectorSecrets.get(input.secretId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return null;
+    }
+
+    const kek = parseKekFromEnv();
+    const encrypted = encryptSecret({ plaintext: input.value, kek });
+    const updated = {
+      ...existing,
+      kekId: encrypted.kekId,
+      dekCiphertext: encrypted.dekCiphertext,
+      dekIv: encrypted.dekIv,
+      dekTag: encrypted.dekTag,
+      secretCiphertext: encrypted.secretCiphertext,
+      secretIv: encrypted.secretIv,
+      secretTag: encrypted.secretTag,
+      updatedByUserId: input.actorUserId,
+      updatedAt: nowIso(),
+    };
+    this.connectorSecrets.set(updated.id, updated);
+    return {
+      id: updated.id,
+      organizationId: updated.organizationId,
+      connectorId: updated.connectorId,
+      name: updated.name,
+      createdByUserId: updated.createdByUserId,
+      updatedByUserId: updated.updatedByUserId,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    };
+  }
+
+  async deleteConnectorSecret(input: { organizationId: string; actorUserId: string; secretId: string }): Promise<boolean> {
+    const existing = this.connectorSecrets.get(input.secretId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return false;
+    }
+    this.connectorSecrets.delete(input.secretId);
+    return true;
   }
 
   async attachMembership(input: {

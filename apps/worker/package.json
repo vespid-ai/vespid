@@ -18,6 +18,7 @@
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",
     "bullmq": "^5.69.1",
-    "ioredis": "^5.9.3"
+    "ioredis": "^5.9.3",
+    "zod": "^4.3.6"
   }
 }

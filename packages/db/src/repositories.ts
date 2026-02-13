@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
   authSessions,
+  connectorSecrets,
   memberships,
   organizationInvitations,
   organizations,
@@ -12,6 +13,15 @@ import {
   workflowRuns,
   workflows,
 } from "./schema.js";
+
+function isPgUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "23505"
+  );
+}
 
 export async function ensureDefaultRoles(db: Db): Promise<void> {
   const existing = await db.select().from(roles);
@@ -624,6 +634,140 @@ export async function markWorkflowRunFailed(
         eq(workflowRuns.id, input.runId)
       )
     )
+    .returning();
+  return row ?? null;
+}
+
+export async function createConnectorSecret(
+  db: Db,
+  input: {
+    id?: string;
+    organizationId: string;
+    connectorId: string;
+    name: string;
+    kekId: string;
+    dekCiphertext: Buffer;
+    dekIv: Buffer;
+    dekTag: Buffer;
+    secretCiphertext: Buffer;
+    secretIv: Buffer;
+    secretTag: Buffer;
+    createdByUserId: string;
+    updatedByUserId: string;
+  }
+) {
+  try {
+    const [row] = await db
+      .insert(connectorSecrets)
+      .values({
+        id: input.id,
+        organizationId: input.organizationId,
+        connectorId: input.connectorId,
+        name: input.name,
+        kekId: input.kekId,
+        dekCiphertext: input.dekCiphertext,
+        dekIv: input.dekIv,
+        dekTag: input.dekTag,
+        secretCiphertext: input.secretCiphertext,
+        secretIv: input.secretIv,
+        secretTag: input.secretTag,
+        createdByUserId: input.createdByUserId,
+        updatedByUserId: input.updatedByUserId,
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    if (!row) {
+      throw new Error("Failed to create connector secret");
+    }
+    return row;
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      throw new Error("SECRET_ALREADY_EXISTS");
+    }
+    throw error;
+  }
+}
+
+export async function listConnectorSecrets(
+  db: Db,
+  input: { organizationId: string; connectorId?: string | null }
+) {
+  const where = input.connectorId
+    ? and(eq(connectorSecrets.organizationId, input.organizationId), eq(connectorSecrets.connectorId, input.connectorId))
+    : eq(connectorSecrets.organizationId, input.organizationId);
+
+  const rows = await db
+    .select({
+      id: connectorSecrets.id,
+      organizationId: connectorSecrets.organizationId,
+      connectorId: connectorSecrets.connectorId,
+      name: connectorSecrets.name,
+      kekId: connectorSecrets.kekId,
+      createdByUserId: connectorSecrets.createdByUserId,
+      updatedByUserId: connectorSecrets.updatedByUserId,
+      createdAt: connectorSecrets.createdAt,
+      updatedAt: connectorSecrets.updatedAt,
+    })
+    .from(connectorSecrets)
+    .where(where)
+    .orderBy(asc(connectorSecrets.connectorId), asc(connectorSecrets.name));
+
+  return rows;
+}
+
+export async function getConnectorSecretById(
+  db: Db,
+  input: { organizationId: string; secretId: string }
+) {
+  const [row] = await db
+    .select()
+    .from(connectorSecrets)
+    .where(and(eq(connectorSecrets.organizationId, input.organizationId), eq(connectorSecrets.id, input.secretId)));
+  return row ?? null;
+}
+
+export async function updateConnectorSecretValue(
+  db: Db,
+  input: {
+    organizationId: string;
+    secretId: string;
+    kekId: string;
+    dekCiphertext: Buffer;
+    dekIv: Buffer;
+    dekTag: Buffer;
+    secretCiphertext: Buffer;
+    secretIv: Buffer;
+    secretTag: Buffer;
+    updatedByUserId: string;
+  }
+) {
+  const [row] = await db
+    .update(connectorSecrets)
+    .set({
+      kekId: input.kekId,
+      dekCiphertext: input.dekCiphertext,
+      dekIv: input.dekIv,
+      dekTag: input.dekTag,
+      secretCiphertext: input.secretCiphertext,
+      secretIv: input.secretIv,
+      secretTag: input.secretTag,
+      updatedByUserId: input.updatedByUserId,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(connectorSecrets.organizationId, input.organizationId), eq(connectorSecrets.id, input.secretId)))
+    .returning();
+
+  return row ?? null;
+}
+
+export async function deleteConnectorSecret(
+  db: Db,
+  input: { organizationId: string; secretId: string }
+) {
+  const [row] = await db
+    .delete(connectorSecrets)
+    .where(and(eq(connectorSecrets.organizationId, input.organizationId), eq(connectorSecrets.id, input.secretId)))
     .returning();
   return row ?? null;
 }

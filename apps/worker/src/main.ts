@@ -2,6 +2,7 @@ import { Worker, type Job } from "bullmq";
 import {
   createPool,
   appendWorkflowRunEvent,
+  getConnectorSecretById,
   getWorkflowById,
   getWorkflowRunById,
   markWorkflowRunFailed,
@@ -11,7 +12,9 @@ import {
   withTenantContext,
 } from "@vespid/db";
 import {
+  decryptSecret,
   loadEnterpriseProvider,
+  parseKekFromEnv,
   resolveWorkflowNodeExecutors,
   type EnterpriseProvider,
   type WorkflowNodeExecutor,
@@ -45,6 +48,9 @@ const WORKFLOW_EVENT_PAYLOAD_MAX_CHARS = Math.min(
   200_000,
   Math.max(256, envNumber("WORKFLOW_EVENT_PAYLOAD_MAX_CHARS", 4000))
 );
+function getGithubApiBaseUrl(): string {
+  return process.env.GITHUB_API_BASE_URL ?? "https://api.github.com";
+}
 
 function jsonLog(level: "info" | "warn" | "error", payload: Record<string, unknown>) {
   const line = JSON.stringify(payload);
@@ -92,12 +98,15 @@ function summarizeForEvent(value: unknown, maxChars = WORKFLOW_EVENT_PAYLOAD_MAX
   }
 }
 
-function buildExecutorRegistry(input?: { enterpriseExecutors?: WorkflowNodeExecutor[] }): ExecutorRegistry {
+function buildExecutorRegistry(input: {
+  communityExecutors: WorkflowNodeExecutor[];
+  enterpriseExecutors?: WorkflowNodeExecutor[] | null;
+}): ExecutorRegistry {
   const registry: ExecutorRegistry = new Map();
-  for (const executor of getCommunityWorkflowNodeExecutors()) {
+  for (const executor of input.communityExecutors) {
     registry.set(executor.nodeType, executor);
   }
-  for (const executor of input?.enterpriseExecutors ?? []) {
+  for (const executor of input.enterpriseExecutors ?? []) {
     registry.set(executor.nodeType, executor);
   }
   return registry;
@@ -126,7 +135,46 @@ export async function processWorkflowRunJob(
       const enterpriseExecutors = input?.enterpriseProvider
         ? resolveWorkflowNodeExecutors(input.enterpriseProvider)
         : null;
-      return buildExecutorRegistry(enterpriseExecutors ? { enterpriseExecutors } : undefined);
+
+      const loadConnectorSecretValue = async (secretInput: {
+        organizationId: string;
+        userId: string;
+        secretId: string;
+      }): Promise<string> => {
+        const secret = await withTenantContext(pool, { userId: secretInput.userId, organizationId: secretInput.organizationId }, async (tenantDb) =>
+          getConnectorSecretById(tenantDb, { organizationId: secretInput.organizationId, secretId: secretInput.secretId })
+        );
+
+        if (!secret) {
+          throw new Error("SECRET_NOT_FOUND");
+        }
+
+        const kek = parseKekFromEnv();
+        return decryptSecret({
+          encrypted: {
+            kekId: secret.kekId,
+            dekCiphertext: secret.dekCiphertext,
+            dekIv: secret.dekIv,
+            dekTag: secret.dekTag,
+            secretCiphertext: secret.secretCiphertext,
+            secretIv: secret.secretIv,
+            secretTag: secret.secretTag,
+          },
+          resolveKek(kekId) {
+            return kekId === kek.kekId ? kek.kekKeyBytes : null;
+          },
+        });
+      };
+
+      const communityExecutors = getCommunityWorkflowNodeExecutors({
+        githubApiBaseUrl: getGithubApiBaseUrl(),
+        loadConnectorSecretValue,
+      });
+
+      return buildExecutorRegistry({
+        communityExecutors,
+        enterpriseExecutors,
+      });
     })();
 
   async function appendEvent(event: {
@@ -460,7 +508,49 @@ export async function startWorkflowWorker(input?: {
     },
   });
   const enterpriseExecutors = resolveWorkflowNodeExecutors(enterpriseProvider);
-  const executorRegistry = buildExecutorRegistry({ enterpriseExecutors });
+
+  const loadConnectorSecretValue = async (secretInput: {
+    organizationId: string;
+    userId: string;
+    secretId: string;
+  }): Promise<string> => {
+    const secret = await withTenantContext(
+      pool,
+      { userId: secretInput.userId, organizationId: secretInput.organizationId },
+      async (tenantDb) =>
+        getConnectorSecretById(tenantDb, {
+          organizationId: secretInput.organizationId,
+          secretId: secretInput.secretId,
+        })
+    );
+
+    if (!secret) {
+      throw new Error("SECRET_NOT_FOUND");
+    }
+
+    const kek = parseKekFromEnv();
+    return decryptSecret({
+      encrypted: {
+        kekId: secret.kekId,
+        dekCiphertext: secret.dekCiphertext,
+        dekIv: secret.dekIv,
+        dekTag: secret.dekTag,
+        secretCiphertext: secret.secretCiphertext,
+        secretIv: secret.secretIv,
+        secretTag: secret.secretTag,
+      },
+      resolveKek(kekId) {
+        return kekId === kek.kekId ? kek.kekKeyBytes : null;
+      },
+    });
+  };
+
+  const communityExecutors = getCommunityWorkflowNodeExecutors({
+    githubApiBaseUrl: getGithubApiBaseUrl(),
+    loadConnectorSecretValue,
+  });
+
+  const executorRegistry = buildExecutorRegistry({ communityExecutors, enterpriseExecutors });
 
   const worker = new Worker<WorkflowRunJobPayload>(
     queueName,

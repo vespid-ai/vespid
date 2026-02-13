@@ -98,6 +98,17 @@ export type WorkflowRunEventRecord = {
   createdAt: string;
 };
 
+export type ConnectorSecretRecord = {
+  id: string;
+  organizationId: string;
+  connectorId: string;
+  name: string;
+  createdByUserId: string;
+  updatedByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export interface AppStore {
   ensureDefaultRoles(): Promise<void>;
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
@@ -238,4 +249,28 @@ export interface AppStore {
     actorUserId: string;
     error: string;
   }): Promise<WorkflowRunRecord | null>;
+
+  listConnectorSecrets(input: {
+    organizationId: string;
+    actorUserId: string;
+    connectorId?: string | null;
+  }): Promise<ConnectorSecretRecord[]>;
+  createConnectorSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    connectorId: string;
+    name: string;
+    value: string;
+  }): Promise<ConnectorSecretRecord>;
+  rotateConnectorSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    secretId: string;
+    value: string;
+  }): Promise<ConnectorSecretRecord | null>;
+  deleteConnectorSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    secretId: string;
+  }): Promise<boolean>;
 }

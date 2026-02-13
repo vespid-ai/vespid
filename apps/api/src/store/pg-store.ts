@@ -1,23 +1,27 @@
 import {
   createAuthSession,
+  createConnectorSecret as dbCreateConnectorSecret,
   createDb,
   createPool,
   createInvitation,
   createOrganizationWithOwner,
   createMembershipIfNotExists,
   createUser,
+  deleteConnectorSecret as dbDeleteConnectorSecret,
   ensureDefaultRoles,
   getAuthSessionById,
   getInvitationByToken,
   getMembership,
   getUserById,
   getUserByEmail,
+  listConnectorSecrets as dbListConnectorSecrets,
   markInvitationAccepted,
   revokeAllUserAuthSessions,
   revokeAuthSession,
   rotateAuthSessionRefreshToken,
   touchAuthSession,
   updateMembershipRole,
+  updateConnectorSecretValue as dbUpdateConnectorSecretValue,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
   getWorkflowById as dbGetWorkflowById,
@@ -34,6 +38,7 @@ import {
   markWorkflowRunFailed as dbMarkWorkflowRunFailed,
 } from "@vespid/db";
 import crypto from "node:crypto";
+import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type { AppStore } from "../types.js";
 
 function toIso(value: Date): string {
@@ -771,5 +776,113 @@ export class PgAppStore implements AppStore {
       startedAt: row.startedAt ? toIso(row.startedAt) : null,
       finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
     };
+  }
+
+  async listConnectorSecrets(input: { organizationId: string; actorUserId: string; connectorId?: string | null }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListConnectorSecrets(db, {
+          organizationId: input.organizationId,
+          connectorId: input.connectorId ?? null,
+        })
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organizationId,
+      connectorId: row.connectorId,
+      name: row.name,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    }));
+  }
+
+  async createConnectorSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    connectorId: string;
+    name: string;
+    value: string;
+  }) {
+    const kek = parseKekFromEnv();
+    const encrypted = encryptSecret({ plaintext: input.value, kek });
+
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateConnectorSecret(db, {
+          organizationId: input.organizationId,
+          connectorId: input.connectorId,
+          name: input.name,
+          kekId: encrypted.kekId,
+          dekCiphertext: encrypted.dekCiphertext,
+          dekIv: encrypted.dekIv,
+          dekTag: encrypted.dekTag,
+          secretCiphertext: encrypted.secretCiphertext,
+          secretIv: encrypted.secretIv,
+          secretTag: encrypted.secretTag,
+          createdByUserId: input.actorUserId,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      connectorId: row.connectorId,
+      name: row.name,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async rotateConnectorSecret(input: { organizationId: string; actorUserId: string; secretId: string; value: string }) {
+    const kek = parseKekFromEnv();
+    const encrypted = encryptSecret({ plaintext: input.value, kek });
+
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpdateConnectorSecretValue(db, {
+          organizationId: input.organizationId,
+          secretId: input.secretId,
+          kekId: encrypted.kekId,
+          dekCiphertext: encrypted.dekCiphertext,
+          dekIv: encrypted.dekIv,
+          dekTag: encrypted.dekTag,
+          secretCiphertext: encrypted.secretCiphertext,
+          secretIv: encrypted.secretIv,
+          secretTag: encrypted.secretTag,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      connectorId: row.connectorId,
+      name: row.name,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async deleteConnectorSecret(input: { organizationId: string; actorUserId: string; secretId: string }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbDeleteConnectorSecret(db, { organizationId: input.organizationId, secretId: input.secretId })
+    );
+    return Boolean(row);
   }
 }

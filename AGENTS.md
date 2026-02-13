@@ -102,6 +102,7 @@ Operational guardrails:
 - Queue unavailability must fail fast (no sync execution fallback in API).
 - Enforce PostgreSQL RLS for tenant-scoped tables.
 - Encrypt secrets at rest (envelope encryption); never log plaintext credentials/tokens.
+- Connector secrets are org-scoped and must never be returned in plaintext after creation/rotation (metadata-only APIs).
 - Keep audit logs for permission changes, credential changes, workflow publish/deploy actions, and billing mutations.
 - Default retention is 30 days for logs/artifacts unless org policy overrides it.
 

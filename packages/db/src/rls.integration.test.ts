@@ -76,6 +76,8 @@ describeIf("RLS integration", () => {
     const workflowBId = crypto.randomUUID();
     const runAId = crypto.randomUUID();
     const runBId = crypto.randomUUID();
+    const secretAId = crypto.randomUUID();
+    const secretBId = crypto.randomUUID();
 
     const setup = await appPool.connect();
     try {
@@ -113,6 +115,10 @@ describeIf("RLS integration", () => {
         "insert into workflow_run_events(organization_id, workflow_id, run_id, attempt_count, event_type, level, message) values ($1, $2, $3, 1, 'run_started', 'info', 'org-a-start')",
         [orgAId, workflowAId, runAId]
       );
+      await setup.query(
+        "insert into connector_secrets(id, organization_id, connector_id, name, kek_id, dek_ciphertext, dek_iv, dek_tag, secret_ciphertext, secret_iv, secret_tag, created_by_user_id, updated_by_user_id) values ($1, $2, 'github', 'token', 'test', decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), $3, $3)",
+        [secretAId, orgAId, adminId]
+      );
 
       await setup.query(
         "select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)",
@@ -147,6 +153,10 @@ describeIf("RLS integration", () => {
         "insert into workflow_run_events(organization_id, workflow_id, run_id, attempt_count, event_type, level, message) values ($1, $2, $3, 1, 'run_started', 'info', 'org-b-start')",
         [orgBId, workflowBId, runBId]
       );
+      await setup.query(
+        "insert into connector_secrets(id, organization_id, connector_id, name, kek_id, dek_ciphertext, dek_iv, dek_tag, secret_ciphertext, secret_iv, secret_tag, created_by_user_id, updated_by_user_id) values ($1, $2, 'github', 'token', 'test', decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), $3, $3)",
+        [secretBId, orgBId, otherId]
+      );
 
       await setup.query("commit");
     } catch (error) {
@@ -173,6 +183,11 @@ describeIf("RLS integration", () => {
         [orgAId, runAId]
       );
       expect(wrongEventContext.rowCount).toBe(0);
+      const wrongSecretContext = await client.query(
+        "select id from connector_secrets where organization_id = $1 and id = $2",
+        [orgAId, secretAId]
+      );
+      expect(wrongSecretContext.rowCount).toBe(0);
 
       await client.query("select set_config('app.current_org_id', $1, true)", [orgAId]);
       const rightContext = await client.query("select id from organizations where id = $1", [orgAId]);
@@ -184,6 +199,11 @@ describeIf("RLS integration", () => {
         [orgAId, runAId]
       );
       expect(rightEventContext.rowCount).toBe(1);
+      const rightSecretContext = await client.query(
+        "select id from connector_secrets where organization_id = $1 and id = $2",
+        [orgAId, secretAId]
+      );
+      expect(rightSecretContext.rowCount).toBe(1);
 
       await client.query("rollback");
     } finally {

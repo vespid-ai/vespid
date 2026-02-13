@@ -27,9 +27,12 @@
 - Queue observability uses structured events: `workflow_run_enqueued`, `workflow_run_started`, `workflow_run_retried`, `workflow_run_succeeded`, `workflow_run_failed`, `queue_unavailable`.
 - Workflow run/node execution events are persisted in PostgreSQL (`workflow_run_events`) with strict tenant RLS.
   - Event payloads are capped via `WORKFLOW_EVENT_PAYLOAD_MAX_CHARS` to avoid oversized rows.
+- Connector secrets are encrypted at rest and scoped per organization (`connector_secrets`).
+  - Encryption uses an environment-provided KEK (`SECRETS_KEK_ID`, `SECRETS_KEK_BASE64`).
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
+- See `/docs/runbooks/secrets-key-rotation.md` for KEK configuration and secret rotation guidance.
 
 ## Foundation APIs
 - Auth:
@@ -53,6 +56,11 @@
   - `GET /v1/orgs/:orgId/workflows/:workflowId/runs` (`X-Org-Id` required)
   - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId` (`X-Org-Id` required)
   - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events` (`X-Org-Id` required)
+- Secrets:
+  - `GET /v1/orgs/:orgId/secrets` (`X-Org-Id` required, owner/admin only)
+  - `POST /v1/orgs/:orgId/secrets` (`X-Org-Id` required, owner/admin only)
+  - `PUT /v1/orgs/:orgId/secrets/:secretId` (`X-Org-Id` required, owner/admin only)
+  - `DELETE /v1/orgs/:orgId/secrets/:secretId` (`X-Org-Id` required, owner/admin only)
 - Metadata:
   - `GET /v1/meta/capabilities`
   - `GET /v1/meta/connectors`

@@ -16,6 +16,11 @@ export default function WorkflowPage() {
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
   const [result, setResult] = useState<unknown>(null);
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
+  const [includeGithub, setIncludeGithub] = useState(false);
+  const [githubSecretId, setGithubSecretId] = useState("");
+  const [githubRepo, setGithubRepo] = useState("octo/test");
+  const [githubTitle, setGithubTitle] = useState("Vespid Issue");
+  const [githubBody, setGithubBody] = useState("Created by Vespid workflow");
 
   function requiredOrgId(): string | null {
     const orgId = getActiveOrgId();
@@ -32,6 +37,28 @@ export default function WorkflowPage() {
       return;
     }
 
+    if (includeGithub && githubSecretId.trim().length === 0) {
+      setResult({ code: "SECRET_ID_REQUIRED", message: "Provide a GitHub secretId to include the GitHub node." });
+      return;
+    }
+
+    const nodes: Array<Record<string, unknown>> = [];
+    if (includeGithub) {
+      nodes.push({
+        id: "node-github",
+        type: "connector.github.issue.create",
+        config: {
+          repo: githubRepo,
+          title: githubTitle,
+          body: githubBody,
+          auth: { secretId: githubSecretId },
+        },
+      });
+    } else {
+      nodes.push({ id: "node-http", type: "http.request" });
+    }
+    nodes.push({ id: "node-agent", type: "agent.execute" });
+
     const response = await apiFetch(
       `/v1/orgs/${orgId}/workflows`,
       {
@@ -41,10 +68,7 @@ export default function WorkflowPage() {
           dsl: {
             version: "v2",
             trigger: { type: "trigger.manual" },
-            nodes: [
-              { id: "node-http", type: "http.request" },
-              { id: "node-agent", type: "agent.execute" },
-            ],
+            nodes,
           },
         }),
       },
@@ -164,12 +188,43 @@ export default function WorkflowPage() {
       <h1>Workflow</h1>
 
       <div className="card">
+        <h2>Create</h2>
         <label htmlFor="workflow-name">Workflow name</label>
         <input
           id="workflow-name"
           value={workflowName}
           onChange={(event) => setWorkflowName(event.target.value)}
         />
+
+        <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={includeGithub}
+            onChange={(event) => setIncludeGithub(event.target.checked)}
+          />
+          Include GitHub create-issue node
+        </label>
+
+        {includeGithub ? (
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            <label htmlFor="github-secret-id">GitHub secretId</label>
+            <input
+              id="github-secret-id"
+              value={githubSecretId}
+              onChange={(event) => setGithubSecretId(event.target.value)}
+              placeholder="Paste secret UUID from /secrets"
+            />
+
+            <label htmlFor="github-repo">Repo (owner/repo)</label>
+            <input id="github-repo" value={githubRepo} onChange={(event) => setGithubRepo(event.target.value)} />
+
+            <label htmlFor="github-title">Issue title</label>
+            <input id="github-title" value={githubTitle} onChange={(event) => setGithubTitle(event.target.value)} />
+
+            <label htmlFor="github-body">Issue body</label>
+            <textarea id="github-body" value={githubBody} onChange={(event) => setGithubBody(event.target.value)} rows={4} />
+          </div>
+        ) : null}
 
         <label htmlFor="workflow-id">Workflow ID</label>
         <input id="workflow-id" value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} />

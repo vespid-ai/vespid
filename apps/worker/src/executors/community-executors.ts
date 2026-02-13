@@ -1,6 +1,11 @@
 import type { WorkflowNodeExecutor } from "@vespid/shared";
+import { createGithubIssueCreateExecutor } from "./github-issue-create.js";
 
-export function getCommunityWorkflowNodeExecutors(): WorkflowNodeExecutor[] {
+export function getCommunityWorkflowNodeExecutors(input?: {
+  githubApiBaseUrl?: string;
+  loadConnectorSecretValue?: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
+  fetchImpl?: typeof fetch;
+}): WorkflowNodeExecutor[] {
   return [
     {
       nodeType: "http.request",
@@ -14,6 +19,15 @@ export function getCommunityWorkflowNodeExecutors(): WorkflowNodeExecutor[] {
         };
       },
     },
+    ...(input?.githubApiBaseUrl && input.loadConnectorSecretValue
+      ? [
+          createGithubIssueCreateExecutor({
+            githubApiBaseUrl: input.githubApiBaseUrl,
+            loadConnectorSecretValue: input.loadConnectorSecretValue,
+            ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+          }),
+        ]
+      : []),
     {
       nodeType: "agent.execute",
       async execute(context) {
@@ -50,4 +64,3 @@ export function getCommunityWorkflowNodeExecutors(): WorkflowNodeExecutor[] {
     },
   ];
 }
-

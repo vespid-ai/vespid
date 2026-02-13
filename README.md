@@ -25,6 +25,7 @@ cp .env.example .env
 ```
    - rollout tip: keep `ORG_CONTEXT_ENFORCEMENT=warn` briefly for header fallback observation, then switch to `strict`.
    - logging: use `API_LOG_LEVEL` (default `info`) for structured rollout events.
+   - secrets: connector secrets require `SECRETS_KEK_BASE64` (32-byte base64) for API + worker.
 3. Run checks:
 ```bash
 pnpm migrate:check
@@ -44,6 +45,7 @@ redis-server --port 6379
 ## Rollout Runbook
 - Org context rollout and rollback guide: `/docs/runbooks/org-context-rollout.md`
 - Workflow queue cutover and rollback guide: `/docs/runbooks/workflow-queue-cutover.md`
+- Secrets KEK configuration and secret rotation guide: `/docs/runbooks/secrets-key-rotation.md`
 - Enterprise provider integration guide: `/docs/runbooks/enterprise-provider-integration.md`
 
 ## Open Core Licensing
