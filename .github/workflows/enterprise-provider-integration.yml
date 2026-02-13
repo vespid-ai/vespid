@@ -73,7 +73,7 @@ jobs:
           # on env substitution in npm config parsing.
           printf '%s\n' \
             '@vespid-ai:registry=https://npm.pkg.github.com' \
-            \"//npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}\" \
+            "//npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}" \
             > .npmrc
 
       - name: Install workspace dependencies
