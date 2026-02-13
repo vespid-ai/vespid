@@ -9,5 +9,6 @@ dist
 out
 artifacts
 .community-mirror
+*.tsbuildinfo
 *.log
 .DS_Store
