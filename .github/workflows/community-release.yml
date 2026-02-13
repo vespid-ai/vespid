@@ -86,5 +86,7 @@ jobs:
             echo "NPM_TOKEN is not set; skipping npm publish."
             exit 0
           fi
+          # pnpm/npm requires a userconfig with auth for the registry.
+          printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > ~/.npmrc
           pnpm --filter @vespid/sdk-client test
           pnpm --filter @vespid/sdk-client publish --access public --no-git-checks
