@@ -79,9 +79,12 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/vespid-worker-community:${{ github.ref_name }}
 
       - name: Publish SDK package
-        if: ${{ secrets.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not set; skipping npm publish."
+            exit 0
+          fi
           pnpm --filter @vespid/sdk-client test
           pnpm --filter @vespid/sdk-client publish --access public --no-git-checks
