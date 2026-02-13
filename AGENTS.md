@@ -35,6 +35,13 @@ Use this monorepo layout:
 - `pnpm migrate:check`
 - `pnpm migrate`
 
+## Codex Rules (AI Execution Guardrails)
+This repo includes Codex rules to control what commands may run **outside the sandbox**:
+- `codex/rules/vespid.rules` (primary)
+- `.codex/rules/vespid.rules` (compat)
+
+These rules only apply when the repo is marked as trusted so Codex will load project overrides.
+
 ## Repository Truth & Priorities
 When documentation conflicts, trust in this order:
 

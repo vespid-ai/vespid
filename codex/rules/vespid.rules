@@ -1,0 +1,145 @@
+# Vespid Codex rules (applies to commands run OUTSIDE the sandbox).
+# Policy: balanced; allow common checks; prompt for risky ops; forbid destructive/exfil/system-level commands.
+#
+# Notes:
+# - Rules only affect out-of-sandbox commands. In-sandbox commands are unaffected.
+# - More specific rules should appear before more general ones when in doubt.
+#
+# Ref: https://developers.openai.com/codex/rules
+
+# -------------------------
+# Hard blocks (forbidden)
+# -------------------------
+
+# Privilege escalation.
+prefix_rule(
+  pattern = ["sudo"],
+  decision = "forbidden",
+  justification = "Never run sudo outside sandbox for this repo.",
+)
+
+# Machine-level destructive ops.
+prefix_rule(
+  pattern = [["dd", "mkfs", "diskutil", "shutdown", "reboot"]],
+  decision = "forbidden",
+  justification = "System-level destructive commands are forbidden.",
+)
+
+# Dangerous deletes.
+prefix_rule(
+  pattern = ["rm", ["-rf", "-fr", "-r"]],
+  decision = "forbidden",
+  justification = "Destructive deletes are forbidden; ask a human to run them manually.",
+  match = [
+    {"command": "rm -rf /"},
+  ],
+)
+
+# Git operations that can lose work or publish code.
+prefix_rule(
+  pattern = ["git", "push"],
+  decision = "forbidden",
+  justification = "Do not push from Codex; prepare commits/patches for human review instead.",
+  match = [
+    {"command": "git push origin main"},
+  ],
+)
+
+prefix_rule(
+  pattern = ["git", "reset", "--hard"],
+  decision = "forbidden",
+  justification = "Hard reset can destroy local work; forbidden.",
+)
+
+prefix_rule(
+  pattern = ["git", "clean", "-fdx"],
+  decision = "forbidden",
+  justification = "git clean -fdx deletes ignored/untracked files; forbidden.",
+)
+
+# Exfil / remote access tools.
+prefix_rule(
+  pattern = [["ssh", "scp", "sftp", "rsync", "nc", "ncat", "telnet"]],
+  decision = "forbidden",
+  justification = "Remote access / data exfiltration tools are forbidden.",
+)
+
+# Cloud/infra CLIs (too risky for unattended agent).
+prefix_rule(
+  pattern = [["aws", "gcloud", "az", "kubectl", "terraform"]],
+  decision = "forbidden",
+  justification = "Cloud/infra CLIs are forbidden from Codex to prevent accidental changes.",
+)
+
+# -------------------------
+# Allow without prompt (low-risk)
+# -------------------------
+
+prefix_rule(
+  pattern = [["pwd", "ls", "rg", "find"]],
+  decision = "allow",
+  justification = "Allow basic read-only inspection commands.",
+)
+
+# Read-only git queries.
+prefix_rule(
+  pattern = ["git", ["status", "diff", "show", "log", "rev-parse", "ls-files", "grep"]],
+  decision = "allow",
+  justification = "Allow read-only git inspection.",
+  match = [
+    {"command": "git status"},
+  ],
+)
+
+# Allow common pnpm checks without prompt.
+prefix_rule(
+  pattern = ["pnpm", ["lint", "test", "build", "typecheck"]],
+  decision = "allow",
+  justification = "Allow common checks without prompting.",
+  match = [
+    {"command": "pnpm test"},
+  ],
+)
+
+# -------------------------
+# Prompt (review intent first)
+# -------------------------
+
+# Network fetchers.
+prefix_rule(
+  pattern = [["curl", "wget"]],
+  decision = "prompt",
+  justification = "Network access outside sandbox requires confirmation.",
+  match = [
+    {"command": "curl https://example.com"},
+  ],
+)
+
+# pnpm high-risk operations.
+prefix_rule(
+  pattern = ["pnpm", ["install", "add", "remove", "exec", "dlx", "dev", "migrate", "migrate:check",
+                     "check:boundary", "check:licenses", "check:mirror", "check:secrets",
+                     "sbom:generate", "mirror:prepare"]],
+  decision = "prompt",
+  justification = "pnpm operations that may execute scripts, mutate deps, or touch infra require confirmation.",
+  match = [
+    {"command": "pnpm install"},
+  ],
+)
+
+# git network/mutating operations (prompt).
+#
+# Note: "git push" is explicitly forbidden above; leaving it out here avoids ambiguity.
+prefix_rule(
+  pattern = ["git", ["fetch", "pull", "clone", "checkout", "switch", "commit", "add", "merge", "rebase", "tag", "clean", "reset"]],
+  decision = "prompt",
+  justification = "Git operations that mutate state or access network require confirmation.",
+)
+
+# Local services / DB clients.
+prefix_rule(
+  pattern = [["redis-server", "psql"]],
+  decision = "prompt",
+  justification = "Starting services or connecting to DB outside sandbox requires confirmation.",
+)
+
