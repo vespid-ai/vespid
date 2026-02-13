@@ -120,7 +120,7 @@ pnpm sbom:generate
 - `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (returns `queued`; returns `503/QUEUE_UNAVAILABLE` if queue is down)
 - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId`
 
-## Chinese Summary
-- 许可模型为 Open Core：社区核心 AGPL、SDK Apache、企业模块商业许可证。
-- 私有仓库为真源，公开社区仓由 allowlist 镜像生成。
-- CI 强制门禁：边界依赖、许可证一致性、镜像 dry-run、密钥扫描。
+## Summary (English Only)
+- Open Core licensing: community core is AGPL, SDK is Apache-2.0, enterprise modules are under a commercial license.
+- The private repository is the source of truth; the public community mirror is generated from an allowlist.
+- CI gates enforce boundary rules, license consistency, mirror dry-run checks, and secrets scanning.

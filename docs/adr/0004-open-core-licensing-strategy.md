@@ -50,9 +50,9 @@ Tradeoffs:
 - SSPL/source-available as primary public license: rejected due to OSI incompatibility and ecosystem friction.
 - Single codebase dual-license only (no Open Core split): rejected for weaker product differentiation in this product category.
 
-## Chinese Summary (for internal communication)
-- 采用 Open Core：社区核心开源，企业能力闭源。
-- 社区核心使用 AGPL，SDK 使用 Apache-2.0，企业模块使用商业许可证。
-- 私有仓为真源，通过 allowlist 自动镜像到公开社区仓。
-- 工程上强制 `community` 不得依赖 `enterprise`，并在 CI 阻断。
-- 配套 CLA 与商标策略，保障商业化与品牌控制。
+## Summary (English Only)
+- We adopt Open Core: community core is open source; enterprise capabilities are proprietary.
+- Community core is AGPL, SDK is Apache-2.0, enterprise modules use a commercial license.
+- The private repo is the source of truth; the public community repo is mirrored from an allowlist.
+- We enforce `community -> enterprise` import bans via CI gating.
+- CLA and trademark policy support commercialization and brand control.

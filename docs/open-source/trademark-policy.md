@@ -19,7 +19,7 @@ Vespid source code may be used under applicable open source licenses, but Vespid
 ## Permission Requests
 Commercial branding permissions require written approval from Vespid legal/contact owner.
 
-## Chinese Summary
-- 开源许可不等于商标许可。
-- 允许描述性引用，不允许冒充官方品牌。
-- Fork 后若对外发布，必须移除官方品牌资产并明确非官方。
+## Summary (English Only)
+- Open source code licenses do not grant trademark rights.
+- Descriptive references are allowed; confusing branding that implies official affiliation is prohibited.
+- Public fork distributions must remove official brand assets and clearly state they are unofficial.

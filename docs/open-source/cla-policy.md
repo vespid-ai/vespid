@@ -22,6 +22,6 @@ Vespid requires a Contributor License Agreement (CLA) so accepted contributions 
 - GitHub workflow: `.github/workflows/cla.yml`
 - Policy reference: this document and `AGENTS.md`
 
-## Chinese Summary
-- 本仓库强制 CLA，不签 CLA 不合并。
-- 选择 CLA 是为了保证商业再许可的法律清晰性。
+## Summary (English Only)
+- This repository requires a CLA; unsigned contributions must not be merged.
+- We use a CLA to ensure legal clarity for Open Core and commercial relicensing needs.

@@ -47,7 +47,7 @@ If release is invalid:
 - License files are present and consistent.
 - No secrets in release artifacts.
 
-## Chinese Summary
-- 社区发布必须先通过四个门禁（边界/许可证/镜像/密钥扫描）。
-- 发布后要核验源码、镜像、SDK 三类产物。
-- 发现问题优先止损，再做版本修复与复盘。
+## Summary (English Only)
+- Community release must pass four guardrails first (boundary, licenses, mirror dry-run, secrets scan).
+- After release, verify all three artifact classes: source, images, and SDK packages.
+- If an issue is discovered, stop distribution first, then patch and document the incident.

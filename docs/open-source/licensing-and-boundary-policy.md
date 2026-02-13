@@ -41,8 +41,8 @@ If an exception is required:
 3. Obtain approvals from legal and core maintainers.
 4. Add a follow-up task to remove exception before expiry.
 
-## 7) Chinese Summary
-- 目录级许可证必须明确，且与包声明一致。
-- 社区代码不能依赖企业代码，CI 必须阻断。
-- 公开镜像仅来源于 allowlist，命中 enterprise 立即失败。
-- 例外必须有时效、回滚方案和法务审批。
+## 7) Summary (English Only)
+- Directory-level licensing must be explicit and consistent with package declarations.
+- Community code must not depend on enterprise code; CI must block violations.
+- Public mirroring must use the allowlist only; any `enterprise` path match must fail.
+- Exceptions must be time-bound with rollback plans and legal approval.

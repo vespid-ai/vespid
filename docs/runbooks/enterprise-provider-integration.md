@@ -40,6 +40,6 @@ Use workflow:
 
 The workflow installs enterprise provider package and runs API tests with `VESPID_ENTERPRISE_PROVIDER_MODULE` set.
 
-## Chinese Summary
-- 通过私有 npm 包 + 环境变量方式注入企业能力，不在社区代码里静态依赖企业模块。
-- 回滚只需移除环境变量并重启服务。
+## Summary (English Only)
+- Inject enterprise capabilities via a private npm package + environment variable; do not add static community-to-enterprise dependencies.
+- Rollback is removing the environment variable and restarting services.

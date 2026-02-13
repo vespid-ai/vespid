@@ -24,5 +24,5 @@ Use this checklist before every `major` or `minor` community release.
 - [ ] Engineering approver signed off.
 - [ ] Legal approver signed off.
 
-## Chinese Summary
-- 每次 major/minor 发布前，必须完成知识产权、许可证、商标、密钥泄露四类检查并留存审批记录。
+## Summary (English Only)
+- Before every major/minor release, complete IP/provenance, licensing, trademark, and secret-leak checks and retain approval records.

@@ -11,6 +11,10 @@ Primary product goals:
 - General enterprise automation (not limited to software bug workflows)
 - Extensible workflow runtime (agent + browser + node execution)
 
+## Language Policy (Project-Wide)
+- Repository documentation, ADRs, runbooks, code comments, commit messages, and PR text must be written in English.
+- Product internationalization may include `zh-CN` translation resources where needed; do not add Chinese-only summary sections in docs.
+
 ## Project Structure & Module Organization
 Use this monorepo layout:
 
