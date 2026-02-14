@@ -2,7 +2,6 @@ import { Worker, type Job } from "bullmq";
 import {
   createPool,
   appendWorkflowRunEvent,
-  clearWorkflowRunBlockAndAdvanceCursor,
   getConnectorSecretById,
   getWorkflowById,
   getWorkflowRunById,
@@ -30,7 +29,6 @@ import {
   getWorkflowContinuationQueueName,
   getWorkflowQueueConcurrency,
   getWorkflowQueueName,
-  getWorkflowRetryBackoffMs,
   getWorkflowRetryAttempts,
 } from "./queue/config.js";
 import { getCommunityWorkflowNodeExecutors } from "./executors/community-executors.js";
@@ -129,12 +127,6 @@ function buildProgressOutput(steps: WorkflowExecutionStep[]): WorkflowExecutionR
   };
 }
 
-function retryDelayMs(attemptCount: number): number {
-  const base = getWorkflowRetryBackoffMs();
-  const cappedAttempt = Math.min(10, Math.max(1, attemptCount));
-  return Math.min(60_000, Math.floor(base * Math.pow(2, cappedAttempt - 1)));
-}
-
 function buildExecutorRegistry(input: {
   communityExecutors: WorkflowNodeExecutor[];
   enterpriseExecutors?: WorkflowNodeExecutor[] | null;
@@ -155,7 +147,6 @@ export async function processWorkflowRunJob(
   input?: {
     executorRegistry?: ExecutorRegistry;
     enterpriseProvider?: EnterpriseProvider;
-    enqueueRun?: (input: { payload: WorkflowRunJobPayload; delayMs?: number }) => Promise<void>;
     enqueueContinuationPoll?: (input: {
       organizationId: string;
       workflowId: string;
@@ -683,18 +674,13 @@ export async function processWorkflowRunJob(
     const isFinalAttempt = attemptCount >= maxAttempts;
 
     if (!isFinalAttempt) {
-      if (!input?.enqueueRun) {
-        throw error instanceof Error ? error : new Error(message);
-      }
-
-      const delayMs = retryDelayMs(attemptCount);
       await withTenantContext(pool, actor, async (tenantDb) =>
         markWorkflowRunQueuedForRetry(tenantDb, {
           organizationId: job.data.organizationId,
           workflowId: job.data.workflowId,
           runId: job.data.runId,
           error: message,
-          nextAttemptAt: new Date(Date.now() + delayMs),
+          nextAttemptAt: null,
         })
       );
       await appendEvent({
@@ -715,11 +701,8 @@ export async function processWorkflowRunJob(
         attemptCount,
         maxAttempts,
         error: message,
-        delayMs,
       });
-
-      await input.enqueueRun({ payload: job.data, delayMs });
-      return;
+      throw error instanceof Error ? error : new Error(message);
     }
 
     await withTenantContext(pool, actor, async (tenantDb) =>
@@ -864,7 +847,6 @@ export async function startWorkflowWorker(input?: {
     async (job) =>
       processWorkflowRunJob(pool, job, {
         executorRegistry,
-        enqueueRun: runQueue.enqueue,
         enqueueContinuationPoll,
       }),
     {

@@ -134,8 +134,9 @@ describe("workflow worker", () => {
     };
     const executorRegistry = new Map<string, WorkflowNodeExecutor>([[executor.nodeType, executor]]);
 
-    const enqueueRun = vi.fn().mockResolvedValue(undefined);
-    await processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry, enqueueRun });
+    await expect(processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry })).rejects.toThrow(
+      "boom"
+    );
 
     expect(mocks.markWorkflowRunQueuedForRetry).toHaveBeenCalledWith(
       expect.anything(),
@@ -144,7 +145,6 @@ describe("workflow worker", () => {
         error: "boom",
       })
     );
-    expect(enqueueRun).toHaveBeenCalledTimes(1);
     expect(mocks.markWorkflowRunFailed).not.toHaveBeenCalled();
     expect(mocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
       expect.anything(),
@@ -174,7 +174,7 @@ describe("workflow worker", () => {
       input: { k: "v" },
     });
 
-    await processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry, enqueueRun: vi.fn() });
+    await processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry });
 
     expect(mocks.markWorkflowRunQueuedForRetry).not.toHaveBeenCalled();
     expect(mocks.markWorkflowRunFailed).toHaveBeenCalledWith(
