@@ -17,6 +17,8 @@ The goal is to support private-network or customer-controlled runtime execution 
 Gateway:
 - `GATEWAY_HOST` (default `0.0.0.0`)
 - `GATEWAY_PORT` (default `3002`)
+- `GATEWAY_LOG_LEVEL` (default `info`)
+- `GATEWAY_AGENT_STALE_MS` (default `60000`; disconnects stale WS sessions)
 - `GATEWAY_SERVICE_TOKEN` (required in non-test; used by worker -> gateway internal dispatch)
 - `GATEWAY_HTTP_URL` (default `http://localhost:3002`)
 - `GATEWAY_WS_URL` (default `ws://localhost:3002/ws`)
@@ -61,5 +63,7 @@ Notes:
 ## Security Notes
 - Secrets are decrypted in the cloud runtime and sent to node-agent in-memory only for a single request.
 - Never log `secret` values. Gateway and agent handlers must treat secrets as sensitive.
-- In production, run gateway behind TLS (`wss://`) and restrict internal dispatch access to trusted callers only.
-
+- In production, run gateway behind a TLS terminator / reverse proxy (`wss://` externally).
+  - `ws://` inside a trusted private network is acceptable.
+- Never expose `POST /internal/v1/dispatch` publicly.
+  - Restrict by network policy and require `GATEWAY_SERVICE_TOKEN`.

@@ -407,6 +407,10 @@ export async function buildServer(input?: {
   const server = Fastify({
     logger: {
       level: API_LOG_LEVEL,
+      redact: {
+        paths: ["req.headers.authorization", "req.headers.cookie"],
+        censor: "[REDACTED]",
+      },
     },
   });
 

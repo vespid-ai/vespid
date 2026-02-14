@@ -15,6 +15,7 @@ const redisUrl = process.env.REDIS_URL;
 async function startGithubStub() {
   let lastAuth: string | null = null;
   let lastBody: unknown = null;
+  let requestCount = 0;
   const expectedToken = `ghp_${crypto.randomBytes(12).toString("hex")}`;
 
   const server = http.createServer(async (req, res) => {
@@ -25,6 +26,7 @@ async function startGithubStub() {
       return;
     }
 
+    requestCount += 1;
     lastAuth = req.headers.authorization ?? null;
 
     const chunks: Buffer[] = [];
@@ -68,6 +70,9 @@ async function startGithubStub() {
     },
     getLastBody() {
       return lastBody;
+    },
+    getRequestCount() {
+      return requestCount;
     },
     async close() {
       await new Promise<void>((resolve, reject) => {
@@ -480,5 +485,360 @@ describe("workflow node-agent integration", () => {
     const agentPayload = agentSuccess?.payload as { taskId?: unknown } | undefined;
     expect(typeof agentPayload?.taskId).toBe("string");
     expect(String(agentPayload?.taskId)).toContain("-remote-task");
+  });
+
+  it("does not dispatch to revoked agents", async () => {
+    if (!available || !api || !githubStub || !gatewayWsUrl) {
+      return;
+    }
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `node-agent-revoke-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+      payload: {
+        name: "Node Agent Revoke Org",
+        slug: randomSlug("node-agent-revoke-org"),
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const secretCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/secrets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        connectorId: "github",
+        name: "token",
+        value: githubStub.expectedToken,
+      },
+    });
+    expect(secretCreate.statusCode).toBe(201);
+    const secretId = (secretCreate.json() as { secret: { id: string } }).secret.id;
+
+    const pairing = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(pairing.statusCode).toBe(201);
+    const pairingToken = (pairing.json() as { token: string }).token;
+
+    const pairRes = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken,
+        name: "stub-agent-revoke",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["connector.action", "agent.execute"] },
+      },
+    });
+    expect(pairRes.statusCode).toBe(201);
+    const pairBody = pairRes.json() as { agentId: string; agentToken: string };
+
+    const localAgent = await startStubAgent({
+      gatewayWsUrl,
+      agentToken: pairBody.agentToken,
+      githubApiBaseUrl: githubStub.baseUrl,
+    });
+
+    const revoke = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/${pairBody.agentId}/revoke`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(revoke.statusCode).toBe(200);
+
+    const createWorkflow = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Revoked Agent Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [
+            {
+              id: "node-github",
+              type: "connector.action",
+              config: {
+                connectorId: "github",
+                actionId: "issue.create",
+                input: {
+                  repo: "octo/test",
+                  title: "Should Not Run",
+                  body: "Revoked agent must not run this",
+                },
+                auth: {
+                  secretId,
+                },
+                execution: {
+                  mode: "node",
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publish = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publish.statusCode).toBe(200);
+
+    const beforeCount = githubStub.getRequestCount();
+
+    const runCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        input: { key: "value" },
+      },
+    });
+    expect(runCreate.statusCode).toBe(201);
+    const runId = (runCreate.json() as { run: { id: string } }).run.id;
+
+    let finalStatus = "queued";
+    for (let index = 0; index < 80; index += 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+      const runGet = await api.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(runGet.statusCode).toBe(200);
+      finalStatus = (runGet.json() as { run: { status: string } }).run.status;
+      if (finalStatus === "succeeded" || finalStatus === "failed") {
+        break;
+      }
+    }
+
+    expect(finalStatus).toBe("failed");
+
+    const afterCount = githubStub.getRequestCount();
+    expect(afterCount).toBe(beforeCount);
+
+    const eventsRes = await api.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=200`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(eventsRes.statusCode).toBe(200);
+    const eventsBody = eventsRes.json() as { events: Array<unknown> };
+    expect(JSON.stringify(eventsBody.events)).not.toContain(githubStub.expectedToken);
+
+    await localAgent.close();
+  });
+
+  it("fails fast when agent disconnects before dispatch (no hang)", async () => {
+    if (!available || !api || !githubStub || !gatewayWsUrl) {
+      return;
+    }
+
+    process.env.NODE_EXEC_TIMEOUT_MS = "2000";
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `node-agent-disconnect-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+      payload: {
+        name: "Node Agent Disconnect Org",
+        slug: randomSlug("node-agent-disconnect-org"),
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const secretCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/secrets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        connectorId: "github",
+        name: "token",
+        value: githubStub.expectedToken,
+      },
+    });
+    expect(secretCreate.statusCode).toBe(201);
+    const secretId = (secretCreate.json() as { secret: { id: string } }).secret.id;
+
+    const pairing = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(pairing.statusCode).toBe(201);
+    const pairingToken = (pairing.json() as { token: string }).token;
+
+    const pairRes = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken,
+        name: "stub-agent-disconnect",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["connector.action", "agent.execute"] },
+      },
+    });
+    expect(pairRes.statusCode).toBe(201);
+    const pairBody = pairRes.json() as { agentToken: string };
+
+    const localAgent = await startStubAgent({
+      gatewayWsUrl,
+      agentToken: pairBody.agentToken,
+      githubApiBaseUrl: githubStub.baseUrl,
+    });
+    await localAgent.close();
+
+    const createWorkflow = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Disconnect Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [
+            {
+              id: "node-github",
+              type: "connector.action",
+              config: {
+                connectorId: "github",
+                actionId: "issue.create",
+                input: {
+                  repo: "octo/test",
+                  title: "Should Fail Fast",
+                },
+                auth: {
+                  secretId,
+                },
+                execution: {
+                  mode: "node",
+                },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publish = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publish.statusCode).toBe(200);
+
+    const beforeCount = githubStub.getRequestCount();
+
+    const runCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(runCreate.statusCode).toBe(201);
+    const runId = (runCreate.json() as { run: { id: string } }).run.id;
+
+    let finalStatus = "queued";
+    for (let index = 0; index < 80; index += 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+      const runGet = await api.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(runGet.statusCode).toBe(200);
+      finalStatus = (runGet.json() as { run: { status: string } }).run.status;
+      if (finalStatus === "succeeded" || finalStatus === "failed") {
+        break;
+      }
+    }
+
+    expect(finalStatus).toBe("failed");
+    expect(githubStub.getRequestCount()).toBe(beforeCount);
   });
 });

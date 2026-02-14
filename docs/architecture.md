@@ -35,6 +35,7 @@
   - `apps/worker` dispatches work to `apps/gateway`, which routes to any connected org-scoped node-agent.
   - Gateway dispatch is protected by `GATEWAY_SERVICE_TOKEN`; agent auth uses long-lived agent tokens stored hashed.
   - Pairing uses short-lived, single-use pairing tokens stored hashed.
+  - Production deployment: terminate TLS in front of gateway (reverse proxy / cloud LB) and keep `/internal/v1/dispatch` private.
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.

@@ -31,15 +31,21 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
   }
 
   const url = new URL("/internal/v1/dispatch", baseUrl);
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-gateway-token": serviceToken,
-    },
-    body: JSON.stringify(input),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gateway-token": serviceToken,
+      },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    return { status: "failed", error: "GATEWAY_UNAVAILABLE" };
+  }
 
+  const body = await response.text();
   if (!response.ok) {
     if (response.status === 503) {
       return { status: "failed", error: "NO_AGENT_AVAILABLE" };
@@ -47,7 +53,7 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
     return { status: "failed", error: `GATEWAY_DISPATCH_FAILED:${response.status}` };
   }
 
-  const payload = await response.json();
+  const payload = body.length > 0 ? (JSON.parse(body) as unknown) : null;
   const parsed = dispatchResponseSchema.safeParse(payload);
   if (!parsed.success) {
     return { status: "failed", error: "GATEWAY_RESPONSE_INVALID" };
