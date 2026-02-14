@@ -9,6 +9,7 @@ import type {
   MembershipRecord,
   OrganizationAgentRecord,
   OrganizationRecord,
+  OrganizationSettings,
   SessionRecord,
   UserRecord,
   WorkflowRecord,
@@ -24,6 +25,7 @@ export class MemoryAppStore implements AppStore {
   private users = new Map<string, UserRecord>();
   private usersByEmail = new Map<string, string>();
   private organizations = new Map<string, OrganizationRecord>();
+  private organizationSettings = new Map<string, OrganizationSettings>();
   private memberships = new Map<string, MembershipRecord>();
   private invitations = new Map<string, InvitationRecord>();
   private sessions = new Map<string, SessionRecord>();
@@ -99,6 +101,7 @@ export class MemoryAppStore implements AppStore {
       createdAt: nowIso(),
     };
     this.organizations.set(organization.id, organization);
+    this.organizationSettings.set(organization.id, {});
 
     const membership: MembershipRecord = {
       id: crypto.randomUUID(),
@@ -110,6 +113,25 @@ export class MemoryAppStore implements AppStore {
 
     this.memberships.set(membership.id, membership);
     return { organization, membership };
+  }
+
+  async getOrganizationSettings(input: { organizationId: string; actorUserId: string }): Promise<OrganizationSettings> {
+    if (!this.organizations.has(input.organizationId)) {
+      throw new Error("ORGANIZATION_NOT_FOUND");
+    }
+    return this.organizationSettings.get(input.organizationId) ?? {};
+  }
+
+  async updateOrganizationSettings(input: {
+    organizationId: string;
+    actorUserId: string;
+    settings: OrganizationSettings;
+  }): Promise<OrganizationSettings> {
+    if (!this.organizations.has(input.organizationId)) {
+      throw new Error("ORGANIZATION_NOT_FOUND");
+    }
+    this.organizationSettings.set(input.organizationId, input.settings);
+    return input.settings;
   }
 
   async getMembership(input: { organizationId: string; userId: string; actorUserId?: string }): Promise<MembershipRecord | null> {

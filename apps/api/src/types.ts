@@ -13,6 +13,12 @@ export type OrganizationRecord = {
   createdAt: string;
 };
 
+export type OrganizationSettings = {
+  tools?: {
+    shellRunEnabled?: boolean;
+  };
+};
+
 export type MembershipRecord = {
   id: string;
   organizationId: string;
@@ -140,6 +146,12 @@ export interface AppStore {
     organization: OrganizationRecord;
     membership: MembershipRecord;
   }>;
+  getOrganizationSettings(input: { organizationId: string; actorUserId: string }): Promise<OrganizationSettings>;
+  updateOrganizationSettings(input: {
+    organizationId: string;
+    actorUserId: string;
+    settings: OrganizationSettings;
+  }): Promise<OrganizationSettings>;
   getMembership(input: { organizationId: string; userId: string; actorUserId?: string }): Promise<MembershipRecord | null>;
   createInvitation(input: {
     organizationId: string;

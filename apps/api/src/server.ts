@@ -127,6 +127,22 @@ const rotateSecretSchema = z.object({
   value: z.string().min(1),
 });
 
+const orgSettingsSchema = z
+  .object({
+    tools: z
+      .object({
+        shellRunEnabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+function normalizeOrgSettings(input: unknown): { tools: { shellRunEnabled: boolean } } {
+  const parsed = orgSettingsSchema.safeParse(input);
+  return { tools: { shellRunEnabled: parsed.success ? Boolean(parsed.data.tools?.shellRunEnabled) : false } };
+}
+
 const agentPairSchema = z.object({
   pairingToken: z.string().min(1),
   name: z.string().min(1).max(120),
@@ -1097,6 +1113,66 @@ export async function buildServer(input?: {
     }
 
     return { membership: updated };
+  });
+
+  server.get("/v1/orgs/:orgId/settings", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage org settings");
+    }
+
+    const settings = await store.getOrganizationSettings({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+
+    return { settings: normalizeOrgSettings(settings) };
+  });
+
+  server.put("/v1/orgs/:orgId/settings", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage org settings");
+    }
+
+    const parsed = orgSettingsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid org settings payload", parsed.error.flatten());
+    }
+
+    const existing = await store.getOrganizationSettings({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+    const normalizedExisting = normalizeOrgSettings(existing);
+    const next = {
+      tools: {
+        shellRunEnabled:
+          typeof parsed.data.tools?.shellRunEnabled === "boolean"
+            ? parsed.data.tools.shellRunEnabled
+            : normalizedExisting.tools.shellRunEnabled,
+      },
+    };
+
+    const updated = await store.updateOrganizationSettings({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      settings: next,
+    });
+
+    return { settings: normalizeOrgSettings(updated) };
   });
 
   server.get("/v1/orgs/:orgId/secrets", async (request) => {
