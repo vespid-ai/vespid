@@ -3,6 +3,9 @@
     "name": "Vespid",
     "tagline": "自动化, 编排与执行平台。"
   },
+  "home": {
+    "redirecting": "正在跳转..."
+  },
   "nav": {
     "workflows": "工作流",
     "secrets": "密钥",
@@ -88,6 +91,7 @@
     "subtitle": "组织范围 API 调用需要租户上下文。",
     "active": "当前组织",
     "noActive": "未选择组织",
+    "shortLabel": "组织 {id}",
     "paste": "粘贴组织 UUID",
     "set": "设置",
     "recent": "最近使用的组织",

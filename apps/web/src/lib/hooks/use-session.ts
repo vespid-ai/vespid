@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiBase } from "../api";
 import { markApiReachable, markApiUnreachable } from "../api-reachability";
+import { getLocaleFromPathname } from "../../i18n/pathnames";
 
 export type SessionResponse = {
   session?: { token: string; expiresAt: number };
@@ -12,9 +13,12 @@ export function useSession() {
     queryKey: ["session"],
     queryFn: async (): Promise<SessionResponse | null> => {
       const base = getApiBase();
+      const locale =
+        typeof window === "undefined" ? "en" : getLocaleFromPathname(window.location?.pathname ?? "/en");
+      const url = `/${locale}/api/session`;
       let response: Response;
       try {
-        response = await fetch("/api/session", { method: "GET", credentials: "include" });
+        response = await fetch(url, { method: "GET", credentials: "include" });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         markApiUnreachable(base, message);

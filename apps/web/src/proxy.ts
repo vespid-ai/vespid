@@ -13,4 +13,3 @@ export const config = {
   // - files with extensions (static assets)
   matcher: ["/((?!_next|.*\\..*).*)"],
 };
-

@@ -3,6 +3,9 @@
     "name": "Vespid",
     "tagline": "Automation, orchestration, and execution."
   },
+  "home": {
+    "redirecting": "Redirecting..."
+  },
   "nav": {
     "workflows": "Workflows",
     "secrets": "Secrets",
@@ -88,6 +91,7 @@
     "subtitle": "Tenant context is required for org-scoped API calls.",
     "active": "Active organization",
     "noActive": "No active org",
+    "shortLabel": "Org {id}",
     "paste": "Paste org UUID",
     "set": "Set org",
     "recent": "Recent organizations",

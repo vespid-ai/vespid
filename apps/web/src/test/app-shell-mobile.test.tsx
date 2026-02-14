@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { NextIntlClientProvider } from "next-intl";
 import { ThemeProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -59,8 +59,8 @@ describe("AppShell mobile rendering", () => {
       </NextIntlClientProvider>
     );
 
-    const mobile = await screen.findByTestId("mobile-shell");
-    expect(mobile).toBeInTheDocument();
-    expect(within(mobile).getByText("child-content")).toBeInTheDocument();
+    // The shell should not mount children twice (mobile + desktop).
+    const nodes = await screen.findAllByText("child-content");
+    expect(nodes).toHaveLength(1);
   });
 });
