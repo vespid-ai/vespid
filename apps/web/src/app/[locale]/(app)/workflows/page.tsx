@@ -150,12 +150,12 @@ export default function WorkflowsPage() {
 
   async function submitCreate() {
     if (!orgId) {
-      toast.error("Set an active org first.");
+      toast.error(t("workflows.errors.orgRequired"));
       return;
     }
 
     if (includeGithub && githubSecretId.trim().length === 0) {
-      toast.error("Provide a GitHub secretId to include the GitHub node.");
+      toast.error(t("workflows.errors.githubSecretRequired"));
       return;
     }
 
@@ -163,14 +163,14 @@ export default function WorkflowsPage() {
     const id = payload.workflow.id;
     addRecentWorkflowId(id);
     setRecent(getRecentWorkflowIds());
-    toast.success("Workflow created");
+    toast.success(t("workflows.toast.created"));
     router.push(`/${locale}/workflows/${id}`);
   }
 
   function openById(id: string) {
     const trimmed = id.trim();
     if (!trimmed) {
-      toast.error("Workflow ID required");
+      toast.error(t("workflows.errors.workflowIdRequired"));
       return;
     }
     addRecentWorkflowId(trimmed);
@@ -178,33 +178,38 @@ export default function WorkflowsPage() {
     router.push(`/${locale}/workflows/${trimmed}`);
   }
 
-  const steps: Array<{ id: StepId; label: string }> = [
-    { id: "basic", label: "Basic" },
-    { id: "integrations", label: "Integrations" },
-    { id: "execution", label: "Execution" },
-    { id: "review", label: "Review" },
-  ];
+  const steps: Array<{ id: StepId; label: string }> = useMemo(
+    () => [
+      { id: "basic", label: t("workflows.steps.basic") },
+      { id: "integrations", label: t("workflows.steps.integrations") },
+      { id: "execution", label: t("workflows.steps.execution") },
+      { id: "review", label: t("workflows.steps.review") },
+    ],
+    [t]
+  );
 
   return (
     <div className="grid gap-4">
       <div>
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("workflows.title")}</div>
-        <div className="mt-1 text-sm text-muted">
-          Fluent-style SaaS shell + agent cockpit. Start from a template, then refine.
-        </div>
+        <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-12">
         <div className="lg:col-span-7">
           <Card className="overflow-hidden">
-            <div className="border-b border-border bg-panel/50 px-5 py-4">
+            <div className="border-b border-borderSubtle bg-panel/50 px-5 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
                     <Wand2 className="h-4 w-4 text-muted" />
-                    <div className="font-[var(--font-display)] text-lg font-semibold tracking-tight">Create workflow</div>
+                    <div className="font-[var(--font-display)] text-lg font-semibold tracking-tight">
+                      {t("workflows.createWizardTitle")}
+                    </div>
                   </div>
-                  <div className="mt-1 text-sm text-muted">{orgId ? `Org: ${orgId}` : "Set an active org to create workflows."}</div>
+                  <div className="mt-1 text-sm text-muted">
+                    {orgId ? `Org: ${orgId}` : t("workflows.createWizardHint")}
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button variant="outline" size="sm" onClick={() => setShowDebug((v) => !v)}>
@@ -229,12 +234,12 @@ export default function WorkflowsPage() {
               {step === "basic" ? (
                 <div className="grid gap-4">
                   <div className="grid gap-1.5">
-                    <Label htmlFor="workflow-name">Workflow name</Label>
+                    <Label htmlFor="workflow-name">{t("workflows.fields.workflowName")}</Label>
                     <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
                   </div>
 
                   <div>
-                    <div className="text-sm font-medium text-text">Templates</div>
+                    <div className="text-sm font-medium text-text">{t("workflows.fields.templates")}</div>
                     <div className="mt-2 grid gap-2">
                       {workflowTemplates.map((tpl) => (
                         <button
@@ -243,15 +248,19 @@ export default function WorkflowsPage() {
                           onClick={() => setTemplateId(tpl.id)}
                           className={
                             tpl.id === templateId
-                              ? "rounded-[var(--radius-md)] border border-accent/40 bg-accent/5 p-3 text-left"
-                              : "rounded-[var(--radius-md)] border border-border bg-panel/40 p-3 text-left hover:bg-panel/70"
+                              ? "rounded-[var(--radius-md)] border border-accent/25 bg-accent/10 p-3 text-left shadow-elev2"
+                              : "rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 text-left transition-colors hover:bg-panel/55 hover:shadow-elev1"
                           }
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{tpl.name}</div>
+                            <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">
+                              {t(`workflows.templates.${tpl.id}.name` as any)}
+                            </div>
                             <ChevronRight className="h-4 w-4 text-muted" />
                           </div>
-                          <div className="mt-1 text-sm text-muted">{tpl.description}</div>
+                          <div className="mt-1 text-sm text-muted">
+                            {t(`workflows.templates.${tpl.id}.description` as any)}
+                          </div>
                         </button>
                       ))}
                     </div>
@@ -261,34 +270,34 @@ export default function WorkflowsPage() {
 
               {step === "integrations" ? (
                 <div className="grid gap-3">
-                  <div className="rounded-[var(--radius-md)] border border-border bg-panel/40 p-3">
+                  <div className="rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                     <label className="flex items-center gap-2 text-sm">
                       <input type="checkbox" checked={includeGithub} onChange={(e) => setIncludeGithub(e.target.checked)} />
-                      Include GitHub create-issue node
+                      {t("workflows.fields.includeGithub")}
                     </label>
                   </div>
 
                   {includeGithub ? (
-                    <div className="grid gap-3 rounded-[var(--radius-md)] border border-border bg-panel/40 p-3">
+                    <div className="grid gap-3 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                       <div className="grid gap-1.5">
-                        <Label htmlFor="github-secret-id">GitHub secretId</Label>
+                        <Label htmlFor="github-secret-id">{t("workflows.fields.githubSecretId")}</Label>
                         <Input
                           id="github-secret-id"
                           value={githubSecretId}
                           onChange={(e) => setGithubSecretId(e.target.value)}
-                          placeholder="Paste secret UUID from /secrets"
+                          placeholder={t("workflows.fields.githubSecretPlaceholder")}
                         />
                       </div>
                       <div className="grid gap-1.5">
-                        <Label htmlFor="github-repo">Repo (owner/repo)</Label>
+                        <Label htmlFor="github-repo">{t("workflows.fields.githubRepo")}</Label>
                         <Input id="github-repo" value={githubRepo} onChange={(e) => setGithubRepo(e.target.value)} />
                       </div>
                       <div className="grid gap-1.5">
-                        <Label htmlFor="github-title">Issue title</Label>
+                        <Label htmlFor="github-title">{t("workflows.fields.githubTitle")}</Label>
                         <Input id="github-title" value={githubTitle} onChange={(e) => setGithubTitle(e.target.value)} />
                       </div>
                       <div className="grid gap-1.5">
-                        <Label htmlFor="github-body">Issue body</Label>
+                        <Label htmlFor="github-body">{t("workflows.fields.githubBody")}</Label>
                         <Textarea id="github-body" value={githubBody} onChange={(e) => setGithubBody(e.target.value)} rows={4} />
                       </div>
                     </div>
@@ -298,16 +307,16 @@ export default function WorkflowsPage() {
 
               {step === "execution" ? (
                 <div className="grid gap-3">
-                  <div className="rounded-[var(--radius-md)] border border-border bg-panel/40 p-3">
+                  <div className="rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                     <label className="flex items-center gap-2 text-sm">
                       <input type="checkbox" checked={runOnNodeAgent} onChange={(e) => setRunOnNodeAgent(e.target.checked)} />
-                      Run nodes on node-agent (remote)
+                      {t("workflows.fields.runOnNodeAgent")}
                     </label>
                   </div>
 
-                  <div className="grid gap-3 rounded-[var(--radius-md)] border border-border bg-panel/40 p-3">
+                  <div className="grid gap-3 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                     <div className="grid gap-1.5">
-                      <Label htmlFor="agent-script">Agent script (sh)</Label>
+                      <Label htmlFor="agent-script">{t("workflows.fields.agentScript")}</Label>
                       <Textarea id="agent-script" value={agentScript} onChange={(e) => setAgentScript(e.target.value)} rows={4} />
                     </div>
 
@@ -315,15 +324,15 @@ export default function WorkflowsPage() {
                       <div className="grid gap-2">
                         <label className="flex items-center gap-2 text-sm">
                           <input type="checkbox" checked={agentUseDocker} onChange={(e) => setAgentUseDocker(e.target.checked)} />
-                          Use docker sandbox
+                          {t("workflows.fields.useDocker")}
                         </label>
                         <label className="flex items-center gap-2 text-sm">
                           <input type="checkbox" checked={agentAllowNetwork} onChange={(e) => setAgentAllowNetwork(e.target.checked)} />
-                          Allow network
+                          {t("workflows.fields.allowNetwork")}
                         </label>
                       </div>
                     ) : (
-                      <div className="text-sm text-muted">Cloud execution uses server-side sandbox defaults.</div>
+                      <div className="text-sm text-muted">{t("workflows.fields.cloudSandboxHint")}</div>
                     )}
                   </div>
                 </div>
@@ -331,9 +340,9 @@ export default function WorkflowsPage() {
 
               {step === "review" ? (
                 <div className="grid gap-3">
-                  <div className="rounded-[var(--radius-md)] border border-border bg-panel/40 p-3">
-                    <div className="text-sm font-medium text-text">Preview</div>
-                    <div className="mt-1 text-sm text-muted">This is the DSL v2 payload that will be saved.</div>
+                  <div className="rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
+                    <div className="text-sm font-medium text-text">{t("workflows.fields.previewTitle")}</div>
+                    <div className="mt-1 text-sm text-muted">{t("workflows.fields.previewHint")}</div>
                   </div>
                   <CodeBlock value={dslPreview} />
                 </div>
@@ -353,7 +362,7 @@ export default function WorkflowsPage() {
           <Card>
             <CardHeader>
               <CardTitle>{t("nav.openById")}</CardTitle>
-              <CardDescription>Open an existing workflow by ID, or jump to a recent one (stored locally).</CardDescription>
+              <CardDescription>{t("workflows.openByIdDescription")}</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
               <div className="grid gap-1.5">
@@ -371,13 +380,13 @@ export default function WorkflowsPage() {
               <div>
                 <div className="text-xs font-medium text-muted">{t("workflows.recent")}</div>
                 <div className="mt-2 grid gap-2">
-                  {recent.length === 0 ? <div className="text-sm text-muted">No recent workflows.</div> : null}
+                  {recent.length === 0 ? <div className="text-sm text-muted">{t("workflows.noRecent")}</div> : null}
                   {recent.map((id) => (
                     <button
                       key={id}
                       type="button"
                       onClick={() => openById(id)}
-                      className="flex items-center justify-between rounded-[var(--radius-md)] border border-border bg-panel/40 px-3 py-2 text-left text-sm hover:bg-panel/70"
+                      className="flex items-center justify-between rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 px-3 py-2 text-left text-sm transition-colors hover:bg-panel/55 hover:shadow-elev1"
                     >
                       <span className="font-mono text-xs text-muted">{id}</span>
                       <ChevronRight className="h-4 w-4 text-muted" />
@@ -390,11 +399,11 @@ export default function WorkflowsPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Tips</CardTitle>
-              <CardDescription>Make the cockpit feel fast.</CardDescription>
+              <CardTitle>{t("workflows.tips.title")}</CardTitle>
+              <CardDescription>{t("workflows.tips.subtitle")}</CardDescription>
             </CardHeader>
             <CardContent className="text-sm text-muted">
-              Use compact density for runs, and switch to dark theme for long debugging sessions.
+              {t("workflows.tips.body")}
             </CardContent>
           </Card>
         </div>

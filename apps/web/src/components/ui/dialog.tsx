@@ -12,7 +12,7 @@ export function DialogContent({ className, ...props }: ComponentPropsWithoutRef<
       <DialogPrimitive.Overlay className="fixed inset-0 bg-black/20 backdrop-blur-sm" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed left-1/2 top-1/2 w-[min(680px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-panel/90 p-5 shadow-panel outline-none",
+          "fixed left-1/2 top-1/2 w-[min(680px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-borderSubtle bg-panel/90 p-5 shadow-elev3 outline-none",
           "animate-fade-in",
           className
         )}

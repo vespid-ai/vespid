@@ -5,7 +5,8 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn(
-        "rounded-[var(--radius-md)] border border-border bg-panel/55 shadow-panel shadow-inset backdrop-blur supports-[backdrop-filter]:bg-panel/45",
+        "rounded-[var(--radius-md)] border border-borderSubtle bg-panel/75 shadow-elev1 backdrop-blur supports-[backdrop-filter]:bg-panel/65",
+        "transition-shadow duration-200",
         className
       )}
       {...props}

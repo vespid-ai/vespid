@@ -4,15 +4,19 @@
   /* RGB triples so Tailwind can do rgb(var(--token) / alpha). */
   --surface-0: 246 247 251;
   --surface-1: 255 255 255;
-  --surface-2: 252 253 255;
-  --surface-3: 246 248 252;
+  --surface-2: 251 253 255;
+  --surface-3: 245 248 252;
+  --surface-glass: 255 255 255;
 
-  --border: 214 221 232;
+  --border-subtle: 226 232 240;
+  --border-strong: 203 213 225;
+
   --text: 15 23 42;
   --muted: 71 85 105;
 
-  /* Brand tokens (Fluent-ish). */
+  /* Brand tokens (Copilot/Fluent-ish). */
   --brand: 37 99 235;
+  --brand-contrast: 255 255 255;
   --brand-2: 56 189 248;
   --focus: 59 130 246;
 
@@ -20,14 +24,21 @@
   --warn: 245 158 11;
   --ok: 16 185 129;
 
+  /* Shadow-first elevation ladder. */
+  --shadow-1: 0 1px 0 rgb(15 23 42 / 0.04), 0 10px 26px rgb(2 6 23 / 0.06);
+  --shadow-2: 0 1px 0 rgb(15 23 42 / 0.05), 0 18px 44px rgb(2 6 23 / 0.10);
+  --shadow-3: 0 2px 0 rgb(15 23 42 / 0.05), 0 30px 78px rgb(2 6 23 / 0.14);
+  --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.70);
+
   --radius-sm: 10px;
   --radius-md: 14px;
   --radius-lg: 18px;
 
   /* Compatibility aliases used by existing components. */
   --bg: var(--surface-0);
-  --panel: var(--surface-1);
+  --panel: var(--surface-glass);
   --panel-elev: var(--surface-2);
+  --border: var(--border-subtle);
   --accent: var(--brand);
 }
 
@@ -53,22 +64,31 @@ body {
 
 /* Dark theme (applied via next-themes: html.dark). */
 .dark {
-  --surface-0: 6 8 14;
-  --surface-1: 10 14 23;
-  --surface-2: 15 23 42;
-  --surface-3: 20 30 52;
+  --surface-0: 7 9 14;
+  --surface-1: 11 15 25;
+  --surface-2: 16 22 36;
+  --surface-3: 22 30 48;
+  --surface-glass: 11 15 25;
 
-  --border: 51 65 85;
+  --border-subtle: 51 65 85;
+  --border-strong: 71 85 105;
+
   --text: 226 232 240;
   --muted: 148 163 184;
 
   --brand: 56 189 248;
+  --brand-contrast: 2 6 23;
   --brand-2: 34 211 238;
   --focus: 56 189 248;
 
   --danger: 248 113 113;
   --warn: 251 191 36;
   --ok: 52 211 153;
+
+  --shadow-1: 0 1px 0 rgb(0 0 0 / 0.25), 0 14px 34px rgb(0 0 0 / 0.36);
+  --shadow-2: 0 1px 0 rgb(0 0 0 / 0.30), 0 24px 58px rgb(0 0 0 / 0.44);
+  --shadow-3: 0 2px 0 rgb(0 0 0 / 0.35), 0 34px 92px rgb(0 0 0 / 0.50);
+  --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.06);
 }
 
 /* Subtle grain without external assets. */
@@ -88,4 +108,15 @@ body {
 
 :where(a:hover) {
   text-decoration-color: rgb(var(--accent) / 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -2,6 +2,7 @@
 
 import { Check, Copy } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { cn } from "../../lib/cn";
 import { Button } from "./button";
@@ -15,6 +16,7 @@ function safeStringify(value: unknown): string {
 }
 
 export function CodeBlock({ value, className }: { value: unknown; className?: string }) {
+  const t = useTranslations();
   const text = useMemo(() => safeStringify(value), [value]);
   const [copied, setCopied] = useState(false);
 
@@ -22,10 +24,10 @@ export function CodeBlock({ value, className }: { value: unknown; className?: st
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      toast.success("Copied");
+      toast.success(t("common.copied"));
       setTimeout(() => setCopied(false), 900);
     } catch {
-      toast.error("Copy failed");
+      toast.error(t("errors.copyFailed"));
     }
   }
 

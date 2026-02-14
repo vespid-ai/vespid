@@ -20,7 +20,7 @@ import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import { type WorkflowRun, usePublishWorkflow, useRunWorkflow, useRuns, useWorkflow } from "../../../../../lib/hooks/use-workflows";
 import { addRecentRunId, addRecentWorkflowId, getRecentRunIds } from "../../../../../lib/recents";
 
-function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false; message: string } {
+function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   const trimmed = text.trim();
   if (!trimmed) {
     return { ok: true, value: null };
@@ -28,7 +28,7 @@ function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false
   try {
     return { ok: true, value: JSON.parse(trimmed) as unknown };
   } catch {
-    return { ok: false, message: "Run input must be valid JSON." };
+    return { ok: false };
   }
 }
 
@@ -62,7 +62,7 @@ export default function WorkflowDetailPage() {
   const columns = useMemo(() => {
     return [
       {
-        header: "Run",
+        header: t("workflows.detail.table.run"),
         accessorKey: "id",
         cell: ({ row }: any) => (
           <div className="min-w-0">
@@ -72,7 +72,7 @@ export default function WorkflowDetailPage() {
         ),
       },
       {
-        header: "Status",
+        header: t("workflows.detail.table.status"),
         accessorKey: "status",
         cell: ({ row }: any) => {
           const status = String(row.original.status ?? "");
@@ -82,39 +82,39 @@ export default function WorkflowDetailPage() {
         },
       },
       {
-        header: "Open",
+        header: t("workflows.detail.table.open"),
         id: "open",
         cell: ({ row }: any) => (
           <Button asChild size="sm" variant="outline">
-            <Link href={`/${locale}/workflows/${workflowId}/runs/${row.original.id}`}>Replay</Link>
+            <Link href={`/${locale}/workflows/${workflowId}/runs/${row.original.id}`}>{t("workflows.detail.table.replay")}</Link>
           </Button>
         ),
       },
     ] as const;
-  }, [locale, workflowId]);
+  }, [locale, t, workflowId]);
 
   async function doPublish() {
     if (!orgId) {
-      toast.error("Set an active org first.");
+      toast.error(t("workflows.errors.orgRequired"));
       return;
     }
     await publish.mutateAsync();
-    toast.success("Workflow published");
+    toast.success(t("workflows.detail.published"));
   }
 
   async function doRun() {
     if (!orgId) {
-      toast.error("Set an active org first.");
+      toast.error(t("workflows.errors.orgRequired"));
       return;
     }
     if (!workflowId) {
-      toast.error("Workflow ID required");
+      toast.error(t("workflows.errors.workflowIdRequired"));
       return;
     }
 
     const parsed = safeParseJson(runInput);
     if (!parsed.ok) {
-      toast.error(parsed.message);
+      toast.error(t("workflows.detail.invalidJson"));
       return;
     }
 
@@ -122,12 +122,12 @@ export default function WorkflowDetailPage() {
       const payload = await run.mutateAsync({ input: parsed.value });
       const runId = payload.run.id;
       addRecentRunId(workflowId, runId);
-      toast.success("Run queued");
+      toast.success(t("workflows.detail.queued"));
       router.push(`/${locale}/workflows/${workflowId}/runs/${runId}`);
     } catch (err: any) {
       const code = err?.payload?.code;
       if (code === "QUEUE_UNAVAILABLE") {
-        toast.error("Queue unavailable. Ensure Redis is running.");
+        toast.error(t("workflows.detail.queueUnavailable"));
         return;
       }
       throw err;
@@ -145,10 +145,10 @@ export default function WorkflowDetailPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
-            Back
+            {t("common.back")}
           </Button>
           <Button variant="accent" onClick={doPublish} disabled={publish.isPending}>
-            {publish.isPending ? t("common.loading") : "Publish"}
+            {publish.isPending ? t("common.loading") : t("workflows.detail.publish")}
           </Button>
         </div>
       </div>
@@ -156,16 +156,16 @@ export default function WorkflowDetailPage() {
       <Tabs defaultValue="runs">
         <TabsList>
           <TabsTrigger value="runs">{t("workflows.runs")}</TabsTrigger>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="editor">Editor</TabsTrigger>
+          <TabsTrigger value="overview">{t("workflows.detail.tabOverview")}</TabsTrigger>
+          <TabsTrigger value="editor">{t("workflows.detail.tabEditor")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="runs" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
             <Card>
               <CardHeader>
-                <CardTitle>Runs</CardTitle>
-                <CardDescription>{runsQuery.isFetching ? t("common.loading") : "Latest runs for this workflow."}</CardDescription>
+                <CardTitle>{t("workflows.detail.runsTitle")}</CardTitle>
+                <CardDescription>{runsQuery.isFetching ? t("common.loading") : t("workflows.detail.runsHint")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {runsQuery.isLoading ? (
@@ -175,14 +175,14 @@ export default function WorkflowDetailPage() {
                     <Skeleton className="h-10" />
                   </div>
                 ) : runs.length === 0 ? (
-                  <EmptyState title="No runs yet" description="Queue a run from the panel on the right." />
+                  <EmptyState title={t("workflows.detail.noRunsTitle")} description={t("workflows.detail.noRunsHint")} />
                 ) : (
                   <DataTable<WorkflowRun> data={runs} columns={columns as any} />
                 )}
 
                 {recentRuns.length ? (
                   <div className="mt-4">
-                    <div className="text-xs font-medium text-muted">Recent runs (local)</div>
+                    <div className="text-xs font-medium text-muted">{t("workflows.detail.recentRunsLocal")}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {recentRuns.map((id) => (
                         <Button key={id} variant="outline" size="sm" asChild>
@@ -197,18 +197,18 @@ export default function WorkflowDetailPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Queue run</CardTitle>
-                <CardDescription>POST /runs must succeed only when enqueue succeeds.</CardDescription>
+                <CardTitle>{t("workflows.detail.queueRunTitle")}</CardTitle>
+                <CardDescription>{t("workflows.detail.queueRunHint")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3">
                 <div className="grid gap-1.5">
-                  <Label htmlFor="run-input">Run input (JSON)</Label>
+                  <Label htmlFor="run-input">{t("workflows.detail.runInputLabel")}</Label>
                   <Textarea id="run-input" value={runInput} onChange={(e) => setRunInput(e.target.value)} rows={7} />
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                   <Button variant="accent" onClick={doRun} disabled={run.isPending}>
-                    {run.isPending ? t("common.loading") : "Run"}
+                    {run.isPending ? t("common.loading") : t("workflows.detail.run")}
                   </Button>
                   <Button variant="outline" onClick={() => setShowDebug((v) => !v)}>
                     {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
@@ -228,8 +228,8 @@ export default function WorkflowDetailPage() {
         <TabsContent value="overview" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Workflow</CardTitle>
-              <CardDescription>Read-only view of the workflow definition.</CardDescription>
+              <CardTitle>{t("workflows.detail.workflowTitle")}</CardTitle>
+              <CardDescription>{t("workflows.detail.workflowHint")}</CardDescription>
             </CardHeader>
             <CardContent>
               {workflowQuery.isLoading ? (
@@ -237,7 +237,7 @@ export default function WorkflowDetailPage() {
               ) : workflowQuery.data?.workflow ? (
                 <CodeBlock value={workflowQuery.data.workflow} />
               ) : (
-                <div className="text-sm text-muted">No workflow loaded.</div>
+                <div className="text-sm text-muted">{t("workflows.detail.noWorkflow")}</div>
               )}
             </CardContent>
           </Card>
@@ -246,11 +246,11 @@ export default function WorkflowDetailPage() {
         <TabsContent value="editor" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>Editor (stub)</CardTitle>
-              <CardDescription>Phase 2 will introduce a canvas editor via @xyflow/react.</CardDescription>
+              <CardTitle>{t("workflows.detail.editorStubTitle")}</CardTitle>
+              <CardDescription>{t("workflows.detail.editorStubHint")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-sm text-muted">Not implemented yet.</div>
+              <div className="text-sm text-muted">{t("workflows.detail.notImplemented")}</div>
             </CardContent>
           </Card>
         </TabsContent>

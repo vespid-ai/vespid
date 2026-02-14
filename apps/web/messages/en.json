@@ -12,6 +12,13 @@
     "openById": "Open by ID"
   },
   "common": {
+    "search": "Search",
+    "back": "Back",
+    "all": "All",
+    "add": "Add",
+    "remove": "Remove",
+    "clearFilters": "Clear filters",
+    "list": "List",
     "refresh": "Refresh",
     "create": "Create",
     "delete": "Delete",
@@ -23,22 +30,37 @@
     "copied": "Copied",
     "loading": "Loading...",
     "notLoggedIn": "Not logged in",
+    "desktopOnly": "This UI is optimized for desktop while the product is early. Mobile support will be added as workflows mature.",
     "debug": "Debug",
     "show": "Show",
     "hide": "Hide"
   },
   "settings": {
+    "title": "Settings",
     "theme": {
+      "title": "Theme",
       "light": "Light",
       "dark": "Dark",
       "system": "System"
     },
     "density": {
+      "title": "Density",
       "comfortable": "Comfortable",
       "compact": "Compact"
+    },
+    "locale": {
+      "title": "Locale"
     }
   },
+  "errors": {
+    "apiUnreachable": {
+      "title": "API unreachable",
+      "description": "Cannot reach the control plane API at {base}. Start it locally or set NEXT_PUBLIC_API_BASE."
+    },
+    "copyFailed": "Copy failed"
+  },
   "org": {
+    "requireActive": "Set an active organization first.",
     "active": "Active organization",
     "noActive": "No active org",
     "paste": "Paste org UUID",
@@ -59,11 +81,97 @@
   },
   "workflows": {
     "title": "Workflows",
+    "subtitle": "Fluent-style SaaS shell + agent cockpit. Start from a template, then refine.",
     "createTitle": "Create workflow",
     "workflowId": "Workflow ID",
     "recent": "Recent workflows",
     "open": "Open workflow",
-    "runs": "Runs"
+    "runs": "Runs",
+    "createWizardTitle": "Create workflow",
+    "createWizardHint": "Set an active org to create workflows.",
+    "steps": {
+      "basic": "Basic",
+      "integrations": "Integrations",
+      "execution": "Execution",
+      "review": "Review"
+    },
+    "fields": {
+      "workflowName": "Workflow name",
+      "templates": "Templates",
+      "includeGithub": "Include GitHub create-issue node",
+      "githubSecretId": "GitHub secretId",
+      "githubSecretPlaceholder": "Paste secret UUID from /secrets",
+      "githubRepo": "Repo (owner/repo)",
+      "githubTitle": "Issue title",
+      "githubBody": "Issue body",
+      "runOnNodeAgent": "Run nodes on node-agent (remote)",
+      "agentScript": "Agent script (sh)",
+      "useDocker": "Use docker sandbox",
+      "allowNetwork": "Allow network",
+      "cloudSandboxHint": "Cloud execution uses server-side sandbox defaults.",
+      "previewTitle": "Preview",
+      "previewHint": "This is the DSL v2 payload that will be saved."
+    },
+    "openByIdDescription": "Open an existing workflow by ID, or jump to a recent one (stored locally).",
+    "noRecent": "No recent workflows.",
+    "tips": {
+      "title": "Tips",
+      "subtitle": "Make the cockpit feel fast.",
+      "body": "Use compact density for runs, and switch to dark theme for long debugging sessions."
+    },
+    "errors": {
+      "orgRequired": "Set an active org first.",
+      "githubSecretRequired": "Provide a GitHub secretId to include the GitHub node.",
+      "workflowIdRequired": "Workflow ID required"
+    },
+    "toast": {
+      "created": "Workflow created"
+    },
+    "templates": {
+      "github-issue-triage": {
+        "name": "GitHub issue triage",
+        "description": "Create an issue, then run an agent step."
+      },
+      "http-to-agent": {
+        "name": "HTTP + agent.execute",
+        "description": "Start with an HTTP request node, then execute an agent task."
+      },
+      "agent-shell": {
+        "name": "Agent shell runner",
+        "description": "A minimal workflow that runs a shell script."
+      }
+    }
+    ,
+    "detail": {
+      "tabOverview": "Overview",
+      "tabEditor": "Editor",
+      "runsTitle": "Runs",
+      "runsHint": "Latest runs for this workflow.",
+      "noRunsTitle": "No runs yet",
+      "noRunsHint": "Queue a run from the panel on the right.",
+      "recentRunsLocal": "Recent runs (local)",
+      "publish": "Publish",
+      "published": "Workflow published",
+      "queueRunTitle": "Queue run",
+      "queueRunHint": "POST /runs must succeed only when enqueue succeeds.",
+      "runInputLabel": "Run input (JSON)",
+      "run": "Run",
+      "queued": "Run queued",
+      "queueUnavailable": "Queue unavailable. Ensure Redis is running.",
+      "invalidJson": "Run input must be valid JSON.",
+      "workflowTitle": "Workflow",
+      "workflowHint": "Read-only view of the workflow definition.",
+      "noWorkflow": "No workflow loaded.",
+      "editorStubTitle": "Editor (stub)",
+      "editorStubHint": "Phase 2 will introduce a canvas editor via @xyflow/react.",
+      "notImplemented": "Not implemented yet.",
+      "table": {
+        "run": "Run",
+        "status": "Status",
+        "open": "Open",
+        "replay": "Replay"
+      }
+    }
   },
   "runs": {
     "title": "Run replay",
@@ -71,18 +179,83 @@
     "details": "Details",
     "inspector": "Inspector",
     "search": "Search payload",
-    "filter": "Filter"
+    "filter": "Filter",
+    "eventsCount": "{count} events",
+    "filterType": "type",
+    "noEvents": "No events yet.",
+    "attemptUnknown": "Attempt ?",
+    "attemptNumber": "Attempt {count}",
+    "detailsHint": "Run snapshot, plus the selected event payload.",
+    "summaryTitle": "Summary",
+    "summaryHint": "Explainable execution context.",
+    "duration": "Duration",
+    "attempts": "Attempts",
+    "runTitle": "Run",
+    "runHint": "Live snapshot (auto-refreshed).",
+    "noRun": "No run loaded.",
+    "eventTitle": "Event",
+    "selectEvent": "Select an event",
+    "noEvent": "No event selected.",
+    "inspectorHint": "Pins and quick explainability.",
+    "trustTitle": "Why / Inputs / Outputs / Errors",
+    "trustHint": "Structured view for explainability (incremental).",
+    "sectionWhy": "Why",
+    "sectionInputs": "Inputs",
+    "sectionOutputs": "Outputs",
+    "sectionErrors": "Errors",
+    "pinsTitle": "Pinned paths",
+    "pinPlaceholder": "payload.input.issueKey",
+    "noPins": "No pins yet.",
+    "quickActions": "Quick actions",
+    "healthTitle": "Health",
+    "healthHint": "Fetch errors, if any.",
+    "healthEventsError": "Failed to load events.",
+    "healthRunError": "Failed to load run.",
+    "tip": "Tip: switch to dark theme + compact density for long run replays."
   },
   "agents": {
     "title": "Agents",
     "pairing": "Pairing token",
-    "revoke": "Revoke"
+    "revoke": "Revoke",
+    "subtitle": "Remote execution agents paired to this organization.",
+    "noAgentsTitle": "No agents yet",
+    "noAgentsDescription": "Create a pairing token to connect a node agent.",
+    "pairingCreated": "Pairing token created",
+    "agentRevoked": "Agent revoked",
+    "tagsUpdated": "Agent tags updated",
+    "createPairingToken": "Create pairing token",
+    "pairingHint": "Tokens are displayed only once. They expire in 15 minutes."
+    ,
+    "table": {
+      "agent": "Agent",
+      "status": "Status",
+      "lastSeen": "Last seen",
+      "created": "Created",
+      "tags": "Tags"
+    }
   },
   "secrets": {
     "title": "Secrets",
-    "warning": "Values are never displayed after saving.",
+    "warning": "Secret values are never shown again after creation.",
     "connector": "Connector",
     "name": "Name",
-    "value": "Value"
+    "value": "Value",
+    "noSecretsTitle": "No secrets yet",
+    "createSecret": "Create secret",
+    "secretCreated": "Secret created",
+    "secretRotated": "Secret rotated",
+    "secretDeleted": "Secret deleted",
+    "pasteToken": "Paste token...",
+    "rotateValue": "Rotate value",
+    "selected": "Selected",
+    "deleteSecretTitle": "Delete secret",
+    "deleteSecretDescription": "This cannot be undone."
+    ,
+    "table": {
+      "connector": "Connector",
+      "name": "Name",
+      "id": "ID",
+      "open": "Select"
+    }
   }
 }

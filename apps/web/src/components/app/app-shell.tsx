@@ -4,19 +4,25 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Braces,
+  Check,
   ChevronLeft,
   ChevronRight,
   KeyRound,
   LayoutGrid,
   LogOut,
+  Monitor,
+  Moon,
   Rocket,
   Search,
   Settings2,
   ShieldCheck,
+  Sun,
+  TriangleAlert,
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
+import { useTheme } from "next-themes";
 import { useSession } from "../../lib/hooks/use-session";
 import {
   clearActiveOrgId,
@@ -40,10 +46,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { CommandPalette } from "./command-palette";
-import { apiFetch } from "../../lib/api";
-import { ThemeToggle } from "./theme-toggle";
-import { DensityToggle } from "./density-toggle";
+import { apiFetch, getApiBase } from "../../lib/api";
 import { useDensity } from "../../lib/hooks/use-density";
+import { useMounted } from "../../lib/hooks/use-mounted";
+import { getApiReachability, subscribeApiReachability } from "../../lib/api-reachability";
+import { Badge } from "../ui/badge";
 
 type NavItem = {
   href: (locale: string) => string;
@@ -64,7 +71,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const locale = useMemo(() => getLocaleFromPathname(pathname ?? "/en"), [pathname]);
 
   const session = useSession();
-  const { density } = useDensity();
+  const { density, setDensity } = useDensity();
+  const mounted = useMounted();
+  const { theme, setTheme } = useTheme();
+
+  const [reachability, setReachability] = useState(() => getApiReachability());
 
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -88,6 +99,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       setKnownOrgIds(getKnownOrgIds());
       setDraftOrgId(next ?? "");
     });
+  }, []);
+
+  useEffect(() => {
+    setReachability(getApiReachability());
+    return subscribeApiReachability((next) => setReachability(next));
   }, []);
 
   const nav: NavItem[] = useMemo(
@@ -127,7 +143,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const userEmail = session.data?.user?.email;
   const userInitial = (userEmail?.trim()?.[0] ?? "U").toUpperCase();
+  const apiUnreachable =
+    !session.data?.session &&
+    typeof reachability.unreachableAt === "number" &&
+    Date.now() - reachability.unreachableAt < 2 * 60_000;
 
+  const themeLabel = mounted ? (theme ?? "system") : "system";
   return (
     <div className="min-h-dvh group" data-density={density}>
       <CommandPalette
@@ -149,7 +170,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           sidebarCollapsed ? "grid-cols-[84px_1fr]" : "grid-cols-[288px_1fr]"
         )}
       >
-        <aside className="sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-border bg-panel/55 shadow-panel backdrop-blur">
+        <aside className="sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur">
           <div className={cn("flex items-center gap-2 px-3 py-3", sidebarCollapsed ? "justify-center" : "px-4")}
           >
             <div className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-border bg-panelElev/70">
@@ -165,7 +186,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               type="button"
               size="icon"
               variant="ghost"
-              className={cn("ml-auto h-9 w-9 border border-border bg-panel/40", sidebarCollapsed ? "ml-0" : "")}
+              className={cn("ml-auto h-9 w-9 border border-borderSubtle bg-panel/35", sidebarCollapsed ? "ml-0" : "")}
               onClick={toggleSidebar}
               aria-label="Toggle sidebar"
             >
@@ -186,8 +207,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                     "group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm",
                     "transition-colors",
                     active
-                      ? "bg-panelElev/70 text-text shadow-sm"
-                      : "text-muted hover:bg-panel/70 hover:text-text",
+                      ? "bg-surface2/60 text-text shadow-elev1"
+                      : "text-muted hover:bg-panel/55 hover:text-text",
                     sidebarCollapsed ? "justify-center px-2" : ""
                   )}
                 >
@@ -228,21 +249,21 @@ export function AppShell({ children }: { children: ReactNode }) {
         </aside>
 
         <section className="min-w-0">
-          <header className="sticky top-4 z-10 mb-4 overflow-hidden rounded-[var(--radius-md)] border border-border bg-panel/55 shadow-panel backdrop-blur">
+          <header className="sticky top-4 z-10 mb-4 overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur">
             <div className="flex items-center justify-between gap-4 px-4 py-3 group-data-[density=compact]:py-2">
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2"
+                  className="gap-2 rounded-[var(--radius-md)]"
                   onClick={() => setPaletteOpen(true)}
                 >
                   <Search className="h-4 w-4" />
-                  Search
+                  {t("common.search")}
                   <span className="ml-2 hidden items-center gap-1 text-xs text-muted lg:inline-flex">
-                    <kbd className="rounded border border-border bg-panel/60 px-1.5 py-0.5">Cmd</kbd>
-                    <kbd className="rounded border border-border bg-panel/60 px-1.5 py-0.5">K</kbd>
+                    <kbd className="rounded border border-borderSubtle bg-panel/60 px-1.5 py-0.5">Cmd</kbd>
+                    <kbd className="rounded border border-borderSubtle bg-panel/60 px-1.5 py-0.5">K</kbd>
                   </span>
                 </Button>
 
@@ -259,7 +280,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <select
                         value={activeOrgId}
                         onChange={(e) => applyOrgId(e.target.value)}
-                        className="h-9 w-full rounded-[var(--radius-sm)] border border-border bg-panel/60 px-2 text-sm text-text outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                        className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/55 px-2 text-sm text-text shadow-elev1 outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
                       >
                         <option value="">{t("org.noActive")}</option>
                         {knownOrgIds.map((id) => (
@@ -272,7 +293,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         value={draftOrgId}
                         onChange={(e) => setDraftOrgId(e.target.value)}
                         placeholder={t("org.paste")}
-                        className="h-9 w-full rounded-[var(--radius-sm)] border border-border bg-panel/60 px-3 text-sm text-text outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                        className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
                       />
                       <div className="flex justify-end">
                         <Button variant="accent" onClick={() => applyOrgId(draftOrgId)}>
@@ -285,19 +306,56 @@ export function AppShell({ children }: { children: ReactNode }) {
               </div>
 
               <div className="flex items-center gap-2">
-                <DensityToggle />
-                <ThemeToggle />
-
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" size="sm" className="gap-2">
                       <Settings2 className="h-4 w-4" />
-                      {locale}
+                      {t("settings.title")}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "en"))}>en</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "zh-CN"))}>zh-CN</DropdownMenuItem>
+                    <div className="px-2 py-1 text-xs font-medium text-muted">{t("settings.theme.title")}</div>
+                    <DropdownMenuItem onSelect={() => setTheme("light")}>
+                      <Sun className="h-4 w-4" />
+                      {t("settings.theme.light")}
+                      {themeLabel === "light" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setTheme("dark")}>
+                      <Moon className="h-4 w-4" />
+                      {t("settings.theme.dark")}
+                      {themeLabel === "dark" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setTheme("system")}>
+                      <Monitor className="h-4 w-4" />
+                      {t("settings.theme.system")}
+                      {themeLabel === "system" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+
+                    <div className="px-2 py-1 text-xs font-medium text-muted">{t("settings.density.title")}</div>
+                    <DropdownMenuItem onSelect={() => setDensity("comfortable")}>
+                      {t("settings.density.comfortable")}
+                      {density === "comfortable" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setDensity("compact")}>
+                      {t("settings.density.compact")}
+                      {density === "compact" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+
+                    <div className="px-2 py-1 text-xs font-medium text-muted">{t("settings.locale.title")}</div>
+                    <DropdownMenuItem
+                      onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "en"))}
+                    >
+                      en
+                      {locale === "en" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "zh-CN"))}
+                    >
+                      zh-CN
+                      {locale === "zh-CN" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -326,6 +384,20 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </DropdownMenu>
               </div>
             </div>
+
+            {apiUnreachable ? (
+              <div className="border-t border-borderSubtle bg-panel/40 px-4 py-2">
+                <div className="flex flex-wrap items-start gap-2 text-sm">
+                  <Badge variant="warn" className="gap-1.5">
+                    <TriangleAlert className="h-3.5 w-3.5" />
+                    {t("errors.apiUnreachable.title")}
+                  </Badge>
+                  <div className="min-w-0 flex-1 text-muted">
+                    {t("errors.apiUnreachable.description", { base: reachability.base || getApiBase() })}
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </header>
 
           <main className="min-w-0">
@@ -336,7 +408,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="mx-auto block max-w-7xl px-4 pb-6 md:hidden">
         <Card className="p-4 text-sm text-muted">
-          This UI is optimized for desktop while the product is early. Mobile support will be added as workflows mature.
+          {t("common.desktopOnly")}
         </Card>
       </div>
     </div>

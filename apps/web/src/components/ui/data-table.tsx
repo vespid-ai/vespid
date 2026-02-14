@@ -37,11 +37,11 @@ export function DataTable<T>({
   });
 
   return (
-    <div className={cn("overflow-hidden rounded-[var(--radius-md)] border border-border", className)}>
+    <div className={cn("overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/40 shadow-elev1", className)}>
       <table className="w-full border-collapse">
-        <thead className="bg-panel/50">
+        <thead className="bg-surface2/50">
           {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id} className="border-b border-border">
+            <tr key={hg.id} className="border-b border-borderStrong">
               {hg.headers.map((header) => {
                 const canSort = header.column.getCanSort();
                 const sorted = header.column.getIsSorted();
@@ -78,7 +78,10 @@ export function DataTable<T>({
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="border-b border-border last:border-b-0 hover:bg-panel/40">
+            <tr
+              key={row.id}
+              className="border-b border-borderSubtle last:border-b-0 transition-colors hover:bg-surface2/40"
+            >
               {row.getVisibleCells().map((cell) => (
                 <td
                   key={cell.id}

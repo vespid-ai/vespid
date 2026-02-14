@@ -12,6 +12,13 @@
     "openById": "按 ID 打开"
   },
   "common": {
+    "search": "搜索",
+    "back": "返回",
+    "all": "全部",
+    "add": "添加",
+    "remove": "移除",
+    "clearFilters": "清空筛选",
+    "list": "列表",
     "refresh": "刷新",
     "create": "创建",
     "delete": "删除",
@@ -23,22 +30,37 @@
     "copied": "已复制",
     "loading": "加载中...",
     "notLoggedIn": "未登录",
+    "desktopOnly": "当前版本主要针对桌面端优化; 移动端支持会在后续完善。",
     "debug": "调试",
     "show": "展开",
     "hide": "收起"
   },
   "settings": {
+    "title": "设置",
     "theme": {
+      "title": "主题",
       "light": "浅色",
       "dark": "深色",
       "system": "跟随系统"
     },
     "density": {
+      "title": "密度",
       "comfortable": "舒适",
       "compact": "紧凑"
+    },
+    "locale": {
+      "title": "语言"
     }
   },
+  "errors": {
+    "apiUnreachable": {
+      "title": "无法连接 API",
+      "description": "无法连接控制面 API: {base}。请启动本地服务或设置 NEXT_PUBLIC_API_BASE。"
+    },
+    "copyFailed": "复制失败"
+  },
   "org": {
+    "requireActive": "请先选择当前组织。",
     "active": "当前组织",
     "noActive": "未选择组织",
     "paste": "粘贴组织 UUID",
@@ -59,11 +81,97 @@
   },
   "workflows": {
     "title": "工作流",
+    "subtitle": "Fluent 风格 SaaS 壳 + 运行驾驶舱。从模板开始, 再逐步完善。",
     "createTitle": "创建工作流",
     "workflowId": "工作流 ID",
     "recent": "最近工作流",
     "open": "打开工作流",
-    "runs": "运行"
+    "runs": "运行",
+    "createWizardTitle": "创建工作流",
+    "createWizardHint": "创建前请先选择当前组织。",
+    "steps": {
+      "basic": "基础",
+      "integrations": "集成",
+      "execution": "执行",
+      "review": "预览"
+    },
+    "fields": {
+      "workflowName": "工作流名称",
+      "templates": "模板",
+      "includeGithub": "包含 GitHub 创建 Issue 节点",
+      "githubSecretId": "GitHub secretId",
+      "githubSecretPlaceholder": "从 /secrets 粘贴密钥 UUID",
+      "githubRepo": "仓库 (owner/repo)",
+      "githubTitle": "Issue 标题",
+      "githubBody": "Issue 内容",
+      "runOnNodeAgent": "在 node-agent 上运行节点 (远程)",
+      "agentScript": "Agent 脚本 (sh)",
+      "useDocker": "使用 Docker 沙箱",
+      "allowNetwork": "允许网络",
+      "cloudSandboxHint": "云端执行使用服务端默认沙箱配置。",
+      "previewTitle": "预览",
+      "previewHint": "这是将被保存的 DSL v2 载荷。"
+    },
+    "openByIdDescription": "按工作流 ID 打开, 或跳转到最近使用的工作流 (本地保存)。",
+    "noRecent": "暂无最近工作流。",
+    "tips": {
+      "title": "提示",
+      "subtitle": "让驾驶舱更顺滑。",
+      "body": "回放建议使用紧凑密度; 长时间调试可切换深色主题。"
+    },
+    "errors": {
+      "orgRequired": "请先选择当前组织。",
+      "githubSecretRequired": "包含 GitHub 节点时需要提供 secretId。",
+      "workflowIdRequired": "需要填写工作流 ID"
+    },
+    "toast": {
+      "created": "已创建工作流"
+    },
+    "templates": {
+      "github-issue-triage": {
+        "name": "GitHub Issue 分诊",
+        "description": "创建一个 Issue, 然后执行一个 agent 步骤。"
+      },
+      "http-to-agent": {
+        "name": "HTTP + agent.execute",
+        "description": "先发起 HTTP 请求, 再执行一个 agent 任务。"
+      },
+      "agent-shell": {
+        "name": "Agent shell runner",
+        "description": "一个执行 shell 脚本的最小工作流。"
+      }
+    }
+    ,
+    "detail": {
+      "tabOverview": "概览",
+      "tabEditor": "编辑器",
+      "runsTitle": "运行",
+      "runsHint": "该工作流的最近运行记录。",
+      "noRunsTitle": "暂无运行",
+      "noRunsHint": "可在右侧面板排队一个运行。",
+      "recentRunsLocal": "最近运行 (本地)",
+      "publish": "发布",
+      "published": "已发布工作流",
+      "queueRunTitle": "排队运行",
+      "queueRunHint": "只有成功入队时 /runs 才应返回成功。",
+      "runInputLabel": "运行输入 (JSON)",
+      "run": "运行",
+      "queued": "已排队运行",
+      "queueUnavailable": "队列不可用, 请确认 Redis 正在运行。",
+      "invalidJson": "运行输入必须是合法 JSON。",
+      "workflowTitle": "工作流",
+      "workflowHint": "工作流定义的只读视图。",
+      "noWorkflow": "未加载工作流。",
+      "editorStubTitle": "编辑器 (占位)",
+      "editorStubHint": "第二阶段会使用 @xyflow/react 引入画布编辑器。",
+      "notImplemented": "尚未实现。",
+      "table": {
+        "run": "运行",
+        "status": "状态",
+        "open": "打开",
+        "replay": "回放"
+      }
+    }
   },
   "runs": {
     "title": "运行回放",
@@ -71,18 +179,81 @@
     "details": "详情",
     "inspector": "检查器",
     "search": "搜索载荷",
-    "filter": "筛选"
+    "filter": "筛选",
+    "eventsCount": "{count} 条事件",
+    "filterType": "类型",
+    "noEvents": "暂无事件。",
+    "attemptUnknown": "尝试 ?",
+    "attemptNumber": "尝试 {count}",
+    "detailsHint": "运行快照, 以及当前选中的事件载荷。",
+    "summaryTitle": "概览",
+    "summaryHint": "可解释的执行上下文。",
+    "duration": "耗时",
+    "attempts": "尝试次数",
+    "runTitle": "运行",
+    "runHint": "实时快照 (自动刷新)。",
+    "noRun": "未加载运行数据。",
+    "eventTitle": "事件",
+    "selectEvent": "请选择一个事件",
+    "noEvent": "未选择事件。",
+    "inspectorHint": "固定字段与快速解释。",
+    "trustTitle": "原因 / 输入 / 输出 / 错误",
+    "trustHint": "为可解释性提供结构化视图 (逐步完善)。",
+    "sectionWhy": "原因",
+    "sectionInputs": "输入",
+    "sectionOutputs": "输出",
+    "sectionErrors": "错误",
+    "pinsTitle": "固定路径",
+    "pinPlaceholder": "payload.input.issueKey",
+    "noPins": "暂无固定项。",
+    "quickActions": "快捷操作",
+    "healthTitle": "健康状态",
+    "healthHint": "请求错误 (如有)。",
+    "healthEventsError": "加载事件失败。",
+    "healthRunError": "加载运行失败。",
+    "tip": "提示: 长时间回放建议切到深色主题并使用紧凑密度。"
   },
   "agents": {
     "title": "代理",
     "pairing": "配对令牌",
-    "revoke": "撤销"
+    "revoke": "撤销",
+    "subtitle": "已配对到当前组织的远程执行代理。",
+    "noAgentsTitle": "暂无代理",
+    "noAgentsDescription": "创建配对令牌以连接一个 node agent。",
+    "pairingCreated": "已创建配对令牌",
+    "agentRevoked": "已撤销代理",
+    "tagsUpdated": "已更新代理标签",
+    "createPairingToken": "创建配对令牌",
+    "pairingHint": "令牌仅展示一次, 15 分钟后过期。",
+    "table": {
+      "agent": "代理",
+      "status": "状态",
+      "lastSeen": "最近在线",
+      "created": "创建时间",
+      "tags": "标签"
+    }
   },
   "secrets": {
     "title": "密钥",
     "warning": "保存后不会再显示密钥值。",
     "connector": "连接器",
     "name": "名称",
-    "value": "值"
+    "value": "值",
+    "noSecretsTitle": "暂无密钥",
+    "createSecret": "创建密钥",
+    "secretCreated": "已创建密钥",
+    "secretRotated": "已轮换密钥",
+    "secretDeleted": "已删除密钥",
+    "pasteToken": "粘贴令牌...",
+    "rotateValue": "轮换值",
+    "selected": "已选择",
+    "deleteSecretTitle": "删除密钥",
+    "deleteSecretDescription": "此操作无法撤销。",
+    "table": {
+      "connector": "连接器",
+      "name": "名称",
+      "id": "ID",
+      "open": "选择"
+    }
   }
 }

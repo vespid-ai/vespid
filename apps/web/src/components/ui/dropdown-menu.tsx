@@ -13,7 +13,7 @@ export function DropdownMenuContent({ className, sideOffset = 8, ...props }: Com
       <DropdownMenuPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          "z-50 min-w-56 overflow-hidden rounded-lg border border-border bg-panel/95 p-1 shadow-panel backdrop-blur",
+          "z-50 min-w-56 overflow-hidden rounded-lg border border-borderSubtle bg-panel/90 p-1 shadow-elev2 backdrop-blur",
           className
         )}
         {...props}
@@ -27,7 +27,7 @@ export function DropdownMenuItem({ className, ...props }: ComponentPropsWithoutR
     <DropdownMenuPrimitive.Item
       className={cn(
         "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text outline-none",
-        "focus:bg-panel focus:text-text data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "focus:bg-surface2/60 focus:text-text data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -36,5 +36,5 @@ export function DropdownMenuItem({ className, ...props }: ComponentPropsWithoutR
 }
 
 export function DropdownMenuSeparator({ className, ...props }: ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>) {
-  return <DropdownMenuPrimitive.Separator className={cn("my-1 h-px bg-border", className)} {...props} />;
+  return <DropdownMenuPrimitive.Separator className={cn("my-1 h-px bg-borderSubtle", className)} {...props} />;
 }

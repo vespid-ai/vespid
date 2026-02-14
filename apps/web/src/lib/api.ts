@@ -1,4 +1,5 @@
 import { getActiveOrgId } from "./org-context";
+import { markApiReachable, markApiUnreachable } from "./api-reachability";
 
 export function getApiBase(): string {
   return process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:3001";
@@ -28,15 +29,19 @@ export async function apiFetch(path: string, init?: RequestInit, options?: ApiFe
   }
 
   try {
-    return await fetch(`${getApiBase()}${path}`, {
+    const base = getApiBase();
+    const response = await fetch(`${base}${path}`, {
       ...init,
       headers,
       credentials: "include",
     });
+    markApiReachable(base);
+    return response;
   } catch (err) {
     // `fetch()` throws TypeError on network errors and on CORS rejections.
     const message = err instanceof Error ? err.message : String(err);
     const payload: NetworkErrorPayload = { code: "NETWORK_ERROR", message };
+    markApiUnreachable(getApiBase(), message);
 
     return new Response(JSON.stringify(payload), {
       status: 503,

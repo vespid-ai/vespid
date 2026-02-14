@@ -1,12 +1,15 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { CodeBlock } from "../../../../components/ui/code-block";
 import { Badge } from "../../../../components/ui/badge";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
+import { DataTable } from "../../../../components/ui/data-table";
+import { EmptyState } from "../../../../components/ui/empty-state";
+import { Input } from "../../../../components/ui/input";
 import { Separator } from "../../../../components/ui/separator";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
@@ -38,9 +41,95 @@ export default function AgentsPage() {
 
   const canOperate = Boolean(orgId);
 
+  const columns = useMemo(() => {
+    return [
+      {
+        header: t("agents.table.agent"),
+        accessorKey: "id",
+        cell: ({ row }: any) => {
+          const agent = row.original;
+          return (
+            <div className="min-w-0">
+              <div className="truncate font-medium text-text">{agent.name ?? agent.id.slice(0, 8)}</div>
+              <div className="truncate font-mono text-xs text-muted">{agent.id}</div>
+              {agent.reportedTags && agent.reportedTags.length > 0 ? (
+                <div className="mt-1 truncate text-[11px] text-muted">reported: {agent.reportedTags.join(", ")}</div>
+              ) : null}
+            </div>
+          );
+        },
+      },
+      {
+        header: t("agents.table.status"),
+        accessorKey: "status",
+        cell: ({ row }: any) => <Badge variant={statusVariant(row.original.status)}>{row.original.status}</Badge>,
+      },
+      {
+        header: t("agents.table.lastSeen"),
+        accessorKey: "lastSeenAt",
+        cell: ({ row }: any) => <span className="text-muted">{row.original.lastSeenAt ?? "-"}</span>,
+      },
+      {
+        header: t("agents.table.created"),
+        accessorKey: "createdAt",
+        cell: ({ row }: any) => <span className="text-muted">{row.original.createdAt ?? "-"}</span>,
+      },
+      {
+        header: t("agents.table.tags"),
+        id: "tags",
+        cell: ({ row }: any) => {
+          const agent = row.original;
+          const draft = tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",");
+          return (
+            <div className="flex min-w-[340px] flex-wrap items-center gap-2">
+              <Input
+                className="h-8 text-xs"
+                placeholder="e.g. west,group:alpha"
+                value={draft}
+                onChange={(e) =>
+                  setTagsDraftByAgentId((prev) => ({
+                    ...prev,
+                    [agent.id]: e.target.value,
+                  }))
+                }
+              />
+              <Button
+                size="sm"
+                onClick={async () => {
+                  if (!orgId) return;
+                  const raw = (tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",")).trim();
+                  const tags = raw
+                    .split(",")
+                    .map((tag: string) => tag.trim())
+                    .filter((tag: string) => tag.length > 0);
+                  await updateTags.mutateAsync({ agentId: agent.id, tags });
+                  toast.success(t("agents.tagsUpdated"));
+                }}
+                disabled={!canOperate || updateTags.isPending}
+              >
+                {t("common.save")}
+              </Button>
+              <ConfirmButton
+                title="Revoke agent"
+                description="This will prevent the agent from executing future jobs."
+                confirmText={t("agents.revoke")}
+                onConfirm={async () => {
+                  await revoke.mutateAsync(agent.id);
+                  toast.success(t("agents.agentRevoked"));
+                }}
+              >
+                {t("agents.revoke")}
+              </ConfirmButton>
+            </div>
+          );
+        },
+      },
+    ] as const;
+  }, [canOperate, orgId, revoke, t, tagsDraftByAgentId, updateTags]);
+
   async function refresh() {
     if (!canOperate) {
-      toast.error("Set an active org first.");
+      toast.error(t("org.requireActive"));
       return;
     }
     await agentsQuery.refetch();
@@ -48,26 +137,26 @@ export default function AgentsPage() {
 
   async function createPairingToken() {
     if (!canOperate) {
-      toast.error("Set an active org first.");
+      toast.error(t("org.requireActive"));
       return;
     }
     const payload = await pairing.mutateAsync();
     setPairingToken(payload.token);
     setPairingExpiresAt(payload.expiresAt);
-    toast.success("Pairing token created");
+    toast.success(t("agents.pairingCreated"));
   }
 
   return (
     <div className="grid gap-4">
       <div>
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("agents.title")}</div>
-        <div className="mt-1 text-sm text-muted">Remote execution agents paired to this organization.</div>
+        <div className="mt-1 text-sm text-muted">{t("agents.subtitle")}</div>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>List</CardTitle>
-          <CardDescription>{orgId ? `Org: ${orgId}` : "Set an active org in the sidebar to load agents."}</CardDescription>
+          <CardTitle>{t("common.list")}</CardTitle>
+          <CardDescription>{orgId ? `Org: ${orgId}` : t("org.requireActive")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">
@@ -77,83 +166,13 @@ export default function AgentsPage() {
             </div>
           </div>
 
-          <div className="mt-4 overflow-hidden rounded-lg border border-border">
-            <div className="grid grid-cols-[1.1fr_0.55fr_0.9fr_0.9fr_1.2fr] gap-0 border-b border-border bg-panel/60 px-3 py-2 text-xs font-medium text-muted">
-              <div>Name</div>
-              <div>Status</div>
-              <div>Last seen</div>
-              <div>Created</div>
-              <div>Tags (control plane)</div>
-            </div>
-
-            {agents.length === 0 ? (
-              <div className="px-3 py-6 text-sm text-muted">No agents yet.</div>
+          <div className="mt-4">
+            {agentsQuery.isLoading ? (
+              <EmptyState title={t("common.loading")} />
+            ) : agents.length === 0 ? (
+              <EmptyState title={t("agents.noAgentsTitle")} description={t("agents.noAgentsDescription")} />
             ) : (
-              agents.map((agent) => (
-                <div
-                  key={agent.id}
-                  className="grid grid-cols-[1.1fr_0.55fr_0.9fr_0.9fr_1.2fr] gap-0 px-3 py-3 text-sm"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-text">{agent.name}</div>
-                    <div className="truncate text-xs text-muted">{agent.id}</div>
-                    {agent.reportedTags && agent.reportedTags.length > 0 ? (
-                      <div className="mt-1 truncate text-[11px] text-muted">
-                        reported: {agent.reportedTags.join(", ")}
-                      </div>
-                    ) : null}
-                  </div>
-                  <div>
-                    <Badge variant={statusVariant(agent.status)}>{agent.status}</Badge>
-                  </div>
-                  <div className="text-muted">{agent.lastSeenAt ?? "-"}</div>
-                  <div className="text-muted">{agent.createdAt}</div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        className="w-full rounded-md border border-border bg-panel px-2 py-1 text-xs text-text outline-none focus:ring-2 focus:ring-accent/40"
-                        placeholder="e.g. west,group:alpha"
-                        value={tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",")}
-                        onChange={(e) =>
-                          setTagsDraftByAgentId((prev) => ({
-                            ...prev,
-                            [agent.id]: e.target.value,
-                          }))
-                        }
-                      />
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          onClick={async () => {
-                            if (!orgId) return;
-                            const raw = tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",");
-                            const tags = raw
-                              .split(",")
-                              .map((tag) => tag.trim())
-                              .filter((tag) => tag.length > 0);
-                            await updateTags.mutateAsync({ agentId: agent.id, tags });
-                            toast.success("Agent tags updated");
-                          }}
-                          disabled={!canOperate || updateTags.isPending}
-                        >
-                          Save
-                        </Button>
-                        <ConfirmButton
-                          title="Revoke agent"
-                          description="This will prevent the agent from executing future jobs."
-                          confirmText={t("agents.revoke")}
-                          onConfirm={async () => {
-                            await revoke.mutateAsync(agent.id);
-                            toast.success("Agent revoked");
-                          }}
-                        >
-                          {t("agents.revoke")}
-                        </ConfirmButton>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))
+              <DataTable data={agents} columns={columns as any} />
             )}
           </div>
 
@@ -168,11 +187,11 @@ export default function AgentsPage() {
       <Card>
         <CardHeader>
           <CardTitle>{t("agents.pairing")}</CardTitle>
-          <CardDescription>Tokens are displayed only once. They expire in 15 minutes.</CardDescription>
+          <CardDescription>{t("agents.pairingHint")}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <Button variant="accent" onClick={createPairingToken} disabled={!canOperate || pairing.isPending}>
-            Create pairing token
+            {t("agents.createPairingToken")}
           </Button>
 
           {pairingToken ? (

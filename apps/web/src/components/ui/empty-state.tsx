@@ -17,7 +17,7 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        "grid place-items-center rounded-[var(--radius-md)] border border-border bg-panel/30 p-8 text-center",
+        "grid place-items-center rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-8 text-center shadow-elev1",
         className
       )}
     >

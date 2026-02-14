@@ -7,9 +7,10 @@ export function Chip({ className, active, ...props }: ButtonHTMLAttributes<HTMLB
       type="button"
       className={cn(
         "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium",
+        "transition-[box-shadow,background-color,border-color,color] duration-200",
         active
-          ? "border-accent/40 bg-accent/10 text-text"
-          : "border-border bg-panel/40 text-muted hover:bg-panel/70 hover:text-text",
+          ? "border-accent/35 bg-accent/10 text-text shadow-elev1"
+          : "border-borderSubtle bg-panel/30 text-muted hover:bg-panel/50 hover:text-text",
         className
       )}
       {...props}
