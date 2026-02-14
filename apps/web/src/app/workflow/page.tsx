@@ -18,6 +18,9 @@ export default function WorkflowPage() {
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
   const [includeGithub, setIncludeGithub] = useState(false);
   const [runOnNodeAgent, setRunOnNodeAgent] = useState(false);
+  const [agentScript, setAgentScript] = useState("echo hello");
+  const [agentUseDocker, setAgentUseDocker] = useState(true);
+  const [agentAllowNetwork, setAgentAllowNetwork] = useState(false);
   const [githubSecretId, setGithubSecretId] = useState("");
   const [githubRepo, setGithubRepo] = useState("octo/test");
   const [githubTitle, setGithubTitle] = useState("Vespid Issue");
@@ -66,7 +69,14 @@ export default function WorkflowPage() {
     nodes.push({
       id: "node-agent",
       type: "agent.execute",
-      config: { execution: { mode: runOnNodeAgent ? "node" : "cloud" } },
+      config: {
+        execution: { mode: runOnNodeAgent ? "node" : "cloud" },
+        task: { type: "shell", script: agentScript, shell: "sh" },
+        sandbox: {
+          ...(runOnNodeAgent ? { backend: agentUseDocker ? "docker" : "host" } : {}),
+          ...(runOnNodeAgent ? { network: agentAllowNetwork ? "enabled" : "none" } : {}),
+        },
+      },
     });
 
     const response = await apiFetch(
@@ -223,6 +233,36 @@ export default function WorkflowPage() {
           />
           Run nodes on node-agent (remote)
         </label>
+
+        {runOnNodeAgent ? (
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            <label htmlFor="agent-script">Agent script (sh)</label>
+            <textarea
+              id="agent-script"
+              value={agentScript}
+              onChange={(event) => setAgentScript(event.target.value)}
+              rows={4}
+            />
+
+            <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={agentUseDocker}
+                onChange={(event) => setAgentUseDocker(event.target.checked)}
+              />
+              Use docker sandbox (agent.execute)
+            </label>
+
+            <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={agentAllowNetwork}
+                onChange={(event) => setAgentAllowNetwork(event.target.checked)}
+              />
+              Allow network (agent.execute)
+            </label>
+          </div>
+        ) : null}
 
         {includeGithub ? (
           <div style={{ display: "grid", gap: "0.5rem" }}>

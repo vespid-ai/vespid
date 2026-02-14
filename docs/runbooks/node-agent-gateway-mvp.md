@@ -52,6 +52,34 @@ Notes:
 3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.
 4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
 
+## Docker Sandbox (agent.execute)
+`agent.execute` supports an optional shell task payload. When `execution.mode="node"` and the node-agent is configured for Docker, the task runs inside a hardened container.
+
+Agent prerequisites:
+- Docker is installed and the agent user can run `docker` (e.g. in the `docker` group on Linux).
+
+Recommended env:
+- `VESPID_AGENT_EXEC_BACKEND=docker`
+- `VESPID_AGENT_WORKDIR_ROOT=~/.vespid/workdir`
+- `VESPID_AGENT_DOCKER_IMAGE=node:24-alpine`
+- `VESPID_AGENT_DOCKER_NETWORK_DEFAULT=none` (default; opt-in per node to enable network)
+
+Limits (Strict profile defaults):
+- `VESPID_AGENT_DOCKER_TIMEOUT_MS=30000`
+- `VESPID_AGENT_DOCKER_MEMORY_MB=256`
+- `VESPID_AGENT_DOCKER_CPUS=1`
+- `VESPID_AGENT_DOCKER_PIDS=256`
+- `VESPID_AGENT_DOCKER_OUTPUT_MAX_CHARS=65536`
+
+Workdir notes:
+- The agent mounts a per-run directory under `VESPID_AGENT_WORKDIR_ROOT` as `/work` (read-write).
+- The container root filesystem is read-only; only `/work` and `/tmp` are writable.
+
+LLM credential pass-through:
+- The node config may include `sandbox.envPassthroughAllowlist: ["OPENAI_API_KEY"]`.
+- The agent copies only allowlisted env keys from the agent process into the container environment.
+- Keys are not logged by Vespid components, but task scripts can still print/exfiltrate them; treat scripts as trusted.
+
 ## Troubleshooting
 - `503 NO_AGENT_AVAILABLE`:
   - No connected agents exist for the organization.

@@ -6,6 +6,25 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.cron"), config: z.object({ cron: z.string().min(1) }) }),
 ]);
 
+const agentExecuteTaskSchema = z.object({
+  type: z.literal("shell"),
+  script: z.string().min(1).max(200_000),
+  shell: z.enum(["sh", "bash"]).optional(),
+  env: z.record(z.string().min(1), z.string()).optional(),
+});
+
+const agentExecuteSandboxSchema = z.object({
+  backend: z.enum(["docker", "host", "provider"]).optional(),
+  network: z.enum(["none", "enabled"]).optional(),
+  timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
+  docker: z
+    .object({
+      image: z.string().min(1).optional(),
+    })
+    .optional(),
+  envPassthroughAllowlist: z.array(z.string().min(1)).max(50).optional(),
+});
+
 export const workflowNodeSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1), type: z.literal("http.request") }),
   z.object({
@@ -18,6 +37,8 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
             mode: z.enum(["cloud", "node"]).default("cloud"),
           })
           .optional(),
+        task: agentExecuteTaskSchema.optional(),
+        sandbox: agentExecuteSandboxSchema.optional(),
       })
       .optional(),
   }),

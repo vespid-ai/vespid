@@ -403,6 +403,11 @@ export async function processWorkflowRunJob(
         }
 
         if (node.type === "agent.execute") {
+          const nodeTimeoutMs =
+            typeof node.config?.sandbox?.timeoutMs === "number" && Number.isFinite(node.config.sandbox.timeoutMs)
+              ? node.config.sandbox.timeoutMs
+              : nodeExecTimeoutMs;
+
           const dispatchInput = {
             organizationId: job.data.organizationId,
             requestedByUserId: job.data.requestedByUserId,
@@ -415,8 +420,11 @@ export async function processWorkflowRunJob(
             payload: {
               nodeId: node.id,
               node,
+              runId: job.data.runId,
+              workflowId: job.data.workflowId,
+              attemptCount,
             },
-            timeoutMs: nodeExecTimeoutMs,
+            timeoutMs: nodeTimeoutMs,
           };
 
           const dispatched = await dispatchViaGatewayAsync(dispatchInput);
@@ -442,7 +450,7 @@ export async function processWorkflowRunJob(
               blockedNodeId: node.id,
               blockedNodeType: node.type,
               blockedKind: "agent.execute",
-              blockedTimeoutAt: new Date(Date.now() + nodeExecTimeoutMs),
+              blockedTimeoutAt: new Date(Date.now() + nodeTimeoutMs),
               output: buildProgressOutput(steps),
             })
           );
