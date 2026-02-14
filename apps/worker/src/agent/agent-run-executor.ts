@@ -51,13 +51,30 @@ const agentRunNodeSchema = z.object({
   type: z.literal("agent.run"),
   config: z.object({
     llm: z.object({
-      provider: z.literal("openai"),
+      provider: z.enum(["openai", "anthropic"]).default("openai"),
       model: z.string().min(1).max(120),
       auth: z.object({
         secretId: z.string().uuid().optional(),
         fallbackToEnv: z.literal(true).optional(),
       }),
     }),
+    execution: z
+      .object({
+        mode: z.enum(["cloud", "node"]).default("cloud"),
+        selector: z
+          .union([
+            z.object({ tag: z.string().min(1).max(64) }),
+            z.object({ agentId: z.string().uuid() }),
+            z.object({ group: z.string().min(1).max(64) }),
+          ])
+          .optional(),
+      })
+      .default({ mode: "cloud" }),
+    engine: z
+      .object({
+        id: z.enum(["vespid.loop.v1", "claude.agent-sdk.v1", "codex.sdk.v1"]).default("vespid.loop.v1"),
+      })
+      .optional(),
     prompt: z.object({
       system: z.string().max(200_000).optional(),
       instructions: z.string().min(1).max(200_000),
@@ -142,6 +159,109 @@ export function createAgentRunExecutor(input: {
 
       const effectiveAllow = team ? unique([...leadEffectiveAllow, "team.delegate", "team.map"]) : unique(leadEffectiveAllow);
 
+      const execution = node.config.execution ?? { mode: "cloud" as const };
+      const engineId = node.config.engine?.id ?? "vespid.loop.v1";
+
+      if (engineId !== "vespid.loop.v1" && execution.mode !== "node") {
+        return { status: "failed", error: "AGENT_ENGINE_REQUIRES_NODE_EXECUTION" };
+      }
+
+      if (execution.mode === "node") {
+        // Resume path: the continuation worker stores the remote result under runtime.pendingRemoteResult.
+        if (context.pendingRemoteResult) {
+          const pending = context.pendingRemoteResult as any;
+          const remote = pending && typeof pending === "object" && "result" in pending ? (pending as any).result : pending;
+          if (remote && typeof remote === "object" && (remote as any).status === "succeeded") {
+            return {
+              status: "succeeded",
+              output: (remote as any).output ?? null,
+              runtime:
+                context.runtime && typeof context.runtime === "object"
+                  ? { ...(context.runtime as any), pendingRemoteResult: null }
+                  : { pendingRemoteResult: null },
+            };
+          }
+          if (remote && typeof remote === "object" && (remote as any).status === "failed") {
+            return {
+              status: "failed",
+              error: (remote as any).error ?? "REMOTE_EXECUTION_FAILED",
+              runtime:
+                context.runtime && typeof context.runtime === "object"
+                  ? { ...(context.runtime as any), pendingRemoteResult: null }
+                  : { pendingRemoteResult: null },
+            };
+          }
+          return { status: "failed", error: "REMOTE_RESULT_INVALID" };
+        }
+
+        const llmApiKey =
+          node.config.llm.auth.secretId
+            ? await input.loadSecretValue({
+                organizationId: context.organizationId,
+                userId: context.requestedByUserId,
+                secretId: node.config.llm.auth.secretId,
+              })
+            : null;
+
+        const connectorSecretsByConnectorId: Record<string, string> = {};
+        if (toolAuthDefaults?.connectors) {
+          for (const [connectorId, auth] of Object.entries(toolAuthDefaults.connectors)) {
+            const value = await input.loadSecretValue({
+              organizationId: context.organizationId,
+              userId: context.requestedByUserId,
+              secretId: auth.secretId,
+            });
+            if (value && value.trim().length > 0) {
+              connectorSecretsByConnectorId[connectorId] = value;
+            }
+          }
+        }
+
+        const selector = execution.selector ?? null;
+        const timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, node.config.limits.timeoutMs));
+
+        const nodeForRemote = {
+          ...node,
+          config: {
+            ...node.config,
+            tools: {
+              ...node.config.tools,
+              allow: effectiveAllow,
+            },
+          },
+        };
+
+        return {
+          status: "blocked",
+          block: {
+            kind: "agent.run",
+            payload: {
+              nodeId: node.id,
+              node: nodeForRemote,
+              policyToolsAllow: policyToolAllow,
+              effectiveToolsAllow: effectiveAllow,
+              runId: context.runId,
+              workflowId: context.workflowId,
+              attemptCount: context.attemptCount,
+              ...(context.runInput !== undefined ? { runInput: context.runInput } : {}),
+              ...(context.steps !== undefined ? { steps: context.steps } : {}),
+              ...(context.organizationSettings !== undefined ? { organizationSettings: context.organizationSettings } : {}),
+              env: { githubApiBaseUrl: input.githubApiBaseUrl },
+              secrets: {
+                ...(llmApiKey && llmApiKey.trim().length > 0 ? { llmApiKey } : {}),
+                ...(Object.keys(connectorSecretsByConnectorId).length > 0
+                  ? { connectorSecretsByConnectorId }
+                  : {}),
+              },
+            },
+            ...(selector && typeof selector === "object" && "tag" in selector ? { selectorTag: (selector as any).tag } : {}),
+            ...(selector && typeof selector === "object" && "agentId" in selector ? { selectorAgentId: (selector as any).agentId } : {}),
+            ...(selector && typeof selector === "object" && "group" in selector ? { selectorGroup: (selector as any).group } : {}),
+            timeoutMs,
+          },
+        };
+      }
+
       return await runAgentLoop({
         organizationId: context.organizationId,
         workflowId: context.workflowId,
@@ -159,7 +279,7 @@ export function createAgentRunExecutor(input: {
         loadSecretValue: input.loadSecretValue,
         fetchImpl,
         config: {
-          llm: { model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
+          llm: { provider: node.config.llm.provider, model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
           prompt: normalizePrompt(node.config.prompt),
           tools: {
             allow: effectiveAllow,
@@ -177,7 +297,7 @@ export function createAgentRunExecutor(input: {
           team,
           parent: {
             nodeId: node.id,
-            llm: { model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
+            llm: { provider: node.config.llm.provider, model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
             policyToolAllow,
             runInput: context.runInput ?? null,
             steps: context.steps ?? [],

@@ -124,7 +124,7 @@ export async function processContinuationPayload(input: {
   payload: WorkflowContinuationJobPayload;
 }): Promise<void> {
   const payload = input.payload;
-  if (payload.type !== "remote.poll" && payload.type !== "remote.apply") {
+  if (payload.type !== "remote.poll" && payload.type !== "remote.apply" && payload.type !== "remote.event") {
     return;
   }
 
@@ -170,6 +170,29 @@ export async function processContinuationPayload(input: {
         workflowId: payload.workflowId,
         runId: payload.runId,
         error: "REMOTE_RESULT_APPLY_FAILED",
+      })
+    );
+    return;
+  }
+
+  if (payload.type === "remote.event") {
+    const maxRemoteEventChars = Math.min(
+      200_000,
+      Math.max(256, envNumber("WORKFLOW_REMOTE_EVENT_PAYLOAD_MAX_CHARS", 20_000))
+    );
+
+    await withTenantContext(input.pool, actor, async (tenantDb) =>
+      appendWorkflowRunEvent(tenantDb, {
+        organizationId: payload.organizationId,
+        workflowId: payload.workflowId,
+        runId: payload.runId,
+        attemptCount: payload.attemptCount,
+        eventType: "remote_event",
+        nodeId: node.id,
+        nodeType: node.type,
+        level: payload.event.level,
+        message: payload.event.kind,
+        payload: summarizeForEvent(payload.event, maxRemoteEventChars),
       })
     );
     return;

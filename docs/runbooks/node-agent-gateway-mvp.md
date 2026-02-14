@@ -2,7 +2,7 @@
 
 This runbook documents the MVP remote execution stack:
 - `apps/gateway`: routes execution requests to connected node-agents.
-- `apps/node-agent`: connects to gateway over WebSocket and executes `connector.action` and `agent.execute` nodes.
+- `apps/node-agent`: connects to gateway over WebSocket and executes `connector.action`, `agent.execute`, and node-executed `agent.run` nodes.
 
 The goal is to support private-network or customer-controlled runtime execution while keeping tenancy strict and secrets safe.
 
@@ -24,6 +24,7 @@ Gateway:
 - `GATEWAY_HTTP_URL` (default `http://localhost:3002`)
 - `GATEWAY_WS_URL` (default `ws://localhost:3002/ws`)
 - `GATEWAY_RESULTS_TTL_SEC` (default `900`; stores execution results for recovery across gateway restarts)
+- `GATEWAY_CONTINUATION_PUSH` (default `1`; when enabled and `REDIS_URL` is set, gateway pushes remote execution updates to the worker continuation queue)
 
 Worker:
 - `NODE_EXEC_TIMEOUT_MS` (default `60000`)
@@ -60,6 +61,11 @@ Notes:
 3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.
 4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
 
+Streaming notes:
+- When `GATEWAY_CONTINUATION_PUSH=1` and `REDIS_URL` is configured, node-agents may stream remote execution events while a run is blocked.
+- These are persisted as `workflow_run_events.event_type="remote_event"` and can be used to drive interactive UIs.
+- To control payload size, set `WORKFLOW_REMOTE_EVENT_PAYLOAD_MAX_CHARS` in the worker (default `20000`).
+
 Targeting notes:
 - To target a group, set `execution.selector.group = "<name>"` and ensure the agent is configured with the control-plane tag `group:<name>`.
 - To target a tag, set `execution.selector.tag = "<tag>"` and ensure the agent is configured with the control-plane tag `<tag>`.
@@ -77,7 +83,7 @@ Control-plane tags are authoritative:
 
 ## Agent Capabilities (MVP)
 Agents declare capabilities in the WS `hello` message:
-- `kinds`: `["connector.action", "agent.execute"]`
+- `kinds`: `["connector.action", "agent.execute", "agent.run"]`
 - `connectors`: optional list of connector IDs the agent can execute (used for `connector.action` routing)
 - `tags`: optional list of tags, treated as a capability hint (`reportedTags`) for operator visibility
 - `maxInFlight`: optional integer concurrency hint (default 10)
@@ -109,6 +115,53 @@ LLM credential pass-through:
 - The node config may include `sandbox.envPassthroughAllowlist: ["OPENAI_API_KEY"]`.
 - The agent copies only allowlisted env keys from the agent process into the container environment.
 - Keys are not logged by Vespid components, but task scripts can still print/exfiltrate them; treat scripts as trusted.
+
+## Host Sandbox (agent.execute / shell.run / skills)
+For environments where Docker is not available, the node-agent can execute shell tasks directly on the host.
+
+Recommended env:
+- `VESPID_AGENT_EXEC_BACKEND=host` (default)
+- `VESPID_AGENT_WORKDIR_ROOT=~/.vespid/workdir`
+- `VESPID_AGENT_HOST_OUTPUT_MAX_CHARS=65536`
+- `VESPID_AGENT_HOST_KILL_GRACE_MS=500`
+
+Notes:
+- `networkMode: "none"` is not enforceable on the host backend. Requests with `networkMode="none"` fail with `HOST_NETWORK_MODE_UNSUPPORTED`.
+- Host execution only passes a minimal environment by default, plus `envPassthroughAllowlist` keys and per-task env overrides.
+
+## Local Skills Directory (node-agent)
+Node-agents can expose local skills as tools for `agent.run` (node execution).
+
+Env:
+- `VESPID_AGENT_SKILLS_DIR=~/.vespid/skills`
+
+Each skill directory must contain `skill.json` and may include `SKILL.md`:
+- `<skillsDir>/<skillId>/skill.json`
+- `<skillsDir>/<skillId>/SKILL.md` (optional)
+- `<skillsDir>/<skillId>/scripts/...` (optional)
+
+Skill tools are addressed as `skill.<skillId>` and must be explicitly allowlisted in the workflow node (`tools.allow`).
+
+## External Engines (CLI-first)
+Some engines require locally installed CLIs on the node-agent machine.
+
+Claude Agent SDK engine:
+- Engine id: `claude.agent-sdk.v1`
+- Requires the Claude Code executable.
+- Env:
+  - `VESPID_CLAUDE_CODE_PATH=/absolute/path/to/claude` (recommended), or ensure `claude` is in `PATH`.
+
+Codex engine:
+- Engine id: `codex.sdk.v1`
+- Requires the OpenAI Codex CLI.
+- Env:
+  - `VESPID_CODEX_PATH=/absolute/path/to/codex` (recommended), or ensure `codex` is in `PATH`.
+
+## MCP (Future)
+MCP server configuration is not enabled by default yet.
+
+Placeholder env (no effect today):
+- `VESPID_AGENT_MCP_CONFIG=/absolute/path/to/mcp.json`
 
 ## Troubleshooting
 - `503 NO_AGENT_AVAILABLE`:

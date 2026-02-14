@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { ExecuteShellTaskContext, SandboxBackend, SandboxExecuteResult, SandboxNetworkMode } from "./types.js";
-import { assertSubpath, ensureDir, resolveHome, sha256Hex, truncateString } from "./util.js";
+import { sha256Hex, truncateString } from "./util.js";
 import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import { resolveRunWorkdirHostPath } from "./workdir.js";
 
 type DockerLimits = {
   timeoutMs: number;
@@ -39,11 +40,6 @@ function defaultNetwork(): SandboxNetworkMode {
 
 function defaultImage(): string {
   return process.env.VESPID_AGENT_DOCKER_IMAGE ?? "node:24-alpine";
-}
-
-function resolveWorkdirRoot(): string {
-  const raw = process.env.VESPID_AGENT_WORKDIR_ROOT ?? "~/.vespid/workdir";
-  return resolveHome(raw);
 }
 
 function buildContainerName(requestId: string): string {
@@ -172,15 +168,13 @@ async function runDocker(
 
 export function createDockerBackend(): SandboxBackend {
   const limits = defaultLimits();
-  const workdirRoot = resolveWorkdirRoot();
-
   async function resolveWorkdirHostPath(ctx: ExecuteShellTaskContext): Promise<string> {
-    const attempt = ctx.attemptCount ?? 1;
-    const workdir = path.join(workdirRoot, ctx.organizationId, ctx.runId ?? "run", ctx.nodeId, String(attempt));
-    const resolvedRoot = path.resolve(workdirRoot);
-    const resolvedWorkdir = path.resolve(workdir);
-    assertSubpath(resolvedRoot, resolvedWorkdir);
-    await ensureDir(resolvedWorkdir);
+    const resolvedWorkdir = await resolveRunWorkdirHostPath({
+      organizationId: ctx.organizationId,
+      runId: ctx.runId,
+      nodeId: ctx.nodeId,
+      attemptCount: ctx.attemptCount,
+    });
     // Ensure the container user can write even when uid/gid doesn't match.
     try {
       await fs.chmod(resolvedWorkdir, 0o777);

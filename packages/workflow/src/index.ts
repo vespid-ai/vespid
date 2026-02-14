@@ -27,12 +27,24 @@ const agentExecuteSandboxSchema = z.object({
   envPassthroughAllowlist: z.array(z.string().min(1)).max(50).optional(),
 });
 
+const nodeExecutionSelectorSchema = z.union([
+  z.object({
+    tag: z.string().min(1).max(64),
+  }),
+  z.object({
+    agentId: z.string().uuid(),
+  }),
+  z.object({
+    group: z.string().min(1).max(64),
+  }),
+]);
+
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
   config: z.object({
     llm: z.object({
-      provider: z.literal(defaultAgentLlmProvider).default(defaultAgentLlmProvider),
+      provider: z.enum(["openai", "anthropic"]).default(defaultAgentLlmProvider),
       model: z.string().min(1).max(120).default("gpt-4.1-mini"),
       auth: z
         .object({
@@ -42,6 +54,17 @@ const agentRunNodeSchema = z.object({
         })
         .default({ fallbackToEnv: true }),
     }),
+    execution: z
+      .object({
+        mode: z.enum(["cloud", "node"]).default("cloud"),
+        selector: nodeExecutionSelectorSchema.optional(),
+      })
+      .default({ mode: "cloud" }),
+    engine: z
+      .object({
+        id: z.enum(["vespid.loop.v1", "claude.agent-sdk.v1", "codex.sdk.v1"]).default("vespid.loop.v1"),
+      })
+      .optional(),
     prompt: z.object({
       system: z.string().max(200_000).optional(),
       instructions: z.string().min(1).max(200_000),
@@ -137,20 +160,18 @@ const agentRunNodeSchema = z.object({
           .max(32),
       })
       .optional(),
-  }),
+  })
+    .superRefine((value, ctx) => {
+      const engineId = value.engine?.id ?? "vespid.loop.v1";
+      if (engineId !== "vespid.loop.v1" && value.execution.mode !== "node") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "agent.run engine requires execution.mode=node",
+          path: ["execution", "mode"],
+        });
+      }
+    }),
 });
-
-const nodeExecutionSelectorSchema = z.union([
-  z.object({
-    tag: z.string().min(1).max(64),
-  }),
-  z.object({
-    agentId: z.string().uuid(),
-  }),
-  z.object({
-    group: z.string().min(1).max(64),
-  }),
-]);
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1), type: z.literal("http.request") }),

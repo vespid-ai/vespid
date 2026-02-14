@@ -126,16 +126,16 @@ async function pairAgent(input: {
   const response = await fetch(url.toString(), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      pairingToken: input.pairingToken,
-      name: input.name,
-      agentVersion: input.agentVersion,
-      capabilities: {
-        kinds: ["connector.action", "agent.execute"],
-        ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
-      },
-    }),
-  });
+      body: JSON.stringify({
+        pairingToken: input.pairingToken,
+        name: input.name,
+        agentVersion: input.agentVersion,
+        capabilities: {
+          kinds: ["connector.action", "agent.execute", "agent.run"],
+          ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+        },
+      }),
+    });
   const payload = await response.json();
   if (!response.ok) {
     const code = (payload as { code?: unknown }).code;
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
       name,
       agentVersion,
       capabilities: {
-        kinds: ["connector.action", "agent.execute"],
+        kinds: ["connector.action", "agent.execute", "agent.run"],
         ...(parsed.tags && parsed.tags.length > 0 ? { tags: parsed.tags } : {}),
       },
     };

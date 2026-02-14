@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
 import { REMOTE_EXEC_ERROR, isRemoteExecErrorCode, type GatewayAgentHelloMessage, type GatewayAgentPingMessage, type GatewayServerExecuteMessage } from "@vespid/shared";
 import { resolveSandboxBackend, type SandboxBackend } from "./sandbox/index.js";
+import { executeAgentRun } from "./agent-run/execute-agent-run.js";
 
 export type NodeAgentConfig = {
   agentId: string;
@@ -131,6 +132,37 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
   async function handleExecute(ws: WebSocket, incoming: GatewayServerExecuteMessage, sandbox: SandboxBackend) {
     const requestId = incoming.requestId;
     try {
+      if (incoming.kind === "agent.run") {
+        let seq = 0;
+        const emitEvent = (event: { ts: number; kind: string; level: "info" | "warn" | "error"; message?: string; payload?: unknown }) => {
+          seq += 1;
+          safeSend(ws, {
+            type: "execute_event",
+            requestId,
+            event: {
+              seq,
+              ts: typeof event.ts === "number" ? event.ts : Date.now(),
+              kind: event.kind,
+              level: event.level,
+              ...(typeof event.message === "string" ? { message: event.message } : {}),
+              ...(event.payload !== undefined ? { payload: event.payload } : {}),
+            },
+          });
+        };
+
+        const result = await executeAgentRun({
+          requestId,
+          incoming,
+          sandbox,
+          emitEvent,
+        });
+        pendingResults.set(requestId, result);
+        if (safeSend(ws, result)) {
+          pendingResults.delete(requestId);
+        }
+        return;
+      }
+
       if (incoming.kind === "agent.execute") {
         const payload = z
           .object({
@@ -342,17 +374,17 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           return;
         }
 
-        const parsed = z
-          .object({
-            type: z.literal("execute"),
-            requestId: z.string().min(1),
-            organizationId: z.string().uuid(),
-            userId: z.string().uuid(),
-            kind: z.enum(["connector.action", "agent.execute"]),
-            payload: z.unknown(),
-            secret: z.string().min(1).optional(),
-          })
-          .safeParse(message) as { success: boolean; data?: GatewayServerExecuteMessage };
+      const parsed = z
+        .object({
+          type: z.literal("execute"),
+          requestId: z.string().min(1),
+          organizationId: z.string().uuid(),
+          userId: z.string().uuid(),
+          kind: z.enum(["connector.action", "agent.execute", "agent.run"]),
+          payload: z.unknown(),
+          secret: z.string().min(1).optional(),
+        })
+        .safeParse(message) as { success: boolean; data?: GatewayServerExecuteMessage };
 
         if (!parsed.success || !parsed.data) {
           return;

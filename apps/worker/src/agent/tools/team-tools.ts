@@ -69,6 +69,7 @@ const teamConfigSchema = z.object({
   parent: z.object({
     nodeId: z.string().min(1),
     llm: z.object({
+      provider: z.enum(["openai", "anthropic"]).default("openai"),
       model: z.string().min(1).max(120),
       auth: z.object({ secretId: z.string().uuid().optional(), fallbackToEnv: z.literal(true).optional() }),
     }),
@@ -159,6 +160,7 @@ async function runDelegate(input: {
     fetchImpl: input.ctx.fetchImpl,
     config: {
       llm: {
+        provider: input.team.parent.llm.provider,
         model: teammate.llm?.model ?? input.team.parent.llm.model,
         auth: normalizeLlmAuth(input.team.parent.llm.auth),
       },

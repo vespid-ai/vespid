@@ -1,4 +1,5 @@
 export type SandboxNetworkMode = "none" | "enabled";
+export type SandboxBackendId = "docker" | "host" | "provider";
 
 export type ExecuteShellTaskContext = {
   requestId: string;
@@ -11,6 +12,7 @@ export type ExecuteShellTaskContext = {
   script: string;
   shell: "sh" | "bash";
   taskEnv: Record<string, string>;
+  backend?: SandboxBackendId | null;
   networkMode: SandboxNetworkMode | null;
   timeoutMs: number | null;
   dockerImage: string | null;
@@ -25,4 +27,3 @@ export interface SandboxBackend {
   executeShellTask(ctx: ExecuteShellTaskContext): Promise<SandboxExecuteResult>;
   close(): Promise<void>;
 }
-

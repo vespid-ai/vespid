@@ -22,6 +22,7 @@ describe("workflow dsl", () => {
           type: "agent.run",
           config: {
             llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            execution: { mode: "cloud" },
             prompt: { instructions: "Say hello." },
             tools: {
               allow: [],
@@ -50,6 +51,53 @@ describe("workflow dsl", () => {
     });
 
     expect(parsed.nodes[0]?.type).toBe("agent.run");
+  });
+
+  it("accepts agent.run with anthropic provider and node execution selector", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            llm: { provider: "anthropic", model: "claude-3-5-sonnet-latest", auth: { fallbackToEnv: true } },
+            execution: { mode: "node", selector: { tag: "west" } },
+            prompt: { instructions: "Say hello." },
+            tools: { allow: [], execution: "cloud" },
+            limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+            output: { mode: "text" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
+  });
+
+  it("rejects external engine when execution.mode is not node", () => {
+    expect(() =>
+      workflowDslSchema.parse({
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [
+          {
+            id: "n1",
+            type: "agent.run",
+            config: {
+              llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+              execution: { mode: "cloud" },
+              engine: { id: "codex.sdk.v1" },
+              prompt: { instructions: "Say hello." },
+              tools: { allow: [], execution: "cloud" },
+              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+              output: { mode: "text" },
+            },
+          },
+        ],
+      })
+    ).toThrow();
   });
 
   it("accepts agent.run when tools.allow is empty", () => {

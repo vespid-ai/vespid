@@ -111,5 +111,30 @@ describe("continuation worker", () => {
       })
     );
   });
-});
 
+  it("stores remote events without clearing the block", async () => {
+    const runQueue = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    const pool = {} as any;
+
+    await processContinuationPayload({
+      pool,
+      runQueue,
+      payload: {
+        type: "remote.event",
+        organizationId: "org-1",
+        workflowId: "wf-1",
+        runId: "run-1",
+        requestId: "req-1",
+        attemptCount: 1,
+        event: { seq: 1, ts: Date.now(), kind: "agent.assistant", level: "info", payload: { content: "hi" } },
+      },
+    });
+
+    expect(dbMocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: "remote_event", nodeId: "n1", message: "agent.assistant" })
+    );
+    expect(dbMocks.clearWorkflowRunBlock).not.toHaveBeenCalled();
+    expect(runQueue.enqueue).not.toHaveBeenCalled();
+  });
+});

@@ -515,7 +515,7 @@ export async function processWorkflowRunJob(
           throw new Error("INVALID_BLOCK_RESULT");
         }
         const kind = nodeResult.block.kind;
-        if (kind !== "agent.execute" && kind !== "connector.action") {
+        if (kind !== "agent.execute" && kind !== "connector.action" && kind !== "agent.run") {
           throw new Error("INVALID_BLOCK_KIND");
         }
 

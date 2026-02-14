@@ -9,6 +9,7 @@ import type {
   GatewayAgentHelloMessage,
   GatewayAgentPingMessage,
   GatewayAgentExecuteResultMessage,
+  GatewayAgentExecuteEventMessage,
   GatewayServerExecuteMessage,
   GatewayDispatchRequest,
   GatewayDispatchResponse,
@@ -56,7 +57,7 @@ function normalizeCapabilities(input: Record<string, unknown> | null): AgentCapa
   const kindsRaw = input?.["kinds"];
   const kindsList = Array.isArray(kindsRaw) ? kindsRaw.filter((item): item is string => typeof item === "string") : [];
   // Backward-compatible default: if kinds not provided, assume it can handle any kind (MVP).
-  const kinds = kindsList.length > 0 ? kindsList : ["connector.action", "agent.execute"];
+  const kinds = kindsList.length > 0 ? kindsList : ["connector.action", "agent.execute", "agent.run"];
 
   const connectorsRaw = input?.["connectors"];
   const connectorsList = Array.isArray(connectorsRaw)
@@ -84,7 +85,7 @@ const dispatchRequestSchema = z.object({
   nodeId: z.string().min(1),
   nodeType: z.string().min(1),
   attemptCount: z.number().int().min(1).max(1000),
-  kind: z.enum(["connector.action", "agent.execute"]),
+  kind: z.enum(["connector.action", "agent.execute", "agent.run"]),
   payload: z.unknown(),
   secret: z.string().min(1).optional(),
   selectorTag: z.string().min(1).max(64).optional(),
@@ -347,7 +348,7 @@ export async function buildGatewayServer(input?: {
 
   async function selectDispatchAgent(input: {
     organizationId: string;
-    kind: "connector.action" | "agent.execute";
+    kind: "connector.action" | "agent.execute" | "agent.run";
     connectorId?: string | null;
     selectorTag?: string | null;
     selectorAgentId?: string | null;
@@ -834,6 +835,77 @@ export async function buildGatewayServer(input?: {
         clearTimeout(pending.timeout);
         pendingByRequestId.delete(parsed.data.requestId);
         pending.resolve(result);
+        return;
+      }
+
+      if (type === "execute_event") {
+        const parsed = z
+          .object({
+            type: z.literal("execute_event"),
+            requestId: z.string().min(1),
+            event: z.object({
+              seq: z.number().int().min(0),
+              ts: z.number(),
+              kind: z.string().min(1).max(200),
+              level: z.enum(["info", "warn", "error"]),
+              message: z.string().min(1).max(500).optional(),
+              payload: z.unknown().optional(),
+            }),
+          })
+          .safeParse(message) as { success: boolean; data?: GatewayAgentExecuteEventMessage };
+
+        if (!parsed.success || !parsed.data) {
+          return;
+        }
+
+        agent.lastSeenAtMs = Date.now();
+        await touchAgent(agent.organizationId, agent.agentId);
+
+        if (!metaRedis || !continuationQueue) {
+          return;
+        }
+
+        try {
+          const raw = await metaRedis.get(metaKey(parsed.data.requestId));
+          if (!raw) {
+            server.log.info({
+              event: "gateway_event_meta_missing",
+              orgId: agent.organizationId,
+              agentId: agent.agentId,
+              requestId: parsed.data.requestId,
+            });
+            return;
+          }
+          const parsedMeta = gatewayDispatchMetaSchema.safeParse(JSON.parse(raw) as unknown);
+          if (!parsedMeta.success) {
+            server.log.warn({
+              event: "gateway_event_meta_invalid",
+              orgId: agent.organizationId,
+              agentId: agent.agentId,
+              requestId: parsed.data.requestId,
+            });
+            return;
+          }
+
+          const payload: WorkflowContinuationJobPayload = {
+            type: "remote.event",
+            organizationId: parsedMeta.data.organizationId,
+            workflowId: parsedMeta.data.workflowId,
+            runId: parsedMeta.data.runId,
+            requestId: parsedMeta.data.requestId,
+            attemptCount: parsedMeta.data.attemptCount,
+            event: parsed.data.event,
+          };
+
+          await continuationQueue.add("continuation", payload, {
+            jobId: `event:${parsed.data.requestId}:${parsed.data.event.seq}`,
+            removeOnComplete: 1000,
+            removeOnFail: 1000,
+          });
+        } catch {
+          // Best-effort: streaming is optional.
+        }
+
         return;
       }
     });

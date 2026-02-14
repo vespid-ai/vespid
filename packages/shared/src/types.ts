@@ -87,7 +87,7 @@ export type WorkflowRunJobPayload = {
   requestedByUserId: string;
 };
 
-export type GatewayExecutionKind = "connector.action" | "agent.execute";
+export type GatewayExecutionKind = "connector.action" | "agent.execute" | "agent.run";
 
 export type GatewayDispatchRequest = {
   organizationId: string;
@@ -112,6 +112,15 @@ export type GatewayDispatchResponse = {
   error?: string;
 };
 
+export type RemoteExecutionEvent = {
+  seq: number;
+  ts: number;
+  kind: string;
+  level: "info" | "warn" | "error";
+  message?: string;
+  payload?: unknown;
+};
+
 export type GatewayAgentHelloMessage = {
   type: "hello";
   agentVersion: string;
@@ -130,6 +139,12 @@ export type GatewayAgentExecuteResultMessage = {
   status: "succeeded" | "failed";
   output?: unknown;
   error?: string;
+};
+
+export type GatewayAgentExecuteEventMessage = {
+  type: "execute_event";
+  requestId: string;
+  event: RemoteExecutionEvent;
 };
 
 export type GatewayServerExecuteMessage = {

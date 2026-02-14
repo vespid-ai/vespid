@@ -57,7 +57,7 @@ function baseCtx(overrides?: Partial<Parameters<typeof teamDelegateTool.execute>
       },
       parent: {
         nodeId: "n1",
-        llm: { model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+        llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
         policyToolAllow: ["tool.allowed", "shell.run"],
         runInput: { a: 1 },
         steps: [],

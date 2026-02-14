@@ -3,6 +3,7 @@ import type { ValidateFunction } from "ajv";
 import type { WorkflowNodeExecutorResult } from "@vespid/shared";
 import type { OpenAiChatMessage } from "./openai.js";
 import { openAiChatCompletion } from "./openai.js";
+import { anthropicChatCompletion } from "./anthropic.js";
 import { resolveAgentTool } from "./tools/index.js";
 import type { AgentToolExecutionMode } from "./tools/types.js";
 
@@ -50,7 +51,7 @@ export type AgentTeamMeta = {
 };
 
 export type AgentLoopConfig = {
-  llm: { model: string; auth: { secretId?: string; fallbackToEnv?: true } };
+  llm: { provider: "openai" | "anthropic"; model: string; auth: { secretId?: string; fallbackToEnv?: true } };
   prompt: { system?: string; instructions: string; inputTemplate?: string };
   tools: {
     allow: string[];
@@ -308,7 +309,10 @@ async function resolveOpenAiApiKey(input: {
     });
     return value && value.trim().length > 0 ? value : null;
   }
-  const env = process.env.OPENAI_API_KEY ?? null;
+  const env =
+    input.llm.provider === "anthropic"
+      ? (process.env.ANTHROPIC_API_KEY ?? null)
+      : (process.env.OPENAI_API_KEY ?? null);
   return env && env.trim().length > 0 ? env : null;
 }
 
@@ -428,16 +432,17 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
   // Resume after remote tool execution.
   const pendingRemote = input.pendingRemoteResult ? (input.pendingRemoteResult as any) : null;
   if (pendingRemote) {
+    const remote = pendingRemote && typeof pendingRemote === "object" && "result" in pendingRemote ? (pendingRemote as any).result : pendingRemote;
     if (!state.pendingToolCall) {
       return { status: "failed", error: "REMOTE_RESULT_UNEXPECTED" };
     }
 
     const pending = state.pendingToolCall;
-    const remoteStatus = typeof pendingRemote?.status === "string" ? pendingRemote.status : "succeeded";
+    const remoteStatus = typeof remote?.status === "string" ? remote.status : "succeeded";
     const toolStatus: "succeeded" | "failed" = remoteStatus === "failed" ? "failed" : "succeeded";
 
-    const outputSummary = summarizeJson(pendingRemote?.output ?? null, 20_000);
-    const error = toolStatus === "failed" ? String(pendingRemote?.error ?? "REMOTE_EXEC_FAILED") : null;
+    const outputSummary = summarizeJson(remote?.output ?? null, 20_000);
+    const error = toolStatus === "failed" ? String(remote?.error ?? "REMOTE_EXEC_FAILED") : null;
 
     state.history.push({
       kind: "tool_result",
@@ -518,6 +523,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       eventType: "agent_llm_request",
       level: "info",
       payload: {
+        provider: input.config.llm.provider,
         model: input.config.llm.model,
         turn: state.turns,
         messageCount: messages.length,
@@ -526,14 +532,24 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       },
     });
 
-    const llm = await openAiChatCompletion({
-      apiKey,
-      model: input.config.llm.model,
-      messages,
-      timeoutMs: Math.max(1000, deadline - Date.now()),
-      maxOutputChars: input.config.limits.maxOutputChars,
-      fetchImpl: input.fetchImpl,
-    });
+    const llm =
+      input.config.llm.provider === "anthropic"
+        ? await anthropicChatCompletion({
+            apiKey,
+            model: input.config.llm.model,
+            messages,
+            timeoutMs: Math.max(1000, deadline - Date.now()),
+            maxOutputChars: input.config.limits.maxOutputChars,
+            fetchImpl: input.fetchImpl,
+          })
+        : await openAiChatCompletion({
+            apiKey,
+            model: input.config.llm.model,
+            messages,
+            timeoutMs: Math.max(1000, deadline - Date.now()),
+            maxOutputChars: input.config.limits.maxOutputChars,
+            fetchImpl: input.fetchImpl,
+          });
 
     if (!llm.ok) {
       await persistState();

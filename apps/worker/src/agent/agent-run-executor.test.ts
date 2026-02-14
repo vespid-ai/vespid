@@ -25,6 +25,75 @@ describe("agent.run executor", () => {
     process.env.OPENAI_API_KEY = "sk-test";
   });
 
+  it("blocks and dispatches agent.run to node-agent when execution.mode=node, then consumes remote result on resume", async () => {
+    const loadSecretValue = vi.fn(async () => "sk-secret");
+    const executor = createAgentRunExecutor({
+      githubApiBaseUrl: "https://api.github.com",
+      loadSecretValue,
+      fetchImpl: vi.fn() as any,
+    });
+
+    const node = {
+      id: "n1",
+      type: "agent.run",
+      config: {
+        llm: { provider: "openai", model: "gpt-4.1-mini", auth: { secretId: "00000000-0000-0000-0000-000000000000", fallbackToEnv: true } },
+        execution: { mode: "node", selector: { tag: "west" } },
+        prompt: { instructions: "Do the thing." },
+        tools: { allow: ["connector.github.issue.create"], execution: "cloud", authDefaults: { connectors: { github: { secretId: "00000000-0000-0000-0000-000000000000" } } } },
+        limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 200_000 },
+        output: { mode: "text" },
+      },
+    };
+
+    const blocked = await executor.execute({
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      runId: "run-1",
+      attemptCount: 1,
+      requestedByUserId: "user-1",
+      nodeId: "n1",
+      nodeType: "agent.run",
+      node,
+      runInput: { a: 1 },
+      steps: [],
+      runtime: {},
+      organizationSettings: { tools: { shellRunEnabled: true } },
+    });
+
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.block?.kind).toBe("agent.run");
+    expect((blocked.block as any)?.timeoutMs).toBe(10_000);
+    expect((blocked.block as any)?.selectorTag).toBe("west");
+
+    const payload = (blocked.block as any)?.payload;
+    expect(payload).toBeTruthy();
+    expect(payload.nodeId).toBe("n1");
+    expect(payload.secrets?.llmApiKey).toBe("sk-secret");
+    expect(payload.secrets?.connectorSecretsByConnectorId?.github).toBe("sk-secret");
+    expect(Array.isArray(payload.effectiveToolsAllow)).toBe(true);
+
+    const resumed = await executor.execute({
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      runId: "run-1",
+      attemptCount: 1,
+      requestedByUserId: "user-1",
+      nodeId: "n1",
+      nodeType: "agent.run",
+      node,
+      runInput: { a: 1 },
+      steps: [],
+      runtime: {},
+      pendingRemoteResult: { requestId: "req-1", result: { status: "succeeded", output: { ok: true } } },
+      organizationSettings: { tools: { shellRunEnabled: true } },
+    });
+
+    expect(resumed.status).toBe("succeeded");
+    expect(resumed.output).toEqual({ ok: true });
+    expect((resumed.runtime as any)?.pendingRemoteResult).toBeNull();
+  });
+
   it("persists tool history across remote blocks and rebuilds context on resume", async () => {
     openAiMocks.openAiChatCompletion
       .mockResolvedValueOnce({
@@ -282,4 +351,3 @@ describe("agent.run executor", () => {
     expect(result.output).toBe(1);
   });
 });
-

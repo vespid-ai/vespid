@@ -69,7 +69,7 @@ export type WorkflowNodeExecutorResult = {
   error?: string;
   // Only used when status === "blocked".
   block?: {
-    kind: "connector.action" | "agent.execute";
+    kind: "connector.action" | "agent.execute" | "agent.run";
     // Optional override used to build deterministic gateway request IDs.
     // If omitted, the workflow nodeId is used.
     dispatchNodeId?: string;
