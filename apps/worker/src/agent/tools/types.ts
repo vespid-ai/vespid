@@ -9,6 +9,8 @@ export type AgentToolContext = {
   workflowId: string;
   attemptCount: number;
   nodeId: string;
+  // The 1-based tool call index within the current agent loop.
+  callIndex: number;
   toolAuthDefaults?: {
     connectors?: Record<string, { secretId: string }>;
   } | null;
@@ -17,6 +19,14 @@ export type AgentToolContext = {
   // Load/decrypt an org secret (connector or LLM); the caller supplies the secretId.
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   fetchImpl: typeof fetch;
+  emitEvent?: (event: {
+    eventType: string;
+    level: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }) => Promise<void>;
+  // Internal-only: provides access to team configuration for tools like team.delegate/team.map.
+  teamConfig?: unknown;
 };
 
 export type AgentToolExecuteResult =
