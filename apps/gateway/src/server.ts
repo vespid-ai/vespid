@@ -29,6 +29,10 @@ type PendingRequest = {
   timeout: NodeJS.Timeout;
 };
 
+type AgentCapabilities = {
+  kinds: Set<string>;
+};
+
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) {
@@ -36,6 +40,14 @@ function envNumber(name: string, fallback: number): number {
   }
   const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeCapabilities(input: Record<string, unknown> | null): AgentCapabilities {
+  const kindsRaw = input?.["kinds"];
+  const kindsList = Array.isArray(kindsRaw) ? kindsRaw.filter((item): item is string => typeof item === "string") : [];
+  // Backward-compatible default: if kinds not provided, assume it can handle any kind (MVP).
+  const kinds = kindsList.length > 0 ? kindsList : ["connector.action", "agent.execute"];
+  return { kinds: new Set(kinds) };
 }
 
 const dispatchRequestSchema = z.object({
@@ -114,7 +126,7 @@ export async function buildGatewayServer(input?: {
   const agentsByOrg = new Map<string, ConnectedAgent[]>();
   const pendingByRequestId = new Map<string, PendingRequest>();
 
-  function selectAgent(orgId: string): ConnectedAgent | null {
+  function selectAgent(orgId: string, required: { kind: string }): ConnectedAgent | null {
     const now = Date.now();
     const agents = agentsByOrg.get(orgId) ?? [];
     if (agents.length === 0) {
@@ -132,6 +144,10 @@ export async function buildGatewayServer(input?: {
           // ignore
         }
         server.log.warn({ event: "gateway_agent_disconnected", orgId, agentId: agent.agentId, reasonCode: "STALE" });
+        continue;
+      }
+      const capabilities = normalizeCapabilities(agent.capabilities);
+      if (!capabilities.kinds.has(required.kind)) {
         continue;
       }
       fresh.push(agent);
@@ -204,7 +220,7 @@ export async function buildGatewayServer(input?: {
 
     let agent: ConnectedAgent | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const selected = selectAgent(parsed.data.organizationId);
+      const selected = selectAgent(parsed.data.organizationId, { kind: parsed.data.kind });
       if (!selected) {
         agent = null;
         break;
