@@ -213,7 +213,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   )}
                 >
                   {active ? (
-                    <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-accent" />
+                    <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-gradient-to-b from-brand to-brand2" />
                   ) : null}
                   {item.icon}
                   {!sidebarCollapsed ? <span>{t(item.labelKey as any)}</span> : null}

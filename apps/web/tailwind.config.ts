@@ -26,6 +26,7 @@ export default {
         accent: "rgb(var(--accent) / <alpha-value>)",
         brand: "rgb(var(--brand) / <alpha-value>)",
         brandContrast: "rgb(var(--brand-contrast) / <alpha-value>)",
+        brand2: "rgb(var(--brand-2) / <alpha-value>)",
         focus: "rgb(var(--focus) / <alpha-value>)",
         danger: "rgb(var(--danger) / <alpha-value>)",
         warn: "rgb(var(--warn) / <alpha-value>)",

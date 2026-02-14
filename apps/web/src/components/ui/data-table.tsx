@@ -37,7 +37,13 @@ export function DataTable<T>({
   });
 
   return (
-    <div className={cn("overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/40 shadow-elev1", className)}>
+    <div
+      className={cn(
+        "overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle shadow-elev1 shadow-inset",
+        "bg-gradient-to-b from-panel/55 to-panel/35",
+        className
+      )}
+    >
       <table className="w-full border-collapse">
         <thead className="bg-surface2/50">
           {table.getHeaderGroups().map((hg) => (

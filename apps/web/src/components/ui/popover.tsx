@@ -12,7 +12,8 @@ export function PopoverContent({ className, align = "center", sideOffset = 8, ..
         align={align}
         sideOffset={sideOffset}
         className={cn(
-          "z-50 w-80 rounded-lg border border-borderSubtle bg-panel/90 p-3 shadow-elev2 backdrop-blur",
+          "z-50 w-80 rounded-lg border border-borderSubtle p-3 shadow-elev2 shadow-inset backdrop-blur",
+          "bg-gradient-to-b from-panel/92 to-panel/78",
           "animate-fade-in",
           className
         )}
