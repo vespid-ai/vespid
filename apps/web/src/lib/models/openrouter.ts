@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 export type OpenRouterModelItem = {
   id: string;
   name: string;
@@ -15,60 +13,77 @@ export type OpenRouterModelItem = {
   };
 };
 
-const openRouterModelSchema = z
-  .object({
-    id: z.string().min(1),
-    name: z.string().min(1),
-    description: z.string().optional(),
-    context_length: z.number().int().positive().optional(),
-    top_provider: z
-      .object({
-        context_length: z.number().int().positive().optional(),
-        max_completion_tokens: z.number().int().positive().optional(),
-      })
-      .optional(),
-    architecture: z
-      .object({
-        input_modalities: z.array(z.string().min(1)).optional(),
-        output_modalities: z.array(z.string().min(1)).optional(),
-      })
-      .optional(),
-    supported_parameters: z.array(z.string().min(1)).optional(),
-    pricing: z.record(z.string(), z.string()).optional(),
-  })
-  .passthrough();
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
 
-const openRouterModelsResponseSchema = z
-  .object({
-    data: z.array(openRouterModelSchema),
-  })
-  .passthrough();
+function asStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const out = value.filter((v) => typeof v === "string" && v.trim().length > 0) as string[];
+  return out.length ? out : [];
+}
 
 export function parseOpenRouterModelsResponse(payload: unknown): OpenRouterModelItem[] {
-  const parsed = openRouterModelsResponseSchema.safeParse(payload);
-  if (!parsed.success) {
-    return [];
-  }
+  const root = asObject(payload);
+  const data = root ? (root["data"] as unknown) : null;
+  if (!Array.isArray(data)) return [];
 
-  return parsed.data.data.map((raw) => {
-    const contextLength = raw.context_length ?? raw.top_provider?.context_length;
-    const maxCompletionTokens = raw.top_provider?.max_completion_tokens;
+  const out: OpenRouterModelItem[] = [];
+  for (const entry of data) {
+    const obj = asObject(entry);
+    if (!obj) continue;
+    const id = typeof obj["id"] === "string" ? obj["id"] : null;
+    if (!id || id.trim().length === 0) continue;
 
-    const prompt = raw.pricing?.prompt;
-    const completion = raw.pricing?.completion;
+    const name =
+      typeof obj["name"] === "string" && obj["name"].trim().length > 0
+        ? obj["name"]
+        : typeof obj["canonical_slug"] === "string" && obj["canonical_slug"].trim().length > 0
+          ? obj["canonical_slug"]
+          : id;
 
-    return {
-      id: raw.id,
-      name: raw.name,
-      ...(raw.description ? { description: raw.description } : {}),
+    const description = typeof obj["description"] === "string" && obj["description"].trim().length > 0 ? obj["description"] : null;
+
+    const topProvider = asObject(obj["top_provider"]);
+    const contextLengthRaw = obj["context_length"];
+    const contextLengthTop = topProvider ? topProvider["context_length"] : null;
+    const contextLength =
+      typeof contextLengthRaw === "number"
+        ? contextLengthRaw
+        : typeof contextLengthTop === "number"
+          ? contextLengthTop
+          : undefined;
+
+    const maxCompletionTokens =
+      topProvider && typeof topProvider["max_completion_tokens"] === "number" ? topProvider["max_completion_tokens"] : undefined;
+
+    const architecture = asObject(obj["architecture"]);
+    const inputModalities = architecture ? asStringArray(architecture["input_modalities"]) : null;
+    const outputModalities = architecture ? asStringArray(architecture["output_modalities"]) : null;
+
+    const supportedParameters = asStringArray(obj["supported_parameters"]);
+
+    const pricingObj = asObject(obj["pricing"]);
+    const promptRaw = pricingObj ? pricingObj["prompt"] : null;
+    const completionRaw = pricingObj ? pricingObj["completion"] : null;
+    const prompt = typeof promptRaw === "string" ? promptRaw : typeof promptRaw === "number" ? String(promptRaw) : undefined;
+    const completion =
+      typeof completionRaw === "string" ? completionRaw : typeof completionRaw === "number" ? String(completionRaw) : undefined;
+
+    out.push({
+      id,
+      name,
+      ...(description ? { description } : {}),
       ...(typeof contextLength === "number" ? { contextLength } : {}),
       ...(typeof maxCompletionTokens === "number" ? { maxCompletionTokens } : {}),
-      ...(raw.architecture?.input_modalities ? { inputModalities: raw.architecture.input_modalities } : {}),
-      ...(raw.architecture?.output_modalities ? { outputModalities: raw.architecture.output_modalities } : {}),
-      ...(raw.supported_parameters ? { supportedParameters: raw.supported_parameters } : {}),
+      ...(inputModalities ? { inputModalities } : {}),
+      ...(outputModalities ? { outputModalities } : {}),
+      ...(supportedParameters ? { supportedParameters } : {}),
       ...(prompt || completion ? { pricing: { ...(prompt ? { prompt } : {}), ...(completion ? { completion } : {}) } } : {}),
-    };
-  });
+    });
+  }
+
+  return out;
 }
 
 export function splitOpenRouterModelId(modelId: string): { providerId: string; model: string } | null {
@@ -84,4 +99,3 @@ export function splitOpenRouterModelId(modelId: string): { providerId: string; m
   }
   return { providerId, model };
 }
-

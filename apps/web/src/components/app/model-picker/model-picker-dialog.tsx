@@ -9,6 +9,7 @@ import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Input } from "../../ui/input";
 import { cn } from "../../../lib/cn";
+import { getLocaleFromPathname } from "../../../i18n/pathnames";
 import { splitOpenRouterModelId, type OpenRouterModelItem } from "../../../lib/models/openrouter";
 
 type OpenRouterModelsOk = {
@@ -94,7 +95,9 @@ export function ModelPickerDialog({
   const modelsQuery = useQuery({
     queryKey: ["models", "openrouter", "programming"],
     queryFn: async () => {
-      const resp = await fetch("/api/models/openrouter?category=programming&limit=200", { method: "GET" });
+      const locale =
+        typeof window === "undefined" ? "en" : getLocaleFromPathname(window.location?.pathname ?? "/en");
+      const resp = await fetch(`/${locale}/api/models/openrouter?category=programming&limit=200`, { method: "GET" });
       const json = (await resp.json()) as OpenRouterModelsOk;
       return json;
     },
