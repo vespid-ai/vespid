@@ -7,13 +7,20 @@ import { cn } from "../../lib/cn";
 export const Sheet = DialogPrimitive.Root;
 export const SheetTrigger = DialogPrimitive.Trigger;
 export const SheetClose = DialogPrimitive.Close;
+export const SheetTitle = DialogPrimitive.Title;
+export const SheetDescription = DialogPrimitive.Description;
 
 export function SheetContent({
   className,
   side = "left",
+  title,
+  description,
+  children,
   ...props
 }: ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
   side?: "left" | "right";
+  title?: string;
+  description?: string;
 }) {
   return (
     <DialogPrimitive.Portal>
@@ -26,8 +33,15 @@ export function SheetContent({
           className
         )}
         {...props}
-      />
+      >
+        {title ? (
+          <SheetTitle className="sr-only">{title}</SheetTitle>
+        ) : (
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+        )}
+        {description ? <SheetDescription className="sr-only">{description}</SheetDescription> : null}
+        {children}
+      </DialogPrimitive.Content>
     </DialogPrimitive.Portal>
   );
 }
-

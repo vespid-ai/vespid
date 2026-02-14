@@ -379,7 +379,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                           <Menu className="h-4 w-4" />
                         </Button>
                       </SheetTrigger>
-                      <SheetContent side="left" className="p-4">
+                      <SheetContent
+                        side="left"
+                        className="p-4"
+                        title={t("common.nav")}
+                        description={t("commandPalette.description")}
+                      >
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2">
                             <div className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/45 shadow-elev1">
