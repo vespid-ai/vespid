@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { applyDensityToDocument, readPreferredDensity, writePreferredDensity, type Density } from "../preferences";
 
 type DensityContextValue = {
@@ -32,7 +32,8 @@ export function DensityProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DensityContextValue>(() => ({ density, setDensity, toggleDensity }), [density]);
 
-  return <DensityContext.Provider value={value}>{children}</DensityContext.Provider>;
+  // Keep this file as .ts (not .tsx) to avoid dev-time resolution issues when bundlers prefer .ts.
+  return createElement(DensityContext.Provider, { value }, children);
 }
 
 export function useDensity(): DensityContextValue {
