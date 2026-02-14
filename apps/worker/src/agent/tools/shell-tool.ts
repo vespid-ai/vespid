@@ -1,0 +1,82 @@
+import { z } from "zod";
+import type { AgentToolDefinition, AgentToolExecuteResult } from "./types.js";
+
+const shellRunArgsSchema = z.object({
+  script: z.string().min(1).max(200_000),
+  shell: z.enum(["sh", "bash"]).optional(),
+  env: z.record(z.string().min(1), z.string()).optional(),
+  sandbox: z
+    .object({
+      backend: z.enum(["docker", "host", "provider"]).optional(),
+      network: z.enum(["none", "enabled"]).optional(),
+      timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
+      docker: z
+        .object({
+          image: z.string().min(1).optional(),
+        })
+        .optional(),
+      envPassthroughAllowlist: z.array(z.string().min(1)).max(50).optional(),
+    })
+    .optional(),
+  selector: z
+    .object({
+      tag: z.string().min(1).max(64).optional(),
+      agentId: z.string().uuid().optional(),
+      group: z.string().min(1).max(64).optional(),
+    })
+    .optional(),
+});
+
+export const shellRunTool: AgentToolDefinition = {
+  id: "shell.run",
+  description: "Run a shell script on a node-agent sandbox (node-only).",
+  inputSchema: shellRunArgsSchema,
+  async execute(ctx, input): Promise<AgentToolExecuteResult> {
+    if (input.mode !== "node") {
+      return { status: "failed", error: "SHELL_TOOL_REQUIRES_NODE_EXECUTION" };
+    }
+
+    const parsed = shellRunArgsSchema.safeParse(input.args);
+    if (!parsed.success) {
+      return { status: "failed", error: "INVALID_TOOL_INPUT" };
+    }
+
+    const selector = parsed.data.selector;
+    const nodeId = `${ctx.nodeId}:shell.run`;
+    const node = {
+      id: nodeId,
+      type: "agent.execute",
+      config: {
+        execution: { mode: "node" },
+        task: {
+          type: "shell",
+          script: parsed.data.script,
+          ...(parsed.data.shell ? { shell: parsed.data.shell } : {}),
+          ...(parsed.data.env ? { env: parsed.data.env } : {}),
+        },
+        ...(parsed.data.sandbox ? { sandbox: parsed.data.sandbox } : {}),
+      },
+    };
+
+    return {
+      status: "blocked",
+      block: {
+        kind: "agent.execute",
+        payload: {
+          nodeId,
+          node,
+          runId: ctx.runId,
+          workflowId: ctx.workflowId,
+          attemptCount: ctx.attemptCount,
+        },
+        ...(selector?.tag ? { selectorTag: selector.tag } : {}),
+        ...(selector?.agentId ? { selectorAgentId: selector.agentId } : {}),
+        ...(selector?.group ? { selectorGroup: selector.group } : {}),
+        ...(typeof parsed.data.sandbox?.timeoutMs === "number" && Number.isFinite(parsed.data.sandbox.timeoutMs)
+          ? { timeoutMs: parsed.data.sandbox.timeoutMs }
+          : {}),
+      },
+    };
+  },
+};
+

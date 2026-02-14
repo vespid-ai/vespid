@@ -525,6 +525,39 @@ export async function clearWorkflowRunBlockAndAdvanceCursor(
   return row ?? null;
 }
 
+export async function clearWorkflowRunBlock(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    expectedRequestId: string;
+    output?: unknown;
+  }
+) {
+  const [row] = await db
+    .update(workflowRuns)
+    .set({
+      blockedRequestId: null,
+      blockedNodeId: null,
+      blockedNodeType: null,
+      blockedKind: null,
+      blockedAt: null,
+      blockedTimeoutAt: null,
+      ...(input.output !== undefined ? { output: input.output } : {}),
+    })
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.workflowId, input.workflowId),
+        eq(workflowRuns.id, input.runId),
+        eq(workflowRuns.blockedRequestId, input.expectedRequestId)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
 export async function appendWorkflowRunEvent(
   db: Db,
   input: {

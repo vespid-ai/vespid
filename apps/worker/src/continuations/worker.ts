@@ -1,7 +1,7 @@
 import { Worker, type ConnectionOptions, type Job } from "bullmq";
 import {
   appendWorkflowRunEvent,
-  clearWorkflowRunBlockAndAdvanceCursor,
+  clearWorkflowRunBlock,
   createPool,
   getWorkflowById,
   getWorkflowRunById,
@@ -58,6 +58,38 @@ function buildProgressOutput(steps: WorkflowExecutionStep[]): WorkflowExecutionR
   };
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseRuntimeFromRunOutput(output: unknown): unknown {
+  const obj = asObject(output);
+  if (!obj) {
+    return null;
+  }
+  return "runtime" in obj ? (obj as any).runtime : null;
+}
+
+function mergeRuntime(base: unknown, override: unknown): unknown {
+  const o = asObject(override);
+  if (!o) {
+    return base;
+  }
+  const b = asObject(base);
+  if (!b) {
+    return override;
+  }
+  return { ...b, ...o };
+}
+
+function buildProgressOutputWithRuntime(steps: WorkflowExecutionStep[], runtime?: unknown): WorkflowExecutionResult {
+  const base = buildProgressOutput(steps);
+  return {
+    ...base,
+    ...(runtime ? { runtime } : {}),
+  };
+}
+
 const WORKFLOW_EVENT_PAYLOAD_MAX_CHARS = Math.min(
   200_000,
   Math.max(256, envNumber("WORKFLOW_EVENT_PAYLOAD_MAX_CHARS", 4000))
@@ -86,6 +118,156 @@ function summarizeForEvent(value: unknown, maxChars = WORKFLOW_EVENT_PAYLOAD_MAX
   }
 }
 
+export async function processContinuationPayload(input: {
+  pool: ReturnType<typeof createPool>;
+  runQueue: WorkflowRunQueue;
+  payload: WorkflowContinuationJobPayload;
+}): Promise<void> {
+  const payload = input.payload;
+  if (payload.type !== "remote.poll" && payload.type !== "remote.apply") {
+    return;
+  }
+
+  const run = await withTenantContext(input.pool, { organizationId: payload.organizationId }, async (tenantDb) =>
+    getWorkflowRunById(tenantDb, {
+      organizationId: payload.organizationId,
+      workflowId: payload.workflowId,
+      runId: payload.runId,
+    })
+  );
+  if (!run) {
+    return;
+  }
+  if (run.status !== "running") {
+    return;
+  }
+  if (!run.blockedRequestId || run.blockedRequestId !== payload.requestId) {
+    return;
+  }
+  if (run.attemptCount !== payload.attemptCount) {
+    return;
+  }
+
+  const actor = { userId: run.requestedByUserId, organizationId: payload.organizationId };
+
+  const workflow = await withTenantContext(input.pool, actor, async (tenantDb) =>
+    getWorkflowById(tenantDb, {
+      organizationId: payload.organizationId,
+      workflowId: payload.workflowId,
+    })
+  );
+  if (!workflow) {
+    return;
+  }
+
+  const dsl = workflowDslSchema.parse(workflow.dsl);
+  const cursorNodeIndex = Math.max(0, run.cursorNodeIndex ?? 0);
+  const node = dsl.nodes[cursorNodeIndex];
+  if (!node) {
+    await withTenantContext(input.pool, actor, async (tenantDb) =>
+      markWorkflowRunFailed(tenantDb, {
+        organizationId: payload.organizationId,
+        workflowId: payload.workflowId,
+        runId: payload.runId,
+        error: "REMOTE_RESULT_APPLY_FAILED",
+      })
+    );
+    return;
+  }
+
+  const timeoutAtMs = run.blockedTimeoutAt ? new Date(run.blockedTimeoutAt).getTime() : null;
+  const timedOut = timeoutAtMs !== null && Date.now() >= timeoutAtMs;
+
+  let remoteResult: GatewayDispatchResponse | null = null;
+  if (payload.type === "remote.apply") {
+    remoteResult = payload.result;
+  } else if (timedOut) {
+    remoteResult = { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout };
+  } else {
+    const fetched = await fetchGatewayResult(payload.requestId);
+    if (!fetched.ok) {
+      if (fetched.error === "RESULT_NOT_READY" || fetched.error === "GATEWAY_UNAVAILABLE") {
+        throw new Error(fetched.error);
+      }
+
+      await applyRemoteFailure({
+        pool: input.pool,
+        actor,
+        runQueue: input.runQueue,
+        payload,
+        node,
+        cursorNodeIndex,
+        errorMessage: fetched.error,
+        output: null,
+        maxAttempts: run.maxAttempts,
+      });
+      return;
+    }
+    remoteResult = fetched.result;
+  }
+
+  if (!remoteResult) {
+    return;
+  }
+
+  if (remoteResult.status === "failed") {
+    await applyRemoteFailure({
+      pool: input.pool,
+      actor,
+      runQueue: input.runQueue,
+      payload,
+      node,
+      cursorNodeIndex,
+      errorMessage: remoteResult.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
+      output: remoteResult.output ?? null,
+      maxAttempts: run.maxAttempts,
+    });
+    return;
+  }
+
+  const steps = parseStepsFromRunOutput(run.output);
+  const runtime = mergeRuntime(parseRuntimeFromRunOutput(run.output), {
+    pendingRemoteResult: { requestId: payload.requestId, result: remoteResult },
+  });
+  const progress = buildProgressOutputWithRuntime(steps, runtime);
+
+  await withTenantContext(input.pool, actor, async (tenantDb) =>
+    appendWorkflowRunEvent(tenantDb, {
+      organizationId: payload.organizationId,
+      workflowId: payload.workflowId,
+      runId: payload.runId,
+      attemptCount: payload.attemptCount,
+      eventType: "remote_result_received",
+      nodeId: node.id,
+      nodeType: node.type,
+      level: "info",
+      payload: summarizeForEvent(remoteResult.output ?? null),
+    })
+  );
+
+  const cleared = await withTenantContext(input.pool, actor, async (tenantDb) =>
+    clearWorkflowRunBlock(tenantDb, {
+      organizationId: payload.organizationId,
+      workflowId: payload.workflowId,
+      runId: payload.runId,
+      expectedRequestId: payload.requestId,
+      output: progress,
+    })
+  );
+  if (!cleared) {
+    return;
+  }
+
+  await input.runQueue.enqueue({
+    payload: {
+      runId: payload.runId,
+      organizationId: payload.organizationId,
+      workflowId: payload.workflowId,
+      requestedByUserId: run.requestedByUserId,
+    },
+  });
+}
+
 export function startContinuationWorker(input: {
   pool?: ReturnType<typeof createPool>;
   connection: ConnectionOptions;
@@ -98,153 +280,7 @@ export function startContinuationWorker(input: {
   const worker = new Worker<WorkflowContinuationJobPayload>(
     input.queueName,
     async (job: Job<WorkflowContinuationJobPayload>) => {
-      const payload = job.data;
-      if (payload.type !== "remote.poll" && payload.type !== "remote.apply") {
-        return;
-      }
-
-      const run = await withTenantContext(pool, { organizationId: payload.organizationId }, async (tenantDb) =>
-        getWorkflowRunById(tenantDb, {
-          organizationId: payload.organizationId,
-          workflowId: payload.workflowId,
-          runId: payload.runId,
-        })
-      );
-      if (!run) {
-        return;
-      }
-      if (run.status !== "running") {
-        return;
-      }
-      if (!run.blockedRequestId || run.blockedRequestId !== payload.requestId) {
-        return;
-      }
-      if (run.attemptCount !== payload.attemptCount) {
-        return;
-      }
-
-      const actor = { userId: run.requestedByUserId, organizationId: payload.organizationId };
-
-      const workflow = await withTenantContext(pool, actor, async (tenantDb) =>
-        getWorkflowById(tenantDb, {
-          organizationId: payload.organizationId,
-          workflowId: payload.workflowId,
-        })
-      );
-      if (!workflow) {
-        return;
-      }
-
-      const dsl = workflowDslSchema.parse(workflow.dsl);
-      const cursorNodeIndex = Math.max(0, run.cursorNodeIndex ?? 0);
-      const node = dsl.nodes[cursorNodeIndex];
-      if (!node) {
-        await withTenantContext(pool, actor, async (tenantDb) =>
-          markWorkflowRunFailed(tenantDb, {
-            organizationId: payload.organizationId,
-            workflowId: payload.workflowId,
-            runId: payload.runId,
-            error: "REMOTE_RESULT_APPLY_FAILED",
-          })
-        );
-        return;
-      }
-
-      const timeoutAtMs = run.blockedTimeoutAt ? new Date(run.blockedTimeoutAt).getTime() : null;
-      const timedOut = timeoutAtMs !== null && Date.now() >= timeoutAtMs;
-
-      let remoteResult: GatewayDispatchResponse | null = null;
-      if (payload.type === "remote.apply") {
-        remoteResult = payload.result;
-      } else if (timedOut) {
-        remoteResult = { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout };
-      } else {
-        const fetched = await fetchGatewayResult(payload.requestId);
-        if (!fetched.ok) {
-          if (fetched.error === "RESULT_NOT_READY" || fetched.error === "GATEWAY_UNAVAILABLE") {
-            throw new Error(fetched.error);
-          }
-
-          await applyRemoteFailure({
-            pool,
-            actor,
-            runQueue: input.runQueue,
-            payload,
-            node,
-            cursorNodeIndex,
-            errorMessage: fetched.error,
-            output: null,
-            maxAttempts: run.maxAttempts,
-          });
-          return;
-        }
-        remoteResult = fetched.result;
-      }
-
-      if (!remoteResult) {
-        return;
-      }
-
-      if (remoteResult.status === "failed") {
-        await applyRemoteFailure({
-          pool,
-          actor,
-          runQueue: input.runQueue,
-          payload,
-          node,
-          cursorNodeIndex,
-          errorMessage: remoteResult.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
-          output: remoteResult.output ?? null,
-          maxAttempts: run.maxAttempts,
-        });
-        return;
-      }
-
-      const steps = parseStepsFromRunOutput(run.output);
-      steps.push({
-        nodeId: node.id,
-        nodeType: node.type,
-        status: "succeeded",
-        output: remoteResult.output,
-      });
-      const progress = buildProgressOutput(steps);
-
-      await withTenantContext(pool, actor, async (tenantDb) =>
-        appendWorkflowRunEvent(tenantDb, {
-          organizationId: payload.organizationId,
-          workflowId: payload.workflowId,
-          runId: payload.runId,
-          attemptCount: payload.attemptCount,
-          eventType: "node_succeeded",
-          nodeId: node.id,
-          nodeType: node.type,
-          level: "info",
-          payload: summarizeForEvent(remoteResult.output ?? null),
-        })
-      );
-
-      const advanced = await withTenantContext(pool, actor, async (tenantDb) =>
-        clearWorkflowRunBlockAndAdvanceCursor(tenantDb, {
-          organizationId: payload.organizationId,
-          workflowId: payload.workflowId,
-          runId: payload.runId,
-          expectedRequestId: payload.requestId,
-          nextCursorNodeIndex: cursorNodeIndex + 1,
-          output: progress,
-        })
-      );
-      if (!advanced) {
-        return;
-      }
-
-      await input.runQueue.enqueue({
-        payload: {
-          runId: payload.runId,
-          organizationId: payload.organizationId,
-          workflowId: payload.workflowId,
-          requestedByUserId: run.requestedByUserId,
-        },
-      });
+      await processContinuationPayload({ pool, runQueue: input.runQueue, payload: job.data });
     },
     {
       connection: input.connection,

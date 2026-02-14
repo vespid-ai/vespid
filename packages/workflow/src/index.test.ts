@@ -12,6 +12,50 @@ describe("workflow dsl", () => {
     expect(parsed.version).toBe("v2");
   });
 
+  it("accepts an agent.run node", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            prompt: { instructions: "Say hello." },
+            tools: { allow: ["connector.github.issue.create"], execution: "cloud" },
+            limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000 },
+            output: { mode: "text" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
+  });
+
+  it("rejects agent.run when tools.allow is empty", () => {
+    expect(() =>
+      workflowDslSchema.parse({
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [
+          {
+            id: "n1",
+            type: "agent.run",
+            config: {
+              llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+              prompt: { instructions: "Call a tool." },
+              tools: { allow: [], execution: "cloud" },
+              limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000 },
+              output: { mode: "text" },
+            },
+          },
+        ],
+      })
+    ).toThrow();
+  });
+
   it("executes nodes in sequence and returns success output", () => {
     const dsl = workflowDslSchema.parse({
       version: "v2",

@@ -118,7 +118,7 @@ const listSecretsQuerySchema = z.object({
 });
 
 const createSecretSchema = z.object({
-  connectorId: z.enum(["github"]),
+  connectorId: z.string().min(1).max(80),
   name: z.string().min(1).max(80),
   value: z.string().min(1),
 });
@@ -442,6 +442,11 @@ export async function buildServer(input?: {
   const connectorCatalog = createConnectorCatalog({
     enterpriseConnectors: resolveEnterpriseConnectors(enterpriseProvider),
   });
+  const allowedSecretConnectorIds = new Set<string>([
+    ...connectorCatalog.map((connector) => connector.id),
+    "llm.openai",
+    "llm.anthropic",
+  ]);
   await store.ensureDefaultRoles();
 
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
@@ -1138,6 +1143,12 @@ export async function buildServer(input?: {
     }
     if (parsed.data.value.trim().length === 0) {
       throw secretValueRequired();
+    }
+    if (!allowedSecretConnectorIds.has(parsed.data.connectorId)) {
+      throw badRequest("Invalid connectorId for secret", {
+        connectorId: parsed.data.connectorId,
+        allowed: [...allowedSecretConnectorIds.values()],
+      });
     }
 
     try {
