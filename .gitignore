@@ -13,3 +13,4 @@ artifacts
 *.tsbuildinfo
 *.log
 .DS_Store
+output/
