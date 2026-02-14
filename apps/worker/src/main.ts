@@ -424,7 +424,7 @@ export async function processWorkflowRunJob(
           return {};
         }
 
-        if (node.type === "agent.execute") {
+        if (node.type === "agent.execute" && (node.config?.execution?.mode ?? "cloud") === "node") {
           const nodeTimeoutMs =
             typeof node.config?.sandbox?.timeoutMs === "number" && Number.isFinite(node.config.sandbox.timeoutMs)
               ? node.config.sandbox.timeoutMs
@@ -502,7 +502,7 @@ export async function processWorkflowRunJob(
           return;
         }
 
-        if (node.type === "connector.action") {
+        if (node.type === "connector.action" && (node.config.execution?.mode ?? "cloud") === "node") {
           const action = getCommunityConnectorAction({
             connectorId: node.config.connectorId as any,
             actionId: node.config.actionId,
