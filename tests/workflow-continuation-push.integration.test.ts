@@ -229,7 +229,7 @@ describe("workflow continuation push integration", () => {
     githubStub = await startGithubStub(0);
     process.env.GITHUB_API_BASE_URL = githubStub.baseUrl;
 
-    await migrateUp({ databaseUrl });
+    await migrateUp(databaseUrl);
 
     gateway = await buildGatewayServer();
     const address = await gateway.listen({ port: 0, host: "127.0.0.1" });

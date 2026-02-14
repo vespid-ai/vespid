@@ -68,16 +68,17 @@ describe("workflow node-agent docker integration", () => {
     }
 
     process.env.GATEWAY_SERVICE_TOKEN = process.env.GATEWAY_SERVICE_TOKEN ?? "dev-gateway-token";
-    process.env.GATEWAY_HTTP_URL = process.env.GATEWAY_HTTP_URL ?? "http://127.0.0.1:3002";
-    process.env.GATEWAY_WS_URL = process.env.GATEWAY_WS_URL ?? "ws://127.0.0.1:3002/ws";
-    gatewayWsUrl = process.env.GATEWAY_WS_URL;
 
-    await migrateUp({ databaseUrl });
+    await migrateUp(databaseUrl);
     gateway = await buildGatewayServer();
-    await gateway.listen({ port: 3002, host: "127.0.0.1" });
+    const address = await gateway.listen({ port: 0, host: "127.0.0.1" });
+    const parsed = new URL(address);
+    const gatewayBaseUrl = `${parsed.protocol}//${parsed.hostname}:${parsed.port}`;
+    gatewayWsUrl = `ws://${parsed.hostname}:${parsed.port}/ws`;
+    process.env.GATEWAY_HTTP_URL = gatewayBaseUrl;
+    process.env.GATEWAY_WS_URL = gatewayWsUrl;
 
     api = await buildServer();
-    await api.listen({ port: 3001, host: "127.0.0.1" });
 
     workerRuntime = await startWorkflowWorker();
     available = true;

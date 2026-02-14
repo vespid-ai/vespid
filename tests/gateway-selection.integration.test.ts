@@ -113,7 +113,7 @@ describe("gateway selection integration", () => {
       return;
     }
 
-    await migrateUp({ databaseUrl });
+    await migrateUp(databaseUrl);
 
     process.env.SECRETS_KEK_ID = "ci-kek-v1";
     process.env.SECRETS_KEK_BASE64 = Buffer.alloc(32, 9).toString("base64");

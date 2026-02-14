@@ -8,7 +8,7 @@
     "build": "node -e \"console.log('tests package build: skipped')\"",
     "lint": "node -e \"console.log('tests package lint: skipped')\"",
     "typecheck": "node -e \"console.log('tests package typecheck: skipped')\"",
-    "test": "vitest run"
+    "test": "vitest run --pool=forks --no-file-parallelism"
   },
   "dependencies": {
     "@vespid/api": "workspace:*",
