@@ -1,8 +1,9 @@
 import { connectorActionTool, parseConnectorToolId } from "./connector-tool.js";
 import { shellRunTool } from "./shell-tool.js";
+import { teamDelegateTool, teamMapTool } from "./team-tools.js";
 import type { AgentToolDefinition } from "./types.js";
 
-const toolRegistry: AgentToolDefinition[] = [connectorActionTool, shellRunTool];
+const toolRegistry: AgentToolDefinition[] = [connectorActionTool, shellRunTool, teamDelegateTool, teamMapTool];
 
 export function resolveAgentTool(toolId: string): { tool: AgentToolDefinition; args: Record<string, unknown> } | null {
   // Tool aliases:
