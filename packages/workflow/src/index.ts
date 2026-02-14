@@ -50,18 +50,33 @@ const agentRunNodeSchema = z.object({
     tools: z
       .object({
         // Tool IDs; enforcement is runtime-level.
-        allow: z.array(z.string().min(1).max(120)).min(1),
+        allow: z.array(z.string().min(1).max(120)),
         execution: z.enum(["cloud", "node"]).default("cloud"),
+        // Optional auth defaults so the agent does not need to reference secret UUIDs in tool calls.
+        authDefaults: z
+          .object({
+            connectors: z
+              .record(
+                z.string().min(1).max(80),
+                z.object({
+                  secretId: z.string().uuid(),
+                })
+              )
+              .optional(),
+          })
+          .optional(),
       })
-      .default({ allow: ["connector.github.issue.create"], execution: "cloud" }),
+      .default({ allow: [], execution: "cloud" }),
     limits: z
       .object({
         maxTurns: z.number().int().min(1).max(64).default(8),
         maxToolCalls: z.number().int().min(0).max(200).default(20),
         timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
         maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
+        // Guardrail for persisted agent runtime state (history, tool results, etc.).
+        maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
       })
-      .default({ maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000 }),
+      .default({ maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 }),
     output: z
       .object({
         mode: z.enum(["text", "json"]).default("text"),

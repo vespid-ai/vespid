@@ -23,8 +23,12 @@ describe("workflow dsl", () => {
           config: {
             llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
             prompt: { instructions: "Say hello." },
-            tools: { allow: ["connector.github.issue.create"], execution: "cloud" },
-            limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000 },
+            tools: {
+              allow: [],
+              execution: "cloud",
+              authDefaults: { connectors: { github: { secretId: "00000000-0000-0000-0000-000000000000" } } },
+            },
+            limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
             output: { mode: "text" },
           },
         },
@@ -34,26 +38,26 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
-  it("rejects agent.run when tools.allow is empty", () => {
-    expect(() =>
-      workflowDslSchema.parse({
-        version: "v2",
-        trigger: { type: "trigger.manual" },
-        nodes: [
-          {
-            id: "n1",
-            type: "agent.run",
-            config: {
-              llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
-              prompt: { instructions: "Call a tool." },
-              tools: { allow: [], execution: "cloud" },
-              limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000 },
-              output: { mode: "text" },
-            },
+  it("accepts agent.run when tools.allow is empty", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            prompt: { instructions: "Call no tools." },
+            tools: { allow: [], execution: "cloud" },
+            limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+            output: { mode: "text" },
           },
-        ],
-      })
-    ).toThrow();
+        },
+      ],
+    });
+
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
   it("executes nodes in sequence and returns success output", () => {
