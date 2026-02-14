@@ -19,6 +19,7 @@ type ConnectedAgent = {
   tokenHash: string;
   lastSeenAtMs: number;
   lastUsedAtMs: number;
+  inFlightCount: number;
   capabilities: Record<string, unknown> | null;
   name: string | null;
   agentVersion: string | null;
@@ -27,10 +28,14 @@ type ConnectedAgent = {
 type PendingRequest = {
   resolve: (value: GatewayDispatchResponse) => void;
   timeout: NodeJS.Timeout;
+  organizationId: string;
+  agentId: string;
 };
 
 type AgentCapabilities = {
   kinds: Set<string>;
+  connectors: Set<string> | null;
+  maxInFlight: number;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -47,8 +52,24 @@ function normalizeCapabilities(input: Record<string, unknown> | null): AgentCapa
   const kindsList = Array.isArray(kindsRaw) ? kindsRaw.filter((item): item is string => typeof item === "string") : [];
   // Backward-compatible default: if kinds not provided, assume it can handle any kind (MVP).
   const kinds = kindsList.length > 0 ? kindsList : ["connector.action", "agent.execute"];
-  return { kinds: new Set(kinds) };
+
+  const connectorsRaw = input?.["connectors"];
+  const connectorsList = Array.isArray(connectorsRaw)
+    ? connectorsRaw.filter((item): item is string => typeof item === "string")
+    : [];
+  const connectors = connectorsList.length > 0 ? new Set(connectorsList) : null;
+
+  const maxInFlightRaw = input?.["maxInFlight"];
+  const maxInFlight =
+    typeof maxInFlightRaw === "number" && Number.isFinite(maxInFlightRaw) ? Math.max(1, maxInFlightRaw) : 10;
+
+  return { kinds: new Set(kinds), connectors, maxInFlight };
 }
+
+const connectorActionDispatchPayloadSchema = z.object({
+  connectorId: z.string().min(1),
+  actionId: z.string().min(1),
+});
 
 const dispatchRequestSchema = z.object({
   organizationId: z.string().uuid(),
@@ -126,7 +147,10 @@ export async function buildGatewayServer(input?: {
   const agentsByOrg = new Map<string, ConnectedAgent[]>();
   const pendingByRequestId = new Map<string, PendingRequest>();
 
-  function selectAgent(orgId: string, required: { kind: string }): ConnectedAgent | null {
+  function selectAgent(
+    orgId: string,
+    required: { kind: string; connectorId?: string | null }
+  ): ConnectedAgent | null {
     const now = Date.now();
     const agents = agentsByOrg.get(orgId) ?? [];
     if (agents.length === 0) {
@@ -150,6 +174,14 @@ export async function buildGatewayServer(input?: {
       if (!capabilities.kinds.has(required.kind)) {
         continue;
       }
+      if (agent.inFlightCount >= capabilities.maxInFlight) {
+        continue;
+      }
+      if (required.kind === "connector.action" && required.connectorId && capabilities.connectors) {
+        if (!capabilities.connectors.has(required.connectorId)) {
+          continue;
+        }
+      }
       fresh.push(agent);
     }
 
@@ -158,10 +190,14 @@ export async function buildGatewayServer(input?: {
       return null;
     }
 
-    // LRU: pick the agent with the smallest lastUsedAtMs without sorting.
+    // Prefer least in-flight, then LRU.
     let best: ConnectedAgent | null = null;
     for (const agent of fresh) {
-      if (!best || agent.lastUsedAtMs < best.lastUsedAtMs) {
+      if (
+        !best ||
+        agent.inFlightCount < best.inFlightCount ||
+        (agent.inFlightCount === best.inFlightCount && agent.lastUsedAtMs < best.lastUsedAtMs)
+      ) {
         best = agent;
       }
     }
@@ -218,9 +254,18 @@ export async function buildGatewayServer(input?: {
       "gateway dispatch received"
     );
 
+    let connectorId: string | null = null;
+    if (parsed.data.kind === "connector.action") {
+      const payloadParsed = connectorActionDispatchPayloadSchema.safeParse(parsed.data.payload);
+      if (!payloadParsed.success) {
+        return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid connector.action payload" });
+      }
+      connectorId = payloadParsed.data.connectorId;
+    }
+
     let agent: ConnectedAgent | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const selected = selectAgent(parsed.data.organizationId, { kind: parsed.data.kind });
+      const selected = selectAgent(parsed.data.organizationId, { kind: parsed.data.kind, connectorId });
       if (!selected) {
         agent = null;
         break;
@@ -272,9 +317,11 @@ export async function buildGatewayServer(input?: {
       ...(parsed.data.secret ? { secret: parsed.data.secret } : {}),
     };
 
+    agent.inFlightCount += 1;
     const response = await new Promise<GatewayDispatchResponse>((resolve) => {
       const timeout = setTimeout(() => {
         pendingByRequestId.delete(requestId);
+        agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
         server.log.warn({
           event: "gateway_dispatch_timeout",
           orgId: parsed.data.organizationId,
@@ -285,7 +332,12 @@ export async function buildGatewayServer(input?: {
         resolve({ status: "failed", error: "NODE_EXECUTION_TIMEOUT" });
       }, timeoutMs);
 
-      pendingByRequestId.set(requestId, { resolve, timeout });
+      pendingByRequestId.set(requestId, {
+        resolve,
+        timeout,
+        organizationId: parsed.data.organizationId,
+        agentId: agent.agentId,
+      });
 
       agent.lastUsedAtMs = Date.now();
       try {
@@ -293,6 +345,7 @@ export async function buildGatewayServer(input?: {
       } catch (error) {
         clearTimeout(timeout);
         pendingByRequestId.delete(requestId);
+        agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
         removeAgent(agent.organizationId, agent.agentId);
         server.log.warn(
           {
@@ -378,6 +431,7 @@ export async function buildGatewayServer(input?: {
           return;
         }
 
+        agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
         clearTimeout(pending.timeout);
         pendingByRequestId.delete(parsed.data.requestId);
         pending.resolve({
@@ -432,6 +486,7 @@ export async function buildGatewayServer(input?: {
       tokenHash,
       lastSeenAtMs: Date.now(),
       lastUsedAtMs: 0,
+      inFlightCount: 0,
       capabilities:
         agentRow.capabilities && typeof agentRow.capabilities === "object"
           ? (agentRow.capabilities as Record<string, unknown>)

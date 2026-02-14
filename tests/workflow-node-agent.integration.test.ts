@@ -121,6 +121,7 @@ async function startStubAgent(input: {
   githubApiBaseUrl: string;
   capabilities?: Record<string, unknown>;
   failConnectorAction?: boolean;
+  supportedConnectors?: string[];
 }) {
   const ws = new WebSocket(input.gatewayWsUrl, {
     headers: {
@@ -175,6 +176,12 @@ async function startStubAgent(input: {
 
       const connectorId = msg.payload?.connectorId;
       const actionId = msg.payload?.actionId;
+      if (Array.isArray(input.supportedConnectors) && typeof connectorId === "string") {
+        if (!input.supportedConnectors.includes(connectorId)) {
+          ws.send(JSON.stringify({ type: "execute_result", requestId, status: "failed", error: "CONNECTOR_NOT_SUPPORTED" }));
+          return;
+        }
+      }
       const action = getCommunityConnectorAction({ connectorId, actionId });
       if (!action) {
         ws.send(JSON.stringify({ type: "execute_result", requestId, status: "failed", error: "ACTION_NOT_SUPPORTED" }));
@@ -585,6 +592,147 @@ describe("workflow node-agent integration", () => {
                 connectorId: "github",
                 actionId: "issue.create",
                 input: { repo: "octo/test", title: "Capability Routing" },
+                auth: { secretId },
+                execution: { mode: "node" },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publish = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(publish.statusCode).toBe(200);
+
+    const beforeCount = githubStub.getRequestCount();
+    const runCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(runCreate.statusCode).toBe(201);
+    const runId = (runCreate.json() as { run: { id: string } }).run.id;
+
+    let finalStatus = "queued";
+    for (let index = 0; index < 80; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const runGet = await api.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(runGet.statusCode).toBe(200);
+      finalStatus = (runGet.json() as { run: { status: string } }).run.status;
+      if (finalStatus === "succeeded" || finalStatus === "failed") {
+        break;
+      }
+    }
+
+    expect(finalStatus).toBe("succeeded");
+    expect(githubStub.getRequestCount()).toBe(beforeCount + 1);
+
+    await wsA.close();
+    await wsB.close();
+  });
+
+  it("routes connector.action only to agents that support the connector", async () => {
+    if (!available || !api || !githubStub || !gatewayWsUrl) {
+      return;
+    }
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `node-agent-conn-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Node Agent Connector Org",
+        slug: randomSlug("node-agent-conn-org"),
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const secretCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/secrets`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { connectorId: "github", name: "token", value: githubStub.expectedToken },
+    });
+    expect(secretCreate.statusCode).toBe(201);
+    const secretId = (secretCreate.json() as { secret: { id: string } }).secret.id;
+
+    async function pairWithCaps(name: string, capabilities: Record<string, unknown>) {
+      const pairing = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(pairing.statusCode).toBe(201);
+      const pairingToken = (pairing.json() as { token: string }).token;
+
+      const pairRes = await api.inject({
+        method: "POST",
+        url: "/v1/agents/pair",
+        payload: { pairingToken, name, agentVersion: "test-agent", capabilities },
+      });
+      expect(pairRes.statusCode).toBe(201);
+      return pairRes.json() as { agentToken: string };
+    }
+
+    // Agent that supports connector.action but NOT github.
+    const agentA = await pairWithCaps("agent-jira-only", { kinds: ["connector.action"], connectors: ["jira"] });
+    const wsA = await startStubAgent({
+      gatewayWsUrl,
+      agentToken: agentA.agentToken,
+      githubApiBaseUrl: githubStub.baseUrl,
+      capabilities: { kinds: ["connector.action"], connectors: ["jira"] },
+      supportedConnectors: ["jira"],
+    });
+
+    // Agent that supports github.
+    const agentB = await pairWithCaps("agent-github", { kinds: ["connector.action"], connectors: ["github"] });
+    const wsB = await startStubAgent({
+      gatewayWsUrl,
+      agentToken: agentB.agentToken,
+      githubApiBaseUrl: githubStub.baseUrl,
+      capabilities: { kinds: ["connector.action"], connectors: ["github"] },
+      supportedConnectors: ["github"],
+    });
+
+    const createWorkflow = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        name: "Connector Routing Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [
+            {
+              id: "node-github",
+              type: "connector.action",
+              config: {
+                connectorId: "github",
+                actionId: "issue.create",
+                input: { repo: "octo/test", title: "Connector Routing" },
                 auth: { secretId },
                 execution: { mode: "node" },
               },
