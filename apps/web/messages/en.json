@@ -1,0 +1,77 @@
+{
+  "app": {
+    "name": "Vespid",
+    "tagline": "Automation, orchestration, and execution."
+  },
+  "nav": {
+    "workflows": "Workflows",
+    "secrets": "Secrets",
+    "agents": "Agents",
+    "auth": "Auth",
+    "org": "Organization",
+    "openById": "Open by ID"
+  },
+  "common": {
+    "refresh": "Refresh",
+    "create": "Create",
+    "delete": "Delete",
+    "rotate": "Rotate",
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "copy": "Copy",
+    "copied": "Copied",
+    "loading": "Loading...",
+    "notLoggedIn": "Not logged in",
+    "debug": "Debug",
+    "show": "Show",
+    "hide": "Hide"
+  },
+  "org": {
+    "active": "Active organization",
+    "noActive": "No active org",
+    "paste": "Paste org UUID",
+    "set": "Set org",
+    "recent": "Recent organizations"
+  },
+  "auth": {
+    "title": "Auth",
+    "email": "Email",
+    "password": "Password",
+    "signup": "Sign up",
+    "login": "Login",
+    "refresh": "Refresh session",
+    "logout": "Logout",
+    "oauth": "OAuth",
+    "google": "Continue with Google",
+    "github": "Continue with GitHub"
+  },
+  "workflows": {
+    "title": "Workflows",
+    "createTitle": "Create workflow",
+    "workflowId": "Workflow ID",
+    "recent": "Recent workflows",
+    "open": "Open workflow",
+    "runs": "Runs"
+  },
+  "runs": {
+    "title": "Run replay",
+    "timeline": "Timeline",
+    "details": "Details",
+    "inspector": "Inspector",
+    "search": "Search payload",
+    "filter": "Filter"
+  },
+  "agents": {
+    "title": "Agents",
+    "pairing": "Pairing token",
+    "revoke": "Revoke"
+  },
+  "secrets": {
+    "title": "Secrets",
+    "warning": "Values are never displayed after saving.",
+    "connector": "Connector",
+    "name": "Name",
+    "value": "Value"
+  }
+}

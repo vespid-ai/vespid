@@ -1,0 +1,196 @@
+"use client";
+
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useEffect, useMemo, useState } from "react";
+import { apiFetch, getApiBase } from "../../../../lib/api";
+import { useSession } from "../../../../lib/hooks/use-session";
+import { Badge } from "../../../../components/ui/badge";
+import { Button } from "../../../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
+import { Input } from "../../../../components/ui/input";
+import { Label } from "../../../../components/ui/label";
+import { CodeBlock } from "../../../../components/ui/code-block";
+
+type AuthPayload = {
+  session?: { token: string; expiresAt: number };
+  user?: { id: string; email: string };
+  code?: string;
+  message?: string;
+};
+
+function oauthStartUrl(provider: "google" | "github"): string {
+  return `${getApiBase()}/v1/auth/oauth/${provider}/start`;
+}
+
+export default function AuthPage() {
+  const t = useTranslations();
+  const params = useParams<{ locale?: string | string[] }>();
+  const locale = Array.isArray(params?.locale) ? params.locale[0] : params?.locale ?? "en";
+  const session = useSession();
+
+  const [oauthStatus, setOauthStatus] = useState<string | null>(null);
+  const [oauthProvider, setOauthProvider] = useState<string | null>(null);
+  const [oauthCode, setOauthCode] = useState<string | null>(null);
+
+  const [email, setEmail] = useState("owner@example.com");
+  const [password, setPassword] = useState("Password123");
+  const [result, setResult] = useState<AuthPayload | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setOauthStatus(params.get("oauth"));
+    setOauthProvider(params.get("provider"));
+    setOauthCode(params.get("code"));
+  }, []);
+
+  const oauthBanner = useMemo(() => {
+    if (oauthStatus === "success") {
+      return { tone: "ok" as const, text: `OAuth login succeeded (${oauthProvider ?? "provider"}).` };
+    }
+    if (oauthStatus === "error") {
+      return { tone: "danger" as const, text: `OAuth login failed: ${oauthCode ?? "unknown_error"}` };
+    }
+    return null;
+  }, [oauthCode, oauthProvider, oauthStatus]);
+
+  async function signup() {
+    const response = await apiFetch("/v1/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    setResult(await response.json());
+    session.refetch();
+  }
+
+  async function login() {
+    const response = await apiFetch("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    setResult(await response.json());
+    session.refetch();
+  }
+
+  async function refreshSession() {
+    const response = await apiFetch("/v1/auth/refresh", { method: "POST" });
+    setResult(await response.json());
+    session.refetch();
+  }
+
+  async function logout() {
+    const response = await apiFetch("/v1/auth/logout", { method: "POST" });
+    setResult(await response.json());
+    session.refetch();
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div>
+        <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("auth.title")}</div>
+        <div className="mt-1 text-sm text-muted">Cookie-based auth with refresh token, designed for multi-tenant SaaS.</div>
+      </div>
+
+      {oauthBanner ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Badge variant={oauthBanner.tone === "ok" ? "ok" : "danger"}>
+                {oauthBanner.tone === "ok" ? "OK" : "ERROR"}
+              </Badge>
+              <CardTitle>OAuth</CardTitle>
+            </div>
+            <CardDescription>{oauthBanner.text}</CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Session</CardTitle>
+          <CardDescription>
+            {session.isLoading
+              ? t("common.loading")
+              : session.data?.user?.email
+                ? `Logged in as ${session.data.user.email}`
+                : t("common.notLoggedIn")}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => session.refetch()}>
+            {t("auth.refresh")}
+          </Button>
+          <Button variant="danger" onClick={logout}>
+            {t("auth.logout")}
+          </Button>
+          <Button asChild variant="ghost">
+            <Link href={`/${locale}/workflows`}>Go to App</Link>
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Password login</CardTitle>
+          <CardDescription>Bootstrap-only UI. Replace with product-grade auth UI later.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="email">{t("auth.email")}</Label>
+            <Input id="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="password">{t("auth.password")}</Label>
+            <Input
+              id="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant="accent" onClick={signup}>
+              {t("auth.signup")}
+            </Button>
+            <Button variant="outline" onClick={login}>
+              {t("auth.login")}
+            </Button>
+            <Button variant="outline" onClick={refreshSession}>
+              {t("auth.refresh")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("auth.oauth")}</CardTitle>
+          <CardDescription>Redirect-based OAuth flow.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button asChild variant="outline">
+            <a href={oauthStartUrl("google")}>{t("auth.google")}</a>
+          </Button>
+          <Button asChild variant="outline">
+            <a href={oauthStartUrl("github")}>{t("auth.github")}</a>
+          </Button>
+        </CardContent>
+      </Card>
+
+      <div>
+        <Button variant="ghost" onClick={() => setShowDebug((v) => !v)}>
+          {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
+        </Button>
+        {showDebug && result ? (
+          <div className="mt-2">
+            <CodeBlock value={result} />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}

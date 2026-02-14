@@ -1,0 +1,138 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetchJson } from "../api";
+
+export type Workflow = {
+  id: string;
+  name: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  dsl?: unknown;
+};
+
+export type WorkflowRun = {
+  id: string;
+  status: string;
+  createdAt?: string;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  input?: unknown;
+};
+
+export type WorkflowRunEvent = Record<string, unknown> & {
+  id?: string;
+  createdAt?: string;
+  attemptCount?: number;
+  type?: string;
+  nodeId?: string;
+};
+
+export function useWorkflow(orgId: string | null, workflowId: string | null) {
+  return useQuery({
+    queryKey: ["workflow", orgId, workflowId],
+    enabled: Boolean(orgId && workflowId),
+    queryFn: async () => {
+      return apiFetchJson<{ workflow: Workflow }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+    },
+  });
+}
+
+export function useRuns(orgId: string | null, workflowId: string | null) {
+  return useQuery({
+    queryKey: ["runs", orgId, workflowId],
+    enabled: Boolean(orgId && workflowId),
+    queryFn: async () => {
+      return apiFetchJson<{ runs: WorkflowRun[] }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+    },
+    refetchInterval: 4000,
+  });
+}
+
+export function useRun(orgId: string | null, workflowId: string | null, runId: string | null) {
+  return useQuery({
+    queryKey: ["run", orgId, workflowId, runId],
+    enabled: Boolean(orgId && workflowId && runId),
+    queryFn: async () => {
+      return apiFetchJson<{ run: WorkflowRun }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+    },
+    refetchInterval: 2000,
+  });
+}
+
+export function useRunEvents(orgId: string | null, workflowId: string | null, runId: string | null) {
+  return useQuery({
+    queryKey: ["runEvents", orgId, workflowId, runId],
+    enabled: Boolean(orgId && workflowId && runId),
+    queryFn: async () => {
+      return apiFetchJson<{ events: WorkflowRunEvent[] }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=200`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+    },
+    refetchInterval: 2000,
+  });
+}
+
+export function useCreateWorkflow(orgId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { name: string; dsl: unknown }) => {
+      return apiFetchJson<{ workflow: Workflow }>(
+        `/v1/orgs/${orgId}/workflows`,
+        { method: "POST", body: JSON.stringify(input) },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["runs", orgId] });
+    },
+  });
+}
+
+export function usePublishWorkflow(orgId: string | null, workflowId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      return apiFetchJson<unknown>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+        { method: "POST" },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow", orgId, workflowId] });
+    },
+  });
+}
+
+export function useRunWorkflow(orgId: string | null, workflowId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { input: unknown }) => {
+      return apiFetchJson<{ run: WorkflowRun }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        { method: "POST", body: JSON.stringify(input) },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["runs", orgId, workflowId] });
+    },
+  });
+}

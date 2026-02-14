@@ -1,70 +1,43 @@
+@import "tailwindcss";
+
 :root {
-  --bg: #f6f7fb;
-  --card: #ffffff;
-  --text: #111827;
-  --muted: #6b7280;
-  --accent: #0d9488;
+  /* RGB triples so Tailwind can do rgb(var(--token) / alpha). */
+  --bg: 246 247 251;
+  --panel: 255 255 255;
+  --panel-elev: 255 255 255;
+  --border: 214 221 232;
+  --text: 17 24 39;
+  --muted: 100 116 139;
+  --accent: 20 184 166;
+  --danger: 239 68 68;
+  --warn: 245 158 11;
+  --ok: 16 185 129;
 }
 
-* {
-  box-sizing: border-box;
+html,
+body {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top right, #d1fae5, var(--bg) 45%);
-  color: var(--text);
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: rgb(var(--text));
+  background:
+    radial-gradient(1200px 700px at 85% -10%, rgb(94 234 212 / 0.35), transparent 55%),
+    radial-gradient(900px 700px at 10% 0%, rgb(56 189 248 / 0.18), transparent 55%),
+    radial-gradient(1000px 800px at 50% 115%, rgb(165 243 252 / 0.25), transparent 60%),
+    linear-gradient(rgb(var(--bg)), rgb(var(--bg)));
+  background-attachment: fixed;
 }
 
-main {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 2rem 1rem 4rem;
+::selection {
+  background: rgb(var(--accent) / 0.25);
 }
 
-.card {
-  background: var(--card);
-  border-radius: 12px;
-  border: 1px solid #d1d5db;
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-
-input,
-button,
-select {
-  font: inherit;
-}
-
-input,
-select {
-  width: 100%;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  padding: 0.6rem 0.75rem;
-  margin-top: 0.4rem;
-  margin-bottom: 0.8rem;
-}
-
-button {
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
-  padding: 0.55rem 0.85rem;
-  cursor: pointer;
-}
-
-small {
-  color: var(--muted);
-}
-
-pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #0f172a;
-  color: #e2e8f0;
-  border-radius: 8px;
-  padding: 0.75rem;
+/* Subtle grain without external assets. */
+.bg-grain {
+  background-image:
+    radial-gradient(circle at 1px 1px, rgb(2 6 23 / 0.06) 1px, transparent 0);
+  background-size: 14px 14px;
+  background-position: 0 0;
 }

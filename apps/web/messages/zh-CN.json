@@ -1,0 +1,77 @@
+{
+  "app": {
+    "name": "Vespid",
+    "tagline": "自动化, 编排与执行平台。"
+  },
+  "nav": {
+    "workflows": "工作流",
+    "secrets": "密钥",
+    "agents": "代理",
+    "auth": "登录",
+    "org": "组织",
+    "openById": "按 ID 打开"
+  },
+  "common": {
+    "refresh": "刷新",
+    "create": "创建",
+    "delete": "删除",
+    "rotate": "轮换",
+    "save": "保存",
+    "cancel": "取消",
+    "close": "关闭",
+    "copy": "复制",
+    "copied": "已复制",
+    "loading": "加载中...",
+    "notLoggedIn": "未登录",
+    "debug": "调试",
+    "show": "展开",
+    "hide": "收起"
+  },
+  "org": {
+    "active": "当前组织",
+    "noActive": "未选择组织",
+    "paste": "粘贴组织 UUID",
+    "set": "设置",
+    "recent": "最近使用的组织"
+  },
+  "auth": {
+    "title": "登录",
+    "email": "邮箱",
+    "password": "密码",
+    "signup": "注册",
+    "login": "登录",
+    "refresh": "刷新会话",
+    "logout": "退出",
+    "oauth": "OAuth",
+    "google": "使用 Google 继续",
+    "github": "使用 GitHub 继续"
+  },
+  "workflows": {
+    "title": "工作流",
+    "createTitle": "创建工作流",
+    "workflowId": "工作流 ID",
+    "recent": "最近工作流",
+    "open": "打开工作流",
+    "runs": "运行"
+  },
+  "runs": {
+    "title": "运行回放",
+    "timeline": "时间线",
+    "details": "详情",
+    "inspector": "检查器",
+    "search": "搜索载荷",
+    "filter": "筛选"
+  },
+  "agents": {
+    "title": "代理",
+    "pairing": "配对令牌",
+    "revoke": "撤销"
+  },
+  "secrets": {
+    "title": "密钥",
+    "warning": "保存后不会再显示密钥值。",
+    "connector": "连接器",
+    "name": "名称",
+    "value": "值"
+  }
+}
