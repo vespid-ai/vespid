@@ -42,12 +42,35 @@ export type WorkflowNodeExecutorContext = {
   nodeType: string;
   node: unknown;
   runInput?: unknown;
+  // Execution steps completed so far for the current attempt.
+  steps?: unknown;
+  // Opaque workflow-run runtime state persisted under workflow_runs.output.runtime.
+  runtime?: unknown;
+  // When a run is resumed after remote execution, the continuation worker
+  // stores the remote result in runtime and re-enqueues the run. Executors
+  // may consume it to complete the in-flight operation.
+  pendingRemoteResult?: unknown;
 };
 
 export type WorkflowNodeExecutorResult = {
-  status: "succeeded" | "failed";
+  status: "succeeded" | "failed" | "blocked";
   output?: unknown;
   error?: string;
+  // Only used when status === "blocked".
+  block?: {
+    kind: "connector.action" | "agent.execute";
+    // Optional override used to build deterministic gateway request IDs.
+    // If omitted, the workflow nodeId is used.
+    dispatchNodeId?: string;
+    payload: unknown;
+    selectorTag?: string;
+    selectorAgentId?: string;
+    selectorGroup?: string;
+    secret?: string;
+    timeoutMs?: number;
+  };
+  // Optional runtime override to persist under workflow_runs.output.runtime.
+  runtime?: unknown;
 };
 
 export type WorkflowNodeExecutor = {

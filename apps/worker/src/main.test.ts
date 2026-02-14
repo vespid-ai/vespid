@@ -38,6 +38,14 @@ vi.mock("@vespid/workflow", () => ({
   },
 }));
 
+const gatewayMocks = vi.hoisted(() => ({
+  dispatchViaGatewayAsync: vi.fn(),
+}));
+
+vi.mock("./gateway/client.js", () => ({
+  dispatchViaGatewayAsync: gatewayMocks.dispatchViaGatewayAsync,
+}));
+
 import { processWorkflowRunJob } from "./main.js";
 import type { EnterpriseProvider, WorkflowNodeExecutor } from "@vespid/shared";
 
@@ -58,6 +66,7 @@ const jobBase = {
 describe("workflow worker", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    gatewayMocks.dispatchViaGatewayAsync.mockResolvedValue({ ok: true, requestId: "req-1", dispatched: true });
     mocks.withTenantContext.mockImplementation(async (_pool: unknown, _ctx: unknown, fn: Function) => fn({}));
     mocks.getWorkflowRunById.mockResolvedValue({
       id: "run-1",
@@ -122,6 +131,35 @@ describe("workflow worker", () => {
     expect(mocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: "run_succeeded" })
+    );
+  });
+
+  it("blocks and dispatches when executor returns blocked", async () => {
+    const executor: WorkflowNodeExecutor = {
+      nodeType: "agent.execute",
+      async execute() {
+        return {
+          status: "blocked",
+          block: { kind: "agent.execute", payload: { hello: "world" }, dispatchNodeId: "n1:tool:1" },
+          runtime: { agentRuns: { n1: { toolCalls: 1, turns: 1 } } },
+        };
+      },
+    };
+    const executorRegistry = new Map<string, WorkflowNodeExecutor>([[executor.nodeType, executor]]);
+
+    const enqueueContinuationPoll = vi.fn().mockResolvedValue(undefined);
+
+    await processWorkflowRunJob(pool, jobBase, { executorRegistry, enqueueContinuationPoll });
+
+    expect(gatewayMocks.dispatchViaGatewayAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.markWorkflowRunBlocked).toHaveBeenCalledTimes(1);
+    expect(mocks.markWorkflowRunSucceeded).not.toHaveBeenCalled();
+    expect(enqueueContinuationPoll).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-1", attemptCount: 1 })
+    );
+    expect(mocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: "node_dispatched" })
     );
   });
 

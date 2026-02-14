@@ -14,50 +14,133 @@ import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useCreateWorkflow } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
 
-function buildDsl(params: {
-  includeGithub: boolean;
-  runOnNodeAgent: boolean;
-  agentScript: string;
-  agentUseDocker: boolean;
-  agentAllowNetwork: boolean;
+type AgentNodeForm = {
+  id: string;
+  instructions: string;
+  system: string;
+  model: string;
+  llmSecretId: string;
+
+  toolGithubIssueCreate: boolean;
+  toolShellRun: boolean;
+  runToolsOnNodeAgent: boolean;
+
   githubSecretId: string;
   githubRepo: string;
   githubTitle: string;
   githubBody: string;
-}): unknown {
-  const nodes: Array<Record<string, unknown>> = [];
 
-  if (params.includeGithub) {
-    nodes.push({
-      id: "node-github",
-      type: "connector.action",
+  outputMode: "text" | "json";
+  jsonSchema: string;
+};
+
+function defaultAgentNode(index: number): AgentNodeForm {
+  const id = `agent-${index + 1}`;
+  return {
+    id,
+    instructions: "Create a GitHub issue, then summarize the result.",
+    system: "",
+    model: "gpt-4.1-mini",
+    llmSecretId: "",
+    toolGithubIssueCreate: true,
+    toolShellRun: false,
+    runToolsOnNodeAgent: false,
+    githubSecretId: "",
+    githubRepo: "octo/test",
+    githubTitle: "Vespid Issue",
+    githubBody: "Created by Vespid agent.run",
+    outputMode: "text",
+    jsonSchema: "",
+  };
+}
+
+function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
+  const nodes: Array<Record<string, unknown>> = params.nodes.map((node) => {
+    const toolAllow: string[] = [];
+    if (node.toolGithubIssueCreate) {
+      toolAllow.push("connector.github.issue.create");
+    }
+    if (node.toolShellRun) {
+      toolAllow.push("shell.run");
+    }
+
+    const toolHints: string[] = [];
+    if (node.toolGithubIssueCreate) {
+      toolHints.push(
+        [
+          "If you need to create a GitHub issue, call toolId connector.github.issue.create with input:",
+          JSON.stringify(
+            {
+              input: { repo: node.githubRepo, title: node.githubTitle, body: node.githubBody },
+              auth: node.githubSecretId ? { secretId: node.githubSecretId } : { secretId: "<github-secret-uuid>" },
+            },
+            null,
+            2
+          ),
+        ].join("\n")
+      );
+    }
+    if (node.toolShellRun) {
+      toolHints.push(
+        [
+          "If you need to run a shell command, call toolId shell.run with input:",
+          JSON.stringify(
+            {
+              script: "echo hello",
+              shell: "sh",
+              sandbox: { backend: "docker", network: "none" },
+            },
+            null,
+            2
+          ),
+        ].join("\n")
+      );
+    }
+
+    const inputTemplate = toolHints.length > 0 ? toolHints.join("\n\n") : undefined;
+
+    let jsonSchemaValue: unknown | undefined;
+    if (node.outputMode === "json" && node.jsonSchema.trim().length > 0) {
+      try {
+        jsonSchemaValue = JSON.parse(node.jsonSchema);
+      } catch {
+        jsonSchemaValue = undefined;
+      }
+    }
+
+    return {
+      id: node.id,
+      type: "agent.run",
       config: {
-        connectorId: "github",
-        actionId: "issue.create",
-        input: {
-          repo: params.githubRepo,
-          title: params.githubTitle,
-          body: params.githubBody,
+        llm: {
+          provider: "openai",
+          model: node.model,
+          auth: {
+            ...(node.llmSecretId.trim().length > 0 ? { secretId: node.llmSecretId.trim() } : {}),
+            fallbackToEnv: true,
+          },
         },
-        auth: { secretId: params.githubSecretId },
-        execution: { mode: params.runOnNodeAgent ? "node" : "cloud" },
+        prompt: {
+          ...(node.system.trim().length > 0 ? { system: node.system } : {}),
+          instructions: node.instructions,
+          ...(inputTemplate ? { inputTemplate } : {}),
+        },
+        tools: {
+          allow: toolAllow.length > 0 ? toolAllow : ["connector.github.issue.create"],
+          execution: node.runToolsOnNodeAgent ? "node" : "cloud",
+        },
+        limits: {
+          maxTurns: 8,
+          maxToolCalls: 20,
+          timeoutMs: 60_000,
+          maxOutputChars: 50_000,
+        },
+        output: {
+          mode: node.outputMode,
+          ...(jsonSchemaValue !== undefined ? { jsonSchema: jsonSchemaValue } : {}),
+        },
       },
-    });
-  } else {
-    nodes.push({ id: "node-http", type: "http.request" });
-  }
-
-  nodes.push({
-    id: "node-agent",
-    type: "agent.execute",
-    config: {
-      execution: { mode: params.runOnNodeAgent ? "node" : "cloud" },
-      task: { type: "shell", script: params.agentScript, shell: "sh" },
-      sandbox: {
-        ...(params.runOnNodeAgent ? { backend: params.agentUseDocker ? "docker" : "host" } : {}),
-        ...(params.runOnNodeAgent ? { network: params.agentAllowNetwork ? "enabled" : "none" } : {}),
-      },
-    },
+    };
   });
 
   return {
@@ -79,16 +162,7 @@ export default function WorkflowsPage() {
   const [workflowName, setWorkflowName] = useState("Issue triage");
   const [openWorkflowId, setOpenWorkflowId] = useState("");
 
-  const [includeGithub, setIncludeGithub] = useState(false);
-  const [runOnNodeAgent, setRunOnNodeAgent] = useState(false);
-  const [agentScript, setAgentScript] = useState("echo hello");
-  const [agentUseDocker, setAgentUseDocker] = useState(true);
-  const [agentAllowNetwork, setAgentAllowNetwork] = useState(false);
-
-  const [githubSecretId, setGithubSecretId] = useState("");
-  const [githubRepo, setGithubRepo] = useState("octo/test");
-  const [githubTitle, setGithubTitle] = useState("Vespid Issue");
-  const [githubBody, setGithubBody] = useState("Created by Vespid workflow");
+  const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);
 
   const [recent, setRecent] = useState<string[]>([]);
   const [showDebug, setShowDebug] = useState(false);
@@ -97,42 +171,19 @@ export default function WorkflowsPage() {
     setRecent(getRecentWorkflowIds());
   }, []);
 
-  const canCreate = Boolean(orgId) && (!includeGithub || githubSecretId.trim().length > 0);
+  const canCreate = Boolean(orgId) && agentNodes.length > 0;
 
   const dslPreview = useMemo(
     () =>
       buildDsl({
-        includeGithub,
-        runOnNodeAgent,
-        agentScript,
-        agentUseDocker,
-        agentAllowNetwork,
-        githubSecretId,
-        githubRepo,
-        githubTitle,
-        githubBody,
+        nodes: agentNodes,
       }),
-    [
-      agentAllowNetwork,
-      agentScript,
-      agentUseDocker,
-      githubBody,
-      githubRepo,
-      githubSecretId,
-      githubTitle,
-      includeGithub,
-      runOnNodeAgent,
-    ]
+    [agentNodes]
   );
 
   async function submitCreate() {
     if (!orgId) {
       toast.error("Set an active org first.");
-      return;
-    }
-
-    if (includeGithub && githubSecretId.trim().length === 0) {
-      toast.error("Provide a GitHub secretId to include the GitHub node.");
       return;
     }
 
@@ -174,59 +225,258 @@ export default function WorkflowsPage() {
               <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
             </div>
 
-            <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={includeGithub} onChange={(e) => setIncludeGithub(e.target.checked)} />
-                Include GitHub create-issue node
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={runOnNodeAgent} onChange={(e) => setRunOnNodeAgent(e.target.checked)} />
-                Run nodes on node-agent (remote)
-              </label>
+            <div className="grid gap-3 rounded-lg border border-border bg-panel/50 p-3">
+              <div className="text-sm font-medium text-text">{t("workflows.agentNodes")}</div>
+
+              <div className="grid gap-3">
+                {agentNodes.map((node, idx) => {
+                  const canRemove = agentNodes.length > 1;
+                  return (
+                    <div key={node.id} className="grid gap-3 rounded-lg border border-border bg-panel/60 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-medium text-text">
+                          {idx + 1}. {node.id}
+                        </div>
+                        <div className="ml-auto flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={idx === 0}
+                            onClick={() => {
+                              setAgentNodes((prev) => {
+                                const next = [...prev];
+                                const a = next[idx - 1];
+                                const b = next[idx];
+                                if (!a || !b) {
+                                  return prev;
+                                }
+                                next[idx - 1] = b;
+                                next[idx] = a;
+                                return next;
+                              });
+                            }}
+                          >
+                            {t("workflows.up")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={idx === agentNodes.length - 1}
+                            onClick={() => {
+                              setAgentNodes((prev) => {
+                                const next = [...prev];
+                                const a = next[idx];
+                                const b = next[idx + 1];
+                                if (!a || !b) {
+                                  return prev;
+                                }
+                                next[idx] = b;
+                                next[idx + 1] = a;
+                                return next;
+                              });
+                            }}
+                          >
+                            {t("workflows.down")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            disabled={!canRemove}
+                            onClick={() => setAgentNodes((prev) => prev.filter((n) => n.id !== node.id))}
+                          >
+                            {t("workflows.remove")}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label htmlFor={`agent-instructions-${node.id}`}>{t("workflows.instructions")}</Label>
+                        <Textarea
+                          id={`agent-instructions-${node.id}`}
+                          value={node.instructions}
+                          onChange={(e) =>
+                            setAgentNodes((prev) =>
+                              prev.map((n) => (n.id === node.id ? { ...n, instructions: e.target.value } : n))
+                            )
+                          }
+                          rows={4}
+                        />
+                      </div>
+
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <div className="grid gap-1.5">
+                          <Label htmlFor={`agent-model-${node.id}`}>{t("workflows.model")}</Label>
+                          <Input
+                            id={`agent-model-${node.id}`}
+                            value={node.model}
+                            onChange={(e) =>
+                              setAgentNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, model: e.target.value } : n)))
+                            }
+                          />
+                        </div>
+                        <div className="grid gap-1.5">
+                          <Label htmlFor={`agent-llm-secret-${node.id}`}>{t("workflows.llmSecretId")}</Label>
+                          <Input
+                            id={`agent-llm-secret-${node.id}`}
+                            value={node.llmSecretId}
+                            onChange={(e) =>
+                              setAgentNodes((prev) =>
+                                prev.map((n) => (n.id === node.id ? { ...n, llmSecretId: e.target.value } : n))
+                              )
+                            }
+                            placeholder='Create a secret with connectorId="llm.openai"'
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                        <div className="text-sm font-medium text-text">{t("workflows.tools")}</div>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={node.toolGithubIssueCreate}
+                            onChange={(e) =>
+                              setAgentNodes((prev) =>
+                                prev.map((n) =>
+                                  n.id === node.id ? { ...n, toolGithubIssueCreate: e.target.checked || n.toolShellRun } : n
+                                )
+                              )
+                            }
+                          />
+                          {t("workflows.githubIssueCreate")}
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={node.toolShellRun}
+                            onChange={(e) =>
+                              setAgentNodes((prev) =>
+                                prev.map((n) =>
+                                  n.id === node.id ? { ...n, toolShellRun: e.target.checked || n.toolGithubIssueCreate } : n
+                                )
+                              )
+                            }
+                          />
+                          {t("workflows.shellRun")}
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={node.runToolsOnNodeAgent}
+                            onChange={(e) =>
+                              setAgentNodes((prev) =>
+                                prev.map((n) => (n.id === node.id ? { ...n, runToolsOnNodeAgent: e.target.checked } : n))
+                              )
+                            }
+                          />
+                          {t("workflows.runToolsOnNodeAgent")}
+                        </label>
+                      </div>
+
+                      {node.toolGithubIssueCreate ? (
+                        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                          <div className="text-sm font-medium text-text">{t("workflows.githubDefaults")}</div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor={`github-secret-id-${node.id}`}>{t("workflows.githubSecretId")}</Label>
+                            <Input
+                              id={`github-secret-id-${node.id}`}
+                              value={node.githubSecretId}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, githubSecretId: e.target.value } : n))
+                                )
+                              }
+                              placeholder="Paste secret UUID from /secrets"
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor={`github-repo-${node.id}`}>{t("workflows.repo")}</Label>
+                            <Input
+                              id={`github-repo-${node.id}`}
+                              value={node.githubRepo}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, githubRepo: e.target.value } : n))
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor={`github-title-${node.id}`}>{t("workflows.issueTitle")}</Label>
+                            <Input
+                              id={`github-title-${node.id}`}
+                              value={node.githubTitle}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, githubTitle: e.target.value } : n))
+                                )
+                              }
+                            />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label htmlFor={`github-body-${node.id}`}>{t("workflows.issueBody")}</Label>
+                            <Textarea
+                              id={`github-body-${node.id}`}
+                              value={node.githubBody}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, githubBody: e.target.value } : n))
+                                )
+                              }
+                              rows={3}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <div className="grid gap-1.5">
+                          <Label htmlFor={`agent-output-mode-${node.id}`}>{t("workflows.outputMode")}</Label>
+                          <Input
+                            id={`agent-output-mode-${node.id}`}
+                            value={node.outputMode}
+                            onChange={(e) =>
+                              setAgentNodes((prev) =>
+                                prev.map((n) =>
+                                  n.id === node.id ? { ...n, outputMode: e.target.value === "json" ? "json" : "text" } : n
+                                )
+                              )
+                            }
+                            placeholder="text | json"
+                          />
+                        </div>
+                        {node.outputMode === "json" ? (
+                          <div className="grid gap-1.5">
+                            <Label htmlFor={`agent-json-schema-${node.id}`}>{t("workflows.jsonSchema")}</Label>
+                            <Textarea
+                              id={`agent-json-schema-${node.id}`}
+                              value={node.jsonSchema}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, jsonSchema: e.target.value } : n))
+                                )
+                              }
+                              rows={4}
+                              placeholder='{"type":"object","properties":{}}'
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setAgentNodes((prev) => [...prev, defaultAgentNode(prev.length)])}
+                    disabled={agentNodes.length >= 10}
+                  >
+                    {t("workflows.addAgentNode")}
+                  </Button>
+                </div>
+              </div>
             </div>
-
-            {runOnNodeAgent ? (
-              <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="agent-script">Agent script (sh)</Label>
-                  <Textarea id="agent-script" value={agentScript} onChange={(e) => setAgentScript(e.target.value)} rows={4} />
-                </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={agentUseDocker} onChange={(e) => setAgentUseDocker(e.target.checked)} />
-                  Use docker sandbox (agent.execute)
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={agentAllowNetwork} onChange={(e) => setAgentAllowNetwork(e.target.checked)} />
-                  Allow network (agent.execute)
-                </label>
-              </div>
-            ) : null}
-
-            {includeGithub ? (
-              <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="github-secret-id">GitHub secretId</Label>
-                  <Input
-                    id="github-secret-id"
-                    value={githubSecretId}
-                    onChange={(e) => setGithubSecretId(e.target.value)}
-                    placeholder="Paste secret UUID from /secrets"
-                  />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="github-repo">Repo (owner/repo)</Label>
-                  <Input id="github-repo" value={githubRepo} onChange={(e) => setGithubRepo(e.target.value)} />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="github-title">Issue title</Label>
-                  <Input id="github-title" value={githubTitle} onChange={(e) => setGithubTitle(e.target.value)} />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="github-body">Issue body</Label>
-                  <Textarea id="github-body" value={githubBody} onChange={(e) => setGithubBody(e.target.value)} rows={4} />
-                </div>
-              </div>
-            ) : null}
 
             <div className="flex flex-wrap gap-2">
               <Button variant="accent" onClick={submitCreate} disabled={!canCreate || createWorkflow.isPending}>

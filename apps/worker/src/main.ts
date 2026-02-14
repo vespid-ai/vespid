@@ -24,7 +24,6 @@ import {
   type WorkflowRunJobPayload,
 } from "@vespid/shared";
 import { workflowDslSchema, type WorkflowExecutionResult, type WorkflowExecutionStep } from "@vespid/workflow";
-import { getCommunityConnectorAction } from "@vespid/connectors";
 import {
   getRedisConnectionOptions,
   getWorkflowContinuationQueueName,
@@ -115,7 +114,32 @@ function parseStepsFromRunOutput(output: unknown): WorkflowExecutionStep[] {
   return Array.isArray(maybe.steps) ? (maybe.steps as WorkflowExecutionStep[]) : [];
 }
 
-function buildProgressOutput(steps: WorkflowExecutionStep[]): WorkflowExecutionResult {
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseRuntimeFromRunOutput(output: unknown): unknown {
+  const obj = asObject(output);
+  if (!obj) {
+    return null;
+  }
+  return "runtime" in obj ? (obj as any).runtime : null;
+}
+
+function mergeRuntime(base: unknown, override: unknown): unknown {
+  const o = asObject(override);
+  if (!o) {
+    return base;
+  }
+  const b = asObject(base);
+  if (!b) {
+    return override;
+  }
+
+  return { ...b, ...o };
+}
+
+function buildProgressOutput(steps: WorkflowExecutionStep[], runtime?: unknown): WorkflowExecutionResult {
   const completedNodeCount = steps.filter((step) => step.status === "succeeded").length;
   const failedNodeId = steps.find((step) => step.status === "failed")?.nodeId ?? null;
   return {
@@ -125,6 +149,7 @@ function buildProgressOutput(steps: WorkflowExecutionStep[]): WorkflowExecutionR
       completedNodeCount,
       failedNodeId,
     },
+    ...(runtime ? { runtime } : {}),
   };
 }
 
@@ -275,6 +300,7 @@ export async function processWorkflowRunJob(
   attemptCount = isStartingAttempt ? Math.max(1, (run.attemptCount ?? 0) + 1) : Math.max(1, run.attemptCount ?? 1);
   const initialCursorNodeIndex = isStartingAttempt ? 0 : Math.max(0, run.cursorNodeIndex ?? 0);
   const initialSteps = isStartingAttempt ? [] : parseStepsFromRunOutput(run.output);
+  const initialRuntime = isStartingAttempt ? null : parseRuntimeFromRunOutput(run.output);
 
   const workflow = await withTenantContext(pool, actor, async (tenantDb) =>
     getWorkflowById(tenantDb, {
@@ -322,6 +348,7 @@ export async function processWorkflowRunJob(
 
   let cursorNodeIndex = initialCursorNodeIndex;
   const steps: WorkflowExecutionStep[] = [...initialSteps];
+  let runtime: unknown = initialRuntime;
 
   if (isStartingAttempt) {
     await appendEvent({
@@ -357,6 +384,7 @@ export async function processWorkflowRunJob(
 
     cursorNodeIndex = 0;
     steps.length = 0;
+    runtime = null;
     jsonLog("info", {
       event: "workflow_run_started",
       runId: job.data.runId,
@@ -391,214 +419,6 @@ export async function processWorkflowRunJob(
         nodeType: node.type,
       });
 
-      const executionMode =
-        node.type === "agent.execute"
-          ? (node.config?.execution?.mode ?? "cloud")
-          : node.type === "connector.action"
-            ? (node.config.execution?.mode ?? "cloud")
-            : "cloud";
-
-      if (executionMode === "node") {
-        if (!input?.enqueueContinuationPoll) {
-          throw new Error("CONTINUATION_QUEUE_NOT_CONFIGURED");
-        }
-
-        function selectorFromExecution(execution: any): {
-          selectorTag?: string;
-          selectorAgentId?: string;
-          selectorGroup?: string;
-        } {
-          const selector = execution?.selector;
-          if (!selector || typeof selector !== "object") {
-            return {};
-          }
-          if (typeof selector.tag === "string" && selector.tag.trim().length > 0) {
-            return { selectorTag: selector.tag.trim() };
-          }
-          if (typeof selector.agentId === "string" && selector.agentId.trim().length > 0) {
-            return { selectorAgentId: selector.agentId.trim() };
-          }
-          if (typeof selector.group === "string" && selector.group.trim().length > 0) {
-            return { selectorGroup: selector.group.trim() };
-          }
-          return {};
-        }
-
-        if (node.type === "agent.execute" && (node.config?.execution?.mode ?? "cloud") === "node") {
-          const nodeTimeoutMs =
-            typeof node.config?.sandbox?.timeoutMs === "number" && Number.isFinite(node.config.sandbox.timeoutMs)
-              ? node.config.sandbox.timeoutMs
-              : nodeExecTimeoutMs;
-
-          const selector = selectorFromExecution(node.config?.execution);
-
-          const dispatchInput = {
-            organizationId: job.data.organizationId,
-            requestedByUserId: job.data.requestedByUserId,
-            runId: job.data.runId,
-            workflowId: job.data.workflowId,
-            nodeId: node.id,
-            nodeType: node.type,
-            attemptCount,
-            kind: "agent.execute" as const,
-            payload: {
-              nodeId: node.id,
-              node,
-              runId: job.data.runId,
-              workflowId: job.data.workflowId,
-              attemptCount,
-            },
-            ...selector,
-            timeoutMs: nodeTimeoutMs,
-          };
-
-          const dispatched = await dispatchViaGatewayAsync(dispatchInput);
-          if (!dispatched.ok) {
-            throw new Error(dispatched.error);
-          }
-
-          await appendEvent({
-            eventType: "node_dispatched",
-            level: "info",
-            nodeId: node.id,
-            nodeType: node.type,
-            payload: { requestId: dispatched.requestId, kind: "agent.execute" },
-          });
-
-          await withTenantContext(pool, actor, async (tenantDb) =>
-            markWorkflowRunBlocked(tenantDb, {
-              organizationId: job.data.organizationId,
-              workflowId: job.data.workflowId,
-              runId: job.data.runId,
-              cursorNodeIndex: index,
-              blockedRequestId: dispatched.requestId,
-              blockedNodeId: node.id,
-              blockedNodeType: node.type,
-              blockedKind: "agent.execute",
-              blockedTimeoutAt: new Date(Date.now() + nodeTimeoutMs),
-              output: buildProgressOutput(steps),
-            })
-          );
-
-          await input.enqueueContinuationPoll({
-            organizationId: job.data.organizationId,
-            workflowId: job.data.workflowId,
-            runId: job.data.runId,
-            requestId: dispatched.requestId,
-            attemptCount,
-          });
-
-          jsonLog("info", {
-            event: "workflow_node_dispatched",
-            runId: job.data.runId,
-            workflowId: job.data.workflowId,
-            orgId: job.data.organizationId,
-            attemptCount,
-            nodeId: node.id,
-            nodeType: node.type,
-            requestId: dispatched.requestId,
-          });
-
-          return;
-        }
-
-        if (node.type === "connector.action" && (node.config.execution?.mode ?? "cloud") === "node") {
-          const action = getCommunityConnectorAction({
-            connectorId: node.config.connectorId as any,
-            actionId: node.config.actionId,
-          });
-          if (!action) {
-            throw new Error(`ACTION_NOT_SUPPORTED:${node.config.connectorId}:${node.config.actionId}`);
-          }
-
-          const actionInputParsed = action.inputSchema.safeParse(node.config.input);
-          if (!actionInputParsed.success) {
-            throw new Error("INVALID_ACTION_INPUT");
-          }
-
-          const secret = action.requiresSecret
-            ? await loadConnectorSecretValue({
-                organizationId: job.data.organizationId,
-                userId: job.data.requestedByUserId,
-                secretId: node.config.auth.secretId,
-              })
-            : null;
-
-          const selector = selectorFromExecution(node.config.execution);
-
-          const dispatchInput = {
-            organizationId: job.data.organizationId,
-            requestedByUserId: job.data.requestedByUserId,
-            runId: job.data.runId,
-            workflowId: job.data.workflowId,
-            nodeId: node.id,
-            nodeType: node.type,
-            attemptCount,
-            kind: "connector.action" as const,
-            payload: {
-              connectorId: node.config.connectorId,
-              actionId: node.config.actionId,
-              input: actionInputParsed.data,
-              env: {
-                githubApiBaseUrl: getGithubApiBaseUrl(),
-              },
-            },
-            ...selector,
-            ...(secret ? { secret } : {}),
-            timeoutMs: nodeExecTimeoutMs,
-          };
-
-          const dispatched = await dispatchViaGatewayAsync(dispatchInput);
-          if (!dispatched.ok) {
-            throw new Error(dispatched.error);
-          }
-
-          await appendEvent({
-            eventType: "node_dispatched",
-            level: "info",
-            nodeId: node.id,
-            nodeType: node.type,
-            payload: { requestId: dispatched.requestId, kind: "connector.action" },
-          });
-
-          await withTenantContext(pool, actor, async (tenantDb) =>
-            markWorkflowRunBlocked(tenantDb, {
-              organizationId: job.data.organizationId,
-              workflowId: job.data.workflowId,
-              runId: job.data.runId,
-              cursorNodeIndex: index,
-              blockedRequestId: dispatched.requestId,
-              blockedNodeId: node.id,
-              blockedNodeType: node.type,
-              blockedKind: "connector.action",
-              blockedTimeoutAt: new Date(Date.now() + nodeExecTimeoutMs),
-              output: buildProgressOutput(steps),
-            })
-          );
-
-          await input.enqueueContinuationPoll({
-            organizationId: job.data.organizationId,
-            workflowId: job.data.workflowId,
-            runId: job.data.runId,
-            requestId: dispatched.requestId,
-            attemptCount,
-          });
-
-          jsonLog("info", {
-            event: "workflow_node_dispatched",
-            runId: job.data.runId,
-            workflowId: job.data.workflowId,
-            orgId: job.data.organizationId,
-            attemptCount,
-            nodeId: node.id,
-            nodeType: node.type,
-            requestId: dispatched.requestId,
-          });
-
-          return;
-        }
-      }
-
       const executor = executorRegistry.get(node.type);
       if (!executor) {
         const message = `EXECUTOR_NOT_FOUND:${node.type}`;
@@ -618,7 +438,13 @@ export async function processWorkflowRunJob(
         throw new Error(message);
       }
 
-      let nodeResult: { status: "succeeded" | "failed"; output?: unknown; error?: string };
+      let nodeResult: {
+        status: "succeeded" | "failed" | "blocked";
+        output?: unknown;
+        error?: string;
+        block?: any;
+        runtime?: unknown;
+      };
       try {
         nodeResult = await executor.execute({
           organizationId: job.data.organizationId,
@@ -630,9 +456,103 @@ export async function processWorkflowRunJob(
           nodeType: node.type,
           node,
           runInput: run.input ?? undefined,
+          steps,
+          runtime,
+          pendingRemoteResult:
+            runtime && typeof runtime === "object" && (runtime as any).pendingRemoteResult != null
+              ? (runtime as any).pendingRemoteResult
+              : undefined,
         });
       } catch (error) {
         nodeResult = { status: "failed", error: errorMessage(error) };
+      }
+
+      runtime = mergeRuntime(runtime, nodeResult.runtime);
+
+      if (nodeResult.status === "blocked") {
+        if (!input?.enqueueContinuationPoll) {
+          throw new Error("CONTINUATION_QUEUE_NOT_CONFIGURED");
+        }
+        if (!nodeResult.block || typeof nodeResult.block !== "object") {
+          throw new Error("INVALID_BLOCK_RESULT");
+        }
+        const kind = nodeResult.block.kind;
+        if (kind !== "agent.execute" && kind !== "connector.action") {
+          throw new Error("INVALID_BLOCK_KIND");
+        }
+
+        const timeoutMs =
+          typeof nodeResult.block.timeoutMs === "number" && Number.isFinite(nodeResult.block.timeoutMs)
+            ? nodeResult.block.timeoutMs
+            : nodeExecTimeoutMs;
+
+        const dispatchNodeId = typeof nodeResult.block.dispatchNodeId === "string" && nodeResult.block.dispatchNodeId.length > 0 ? nodeResult.block.dispatchNodeId : node.id;
+
+        const dispatchInput = {
+          organizationId: job.data.organizationId,
+          requestedByUserId: job.data.requestedByUserId,
+          runId: job.data.runId,
+          workflowId: job.data.workflowId,
+          nodeId: dispatchNodeId,
+          nodeType: node.type,
+          attemptCount,
+          kind,
+          payload: nodeResult.block.payload,
+          ...(typeof nodeResult.block.selectorTag === "string" ? { selectorTag: nodeResult.block.selectorTag } : {}),
+          ...(typeof nodeResult.block.selectorAgentId === "string" ? { selectorAgentId: nodeResult.block.selectorAgentId } : {}),
+          ...(typeof nodeResult.block.selectorGroup === "string" ? { selectorGroup: nodeResult.block.selectorGroup } : {}),
+          ...(typeof nodeResult.block.secret === "string" && nodeResult.block.secret.length > 0 ? { secret: nodeResult.block.secret } : {}),
+          timeoutMs,
+        } as const;
+
+        const dispatched = await dispatchViaGatewayAsync(dispatchInput as any);
+        if (!dispatched.ok) {
+          throw new Error(dispatched.error);
+        }
+
+        await appendEvent({
+          eventType: "node_dispatched",
+          level: "info",
+          nodeId: node.id,
+          nodeType: node.type,
+          payload: { requestId: dispatched.requestId, kind },
+        });
+
+        await withTenantContext(pool, actor, async (tenantDb) =>
+          markWorkflowRunBlocked(tenantDb, {
+            organizationId: job.data.organizationId,
+            workflowId: job.data.workflowId,
+            runId: job.data.runId,
+            cursorNodeIndex: index,
+            blockedRequestId: dispatched.requestId,
+            blockedNodeId: node.id,
+            blockedNodeType: node.type,
+            blockedKind: kind,
+            blockedTimeoutAt: new Date(Date.now() + timeoutMs),
+            output: buildProgressOutput(steps, runtime),
+          })
+        );
+
+        await input.enqueueContinuationPoll({
+          organizationId: job.data.organizationId,
+          workflowId: job.data.workflowId,
+          runId: job.data.runId,
+          requestId: dispatched.requestId,
+          attemptCount,
+        });
+
+        jsonLog("info", {
+          event: "workflow_node_dispatched",
+          runId: job.data.runId,
+          workflowId: job.data.workflowId,
+          orgId: job.data.organizationId,
+          attemptCount,
+          nodeId: node.id,
+          nodeType: node.type,
+          requestId: dispatched.requestId,
+        });
+
+        return;
       }
 
       if (nodeResult.status === "failed") {
@@ -675,12 +595,12 @@ export async function processWorkflowRunJob(
           workflowId: job.data.workflowId,
           runId: job.data.runId,
           cursorNodeIndex,
-          output: buildProgressOutput(steps),
+          output: buildProgressOutput(steps, runtime),
         })
       );
     }
 
-    const execution = buildProgressOutput(steps);
+    const execution = buildProgressOutput(steps, runtime);
 
     await withTenantContext(pool, actor, async (tenantDb) =>
       markWorkflowRunSucceeded(tenantDb, {

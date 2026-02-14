@@ -551,6 +551,36 @@ describe("api hardening foundation", () => {
     expect(createWorkflow.statusCode).toBe(201);
     const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
 
+    const createAgentRunWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Agent-only workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [
+            {
+              id: "agent-1",
+              type: "agent.run",
+              config: {
+                llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+                prompt: { instructions: "Say hello." },
+                tools: { allow: ["connector.github.issue.create"], execution: "cloud" },
+                limits: { maxTurns: 1, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000 },
+                output: { mode: "text" },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(createAgentRunWorkflow.statusCode).toBe(201);
+
     const outsiderCreateDenied = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/workflows`,
@@ -972,6 +1002,15 @@ describe("api hardening foundation", () => {
       expect(createdBody.secret.name).toBe("token");
       expect("value" in createdBody.secret).toBe(false);
 
+      const llmSecret = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { connectorId: "llm.openai", name: "openai", value: "sk-test" },
+      });
+      expect(llmSecret.statusCode).toBe(201);
+      expect((llmSecret.json() as { secret: { connectorId: string; name: string } }).secret.connectorId).toBe("llm.openai");
+
       const list = await server.inject({
         method: "GET",
         url: `/v1/orgs/${orgId}/secrets`,
@@ -979,9 +1018,13 @@ describe("api hardening foundation", () => {
       });
       expect(list.statusCode).toBe(200);
       const listBody = list.json() as { secrets: Array<{ id: string; connectorId: string; name: string; value?: unknown }> };
-      expect(listBody.secrets.length).toBe(1);
-      expect(listBody.secrets[0]?.id).toBe(createdBody.secret.id);
-      expect("value" in (listBody.secrets[0] ?? {})).toBe(false);
+      expect(listBody.secrets.length).toBe(2);
+      const ids = new Set(listBody.secrets.map((s) => s.id));
+      expect(ids.has(createdBody.secret.id)).toBe(true);
+      expect(ids.size).toBe(2);
+      for (const s of listBody.secrets) {
+        expect("value" in (s ?? {})).toBe(false);
+      }
 
       const duplicate = await server.inject({
         method: "POST",

@@ -6,6 +6,8 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.cron"), config: z.object({ cron: z.string().min(1) }) }),
 ]);
 
+const defaultAgentLlmProvider = "openai" as const;
+
 const agentExecuteTaskSchema = z.object({
   type: z.literal("shell"),
   script: z.string().min(1).max(200_000),
@@ -25,6 +27,50 @@ const agentExecuteSandboxSchema = z.object({
   envPassthroughAllowlist: z.array(z.string().min(1)).max(50).optional(),
 });
 
+const agentRunNodeSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal("agent.run"),
+  config: z.object({
+    llm: z.object({
+      provider: z.literal(defaultAgentLlmProvider).default(defaultAgentLlmProvider),
+      model: z.string().min(1).max(120).default("gpt-4.1-mini"),
+      auth: z
+        .object({
+          secretId: z.string().uuid().optional(),
+          // MVP: always true. The runtime falls back to env vars (e.g. OPENAI_API_KEY).
+          fallbackToEnv: z.literal(true).default(true),
+        })
+        .default({ fallbackToEnv: true }),
+    }),
+    prompt: z.object({
+      system: z.string().max(200_000).optional(),
+      instructions: z.string().min(1).max(200_000),
+      inputTemplate: z.string().max(200_000).optional(),
+    }),
+    tools: z
+      .object({
+        // Tool IDs; enforcement is runtime-level.
+        allow: z.array(z.string().min(1).max(120)).min(1),
+        execution: z.enum(["cloud", "node"]).default("cloud"),
+      })
+      .default({ allow: ["connector.github.issue.create"], execution: "cloud" }),
+    limits: z
+      .object({
+        maxTurns: z.number().int().min(1).max(64).default(8),
+        maxToolCalls: z.number().int().min(0).max(200).default(20),
+        timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
+        maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
+      })
+      .default({ maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000 }),
+    output: z
+      .object({
+        mode: z.enum(["text", "json"]).default("text"),
+        jsonSchema: z.unknown().optional(),
+      })
+      .default({ mode: "text" }),
+  }),
+});
+
 const nodeExecutionSelectorSchema = z.union([
   z.object({
     tag: z.string().min(1).max(64),
@@ -39,6 +85,7 @@ const nodeExecutionSelectorSchema = z.union([
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1), type: z.literal("http.request") }),
+  agentRunNodeSchema,
   z.object({
     id: z.string().min(1),
     type: z.literal("agent.execute"),
@@ -115,6 +162,9 @@ export type WorkflowExecutionResult = {
     completedNodeCount: number;
     failedNodeId: string | null;
   };
+  // Opaque runtime state persisted by the worker under workflow_runs.output.runtime.
+  // It is not part of the workflow DSL and may change without DSL version bumps.
+  runtime?: unknown;
 };
 
 export function executeWorkflow(input: { dsl: WorkflowDsl; runInput?: unknown }): WorkflowExecutionResult {
@@ -128,6 +178,12 @@ export function executeWorkflow(input: { dsl: WorkflowDsl; runInput?: unknown })
           output = {
             accepted: true,
             requestId: `${node.id}-request`,
+          };
+          break;
+        case "agent.run":
+          output = {
+            accepted: true,
+            agentRunId: `${node.id}-agent-run`,
           };
           break;
         case "agent.execute":
