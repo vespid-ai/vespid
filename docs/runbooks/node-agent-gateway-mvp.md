@@ -61,9 +61,12 @@ Notes:
 4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
 
 Targeting notes:
-- To target a specific agent, set `execution.selector.agentId = "<uuid>"` (agent IDs are visible via `GET /v1/orgs/:orgId/agents`).
 - To target a group, set `execution.selector.group = "<name>"` and ensure the agent is configured with the control-plane tag `group:<name>`.
 - To target a tag, set `execution.selector.tag = "<tag>"` and ensure the agent is configured with the control-plane tag `<tag>`.
+
+Notes:
+- Agent-reported tags are not used for routing; only control-plane tags (stored in DB) affect dispatch decisions.
+- Explicit agent ID/group targeting beyond tags is intentionally deferred in the MVP.
 
 Control-plane tags are authoritative:
 1. Pair agent (above).
