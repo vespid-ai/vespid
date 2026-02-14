@@ -2,14 +2,14 @@
 
 :root {
   /* RGB triples so Tailwind can do rgb(var(--token) / alpha). */
-  --surface-0: 246 247 251;
+  --surface-0: 243 247 252;
   --surface-1: 255 255 255;
-  --surface-2: 251 253 255;
-  --surface-3: 245 248 252;
+  --surface-2: 248 252 255;
+  --surface-3: 240 246 252;
   --surface-glass: 255 255 255;
 
-  --border-subtle: 226 232 240;
-  --border-strong: 203 213 225;
+  --border-subtle: 217 226 238;
+  --border-strong: 191 203 221;
 
   --text: 15 23 42;
   --muted: 71 85 105;
@@ -65,8 +65,8 @@ body {
   --surface-3: 22 30 48;
   --surface-glass: 11 15 25;
 
-  --border-subtle: 51 65 85;
-  --border-strong: 71 85 105;
+  --border-subtle: 38 50 68;
+  --border-strong: 65 81 106;
 
   --text: 226 232 240;
   --muted: 148 163 184;
@@ -102,6 +102,8 @@ body {
     radial-gradient(980px 760px at 12% 0%, rgb(var(--brand-2) / 0.18), transparent 58%),
     radial-gradient(1200px 900px at 54% 115%, rgb(var(--ok) / 0.12), transparent 62%),
     radial-gradient(920px 760px at -6% 98%, rgb(var(--warn) / 0.09), transparent 60%),
+    /* faint warmth to avoid monotony */
+    radial-gradient(860px 640px at 106% 86%, rgb(var(--danger) / 0.04), transparent 62%),
     linear-gradient(rgb(var(--surface-0)), rgb(var(--surface-0)));
 
   background-attachment: fixed;

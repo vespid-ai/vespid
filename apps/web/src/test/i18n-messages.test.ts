@@ -24,13 +24,19 @@ describe("i18n message coverage", () => {
 
     const required = [
       "common.search",
+      "common.working",
+      "commandPalette.title",
       "settings.title",
       "errors.apiUnreachable.title",
       "workflows.subtitle",
       "workflows.detail.publish",
       "runs.trustTitle",
+      "runs.orgLabel",
       "agents.subtitle",
       "secrets.createSecret",
+      "auth.subtitle",
+      "auth.passwordLoginTitle",
+      "org.createTitle",
     ];
 
     for (const key of required) {
@@ -39,4 +45,3 @@ describe("i18n message coverage", () => {
     }
   });
 });
-

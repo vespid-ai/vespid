@@ -404,7 +404,7 @@ export default function RunReplayPage() {
             <Button size="sm" variant="ghost" onClick={copyRunId}>
               {t("common.copy")}
             </Button>
-            <span>Org: {orgId ?? "-"}</span>
+            <span>{t("runs.orgLabel", { org: orgId ?? "-" })}</span>
           </div>
         </div>
 
@@ -419,7 +419,7 @@ export default function RunReplayPage() {
         </div>
       </div>
 
-      <div className="rounded-[var(--radius-md)] border border-borderSubtle bg-panel/40 shadow-elev2">
+      <div className="rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/40 shadow-elev2">
         <PanelGroup orientation="horizontal" className="h-[calc(100dvh-220px)] min-h-[560px]">
           <Panel defaultSize={28} minSize={18}>
             <div className="h-full">
@@ -430,17 +430,17 @@ export default function RunReplayPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 border-b border-borderSubtle px-4 py-2">
+              <div className="flex flex-wrap items-center gap-2 border-b border-borderSubtle px-4 py-2">
                 <div className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/45 px-2 py-1 text-xs text-muted shadow-elev1">
                   <Filter className="h-3.5 w-3.5" />
                   <input
                     value={typeFilter}
                     onChange={(e) => setTypeFilter(e.target.value)}
                     placeholder={t("runs.filterType")}
-                    className="w-28 bg-transparent outline-none placeholder:text-muted"
+                    className="w-32 bg-transparent outline-none placeholder:text-muted group-data-[density=compact]:w-28"
                   />
                 </div>
-                <div className="flex flex-1 items-center gap-2 rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/45 px-2 py-1 text-xs text-muted shadow-elev1">
+                <div className="flex min-w-[180px] flex-1 items-center gap-2 rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/45 px-2 py-1 text-xs text-muted shadow-elev1">
                   <Search className="h-3.5 w-3.5" />
                   <input
                     value={search}
@@ -509,8 +509,8 @@ export default function RunReplayPage() {
                                     "w-full rounded-[var(--radius-sm)] border px-2 py-2 text-left",
                                     "transition-[box-shadow,background-color,border-color] duration-200",
                                     active
-                                      ? "border-accent/25 bg-accent/10 shadow-elev2"
-                                      : "border-borderSubtle bg-panel/25 hover:bg-panel/45 hover:shadow-elev1"
+                                      ? "border-borderSubtle/60 bg-gradient-to-r from-accent/18 via-accent/10 to-transparent shadow-elev2"
+                                      : "border-borderSubtle/60 bg-panel/25 hover:bg-panel/45 hover:shadow-elev1"
                                   )}
                                 >
                                   <div className="flex items-center gap-2">

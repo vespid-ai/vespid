@@ -39,15 +39,15 @@ export function DataTable<T>({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle shadow-elev1 shadow-inset",
-        "bg-gradient-to-b from-panel/55 to-panel/35",
+        "overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle/60 shadow-elev1 shadow-inset",
+        "bg-gradient-to-b from-panel/58 to-panel/36",
         className
       )}
     >
       <table className="w-full border-collapse">
-        <thead className="bg-surface2/50">
+        <thead className="bg-surface2/55">
           {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id} className="border-b border-borderStrong">
+            <tr key={hg.id} className="border-b border-borderStrong/60">
               {hg.headers.map((header) => {
                 const canSort = header.column.getCanSort();
                 const sorted = header.column.getIsSorted();
@@ -86,7 +86,7 @@ export function DataTable<T>({
           {table.getRowModel().rows.map((row) => (
             <tr
               key={row.id}
-              className="border-b border-borderSubtle last:border-b-0 transition-colors hover:bg-surface2/40"
+              className="border-b border-borderSubtle/45 last:border-b-0 transition-colors hover:bg-surface2/45"
             >
               {row.getVisibleCells().map((cell) => (
                 <td

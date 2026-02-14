@@ -48,13 +48,19 @@ export default function AuthPage() {
 
   const oauthBanner = useMemo(() => {
     if (oauthStatus === "success") {
-      return { tone: "ok" as const, text: `OAuth login succeeded (${oauthProvider ?? "provider"}).` };
+      return {
+        tone: "ok" as const,
+        text: t("auth.oauthSuccess", { provider: oauthProvider ?? "provider" }),
+      };
     }
     if (oauthStatus === "error") {
-      return { tone: "danger" as const, text: `OAuth login failed: ${oauthCode ?? "unknown_error"}` };
+      return {
+        tone: "danger" as const,
+        text: t("auth.oauthError", { code: oauthCode ?? "unknown_error" }),
+      };
     }
     return null;
-  }, [oauthCode, oauthProvider, oauthStatus]);
+  }, [oauthCode, oauthProvider, oauthStatus, t]);
 
   async function signup() {
     const response = await apiFetch("/v1/auth/signup", {
@@ -90,7 +96,7 @@ export default function AuthPage() {
     <div className="grid gap-4">
       <div>
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("auth.title")}</div>
-        <div className="mt-1 text-sm text-muted">Cookie-based auth with refresh token, designed for multi-tenant SaaS.</div>
+        <div className="mt-1 text-sm text-muted">{t("auth.subtitle")}</div>
       </div>
 
       {oauthBanner ? (
@@ -98,9 +104,9 @@ export default function AuthPage() {
           <CardHeader>
             <div className="flex items-center gap-2">
               <Badge variant={oauthBanner.tone === "ok" ? "ok" : "danger"}>
-                {oauthBanner.tone === "ok" ? "OK" : "ERROR"}
+                {oauthBanner.tone === "ok" ? t("common.ok") : t("common.error")}
               </Badge>
-              <CardTitle>OAuth</CardTitle>
+              <CardTitle>{t("auth.oauth")}</CardTitle>
             </div>
             <CardDescription>{oauthBanner.text}</CardDescription>
           </CardHeader>
@@ -109,12 +115,12 @@ export default function AuthPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Session</CardTitle>
+          <CardTitle>{t("auth.sessionTitle")}</CardTitle>
           <CardDescription>
             {session.isLoading
               ? t("common.loading")
               : session.data?.user?.email
-                ? `Logged in as ${session.data.user.email}`
+                ? t("auth.loggedInAs", { email: session.data.user.email })
                 : t("common.notLoggedIn")}
           </CardDescription>
         </CardHeader>
@@ -126,15 +132,15 @@ export default function AuthPage() {
             {t("auth.logout")}
           </Button>
           <Button asChild variant="ghost">
-            <Link href={`/${locale}/workflows`}>Go to App</Link>
+            <Link href={`/${locale}/workflows`}>{t("auth.goToApp")}</Link>
           </Button>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Password login</CardTitle>
-          <CardDescription>Bootstrap-only UI. Replace with product-grade auth UI later.</CardDescription>
+          <CardTitle>{t("auth.passwordLoginTitle")}</CardTitle>
+          <CardDescription>{t("auth.passwordLoginDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <div className="grid gap-1.5">
@@ -169,7 +175,7 @@ export default function AuthPage() {
       <Card>
         <CardHeader>
           <CardTitle>{t("auth.oauth")}</CardTitle>
-          <CardDescription>Redirect-based OAuth flow.</CardDescription>
+          <CardDescription>{t("auth.oauthDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
           <Button asChild variant="outline">

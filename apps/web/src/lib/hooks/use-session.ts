@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { ApiError, apiFetchJson } from "../api";
+import { getApiBase } from "../api";
+import { markApiReachable, markApiUnreachable } from "../api-reachability";
 
 export type SessionResponse = {
   session?: { token: string; expiresAt: number };
@@ -10,23 +11,40 @@ export function useSession() {
   return useQuery({
     queryKey: ["session"],
     queryFn: async (): Promise<SessionResponse | null> => {
+      const base = getApiBase();
+      let response: Response;
       try {
-        const payload = await apiFetchJson<SessionResponse>("/v1/auth/refresh", { method: "POST" });
-        if (!payload?.session) {
-          return null;
-        }
-        return payload;
+        response = await fetch("/api/session", { method: "GET", credentials: "include" });
       } catch (err) {
-        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          return null;
-        }
-        // If the API is down or blocked by CORS, treat as anonymous to avoid
-        // taking down the shell during local dev.
-        if (err instanceof ApiError && err.status === 503 && err.payload?.code === "NETWORK_ERROR") {
-          return null;
-        }
-        throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        markApiUnreachable(base, message);
+        return null;
       }
+
+      const text = await response.text();
+      let payload: any = null;
+      if (text.length) {
+        try {
+          payload = JSON.parse(text) as any;
+        } catch {
+          payload = { code: "INVALID_JSON", message: "Invalid JSON from /api/session." };
+        }
+      }
+
+      if (!response.ok) {
+        // Keep the shell resilient: session failures should not crash the app.
+        if (response.status === 503 && payload?.code && typeof payload?.message === "string") {
+          markApiUnreachable(payload?.base ?? base, payload.message);
+          return null;
+        }
+        return null;
+      }
+
+      markApiReachable(base);
+      if (!payload?.session) {
+        return null;
+      }
+      return payload as SessionResponse;
     },
     staleTime: 60_000,
     retry: 0,

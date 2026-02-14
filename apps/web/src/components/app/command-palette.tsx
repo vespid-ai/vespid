@@ -4,7 +4,8 @@ import { Command } from "cmdk";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
+import { useTranslations } from "next-intl";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 
 export type CommandPaletteItem = {
   title: string;
@@ -23,6 +24,7 @@ export function CommandPalette({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
+  const t = useTranslations();
   const router = useRouter();
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -55,18 +57,19 @@ export function CommandPalette({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="p-0">
         <DialogHeader className="px-5 pt-5">
-          <DialogTitle>Search</DialogTitle>
+          <DialogTitle>{t("commandPalette.title")}</DialogTitle>
+          <DialogDescription className="sr-only">{t("commandPalette.description")}</DialogDescription>
         </DialogHeader>
         <div className="px-5 pb-5">
           <Command className="rounded-lg border border-border bg-panel/50">
             <Command.Input
-              placeholder="Type a command or search..."
+              placeholder={t("commandPalette.placeholder")}
               className="h-10 w-full bg-transparent px-3 text-sm text-text outline-none placeholder:text-muted"
             />
             <Command.List className="max-h-[340px] overflow-auto border-t border-border">
-              <Command.Empty className="px-3 py-4 text-sm text-muted">No results.</Command.Empty>
+              <Command.Empty className="px-3 py-4 text-sm text-muted">{t("commandPalette.empty")}</Command.Empty>
 
-              <Command.Group heading="Navigation" className="px-1 py-2">
+              <Command.Group heading={t("commandPalette.navigation")} className="px-1 py-2">
                 {grouped.app.map((item) => {
                   const Icon = item.icon;
                   return (
@@ -85,7 +88,7 @@ export function CommandPalette({
               </Command.Group>
 
               {grouped.other.length ? (
-                <Command.Group heading="Other" className="px-1 py-2">
+                <Command.Group heading={t("commandPalette.other")} className="px-1 py-2">
                   {grouped.other.map((item) => (
                     <Command.Item
                       key={item.href}

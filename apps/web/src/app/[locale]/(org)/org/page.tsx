@@ -56,7 +56,7 @@ export default function OrganizationPage() {
 
   async function inviteMember() {
     if (!orgId) {
-      setResult({ code: "ORG_CONTEXT_REQUIRED", message: "Set an active org before inviting." });
+      setResult({ code: "ORG_CONTEXT_REQUIRED", message: t("org.requireActive") });
       return;
     }
 
@@ -76,38 +76,38 @@ export default function OrganizationPage() {
     <div className="grid gap-4">
       <div>
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("nav.org")}</div>
-        <div className="mt-1 text-sm text-muted">Tenant context is required for org-scoped API calls.</div>
+        <div className="mt-1 text-sm text-muted">{t("org.subtitle")}</div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Create organization</CardTitle>
-            <CardDescription>Creates an org and automatically sets it as active.</CardDescription>
+            <CardTitle>{t("org.createTitle")}</CardTitle>
+            <CardDescription>{t("org.createDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="orgName">Organization name</Label>
+              <Label htmlFor="orgName">{t("org.nameLabel")}</Label>
               <Input id="orgName" value={orgName} onChange={(event) => setOrgName(event.target.value)} />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="orgSlug">Organization slug</Label>
+              <Label htmlFor="orgSlug">{t("org.slugLabel")}</Label>
               <Input id="orgSlug" value={orgSlug} onChange={(event) => setOrgSlug(event.target.value)} />
             </div>
             <Button variant="accent" onClick={createOrganization}>
-              Create organization
+              {t("org.createAction")}
             </Button>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Invite member</CardTitle>
-            <CardDescription>Requires an active org.</CardDescription>
+            <CardTitle>{t("org.inviteTitle")}</CardTitle>
+            <CardDescription>{t("org.inviteDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="orgId">Active organization ID</Label>
+              <Label htmlFor="orgId">{t("org.activeIdLabel")}</Label>
               <Input
                 id="orgId"
                 value={orgId}
@@ -121,10 +121,10 @@ export default function OrganizationPage() {
               />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="inviteEmail">Invite email</Label>
+              <Label htmlFor="inviteEmail">{t("org.inviteEmailLabel")}</Label>
               <Input id="inviteEmail" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
             </div>
-            <Button onClick={inviteMember}>Invite member</Button>
+            <Button onClick={inviteMember}>{t("org.inviteAction")}</Button>
           </CardContent>
         </Card>
       </div>
@@ -132,10 +132,10 @@ export default function OrganizationPage() {
       <Card>
         <CardHeader>
           <CardTitle>{t("org.recent")}</CardTitle>
-          <CardDescription>Stored locally in this browser.</CardDescription>
+          <CardDescription>{t("org.recentDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          {recentOrgs.length === 0 ? <div className="text-sm text-muted">No recent orgs.</div> : null}
+          {recentOrgs.length === 0 ? <div className="text-sm text-muted">{t("org.noRecent")}</div> : null}
           {recentOrgs.map((id) => (
             <Button key={id} variant={id === orgId ? "accent" : "outline"} onClick={() => setActiveOrgId(id)}>
               {id.slice(0, 8)}

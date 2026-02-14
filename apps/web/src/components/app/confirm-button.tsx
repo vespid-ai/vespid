@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 
@@ -20,6 +21,7 @@ export function ConfirmButton({
   onConfirm: () => Promise<void> | void;
   children: string;
 } & Omit<ButtonProps, "children" | "onClick">) {
+  const t = useTranslations();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -49,11 +51,11 @@ export function ConfirmButton({
           <div className="mt-4 flex justify-end gap-2">
             <DialogClose asChild>
               <Button type="button" variant="outline" disabled={loading}>
-                Cancel
+                {t("common.cancel")}
               </Button>
             </DialogClose>
             <Button type="button" variant={variant} onClick={confirm} disabled={loading}>
-              {loading ? "Working..." : confirmText}
+              {loading ? t("common.working") : confirmText}
             </Button>
           </div>
         </DialogContent>

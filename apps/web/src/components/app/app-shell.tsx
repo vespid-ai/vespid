@@ -10,6 +10,7 @@ import {
   KeyRound,
   LayoutGrid,
   LogOut,
+  Menu,
   Monitor,
   Moon,
   Rocket,
@@ -19,6 +20,7 @@ import {
   Sun,
   TriangleAlert,
   Users,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
@@ -45,6 +47,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Separator } from "../ui/separator";
 import { Avatar, AvatarFallback } from "../ui/avatar";
+import { Sheet, SheetClose, SheetContent, SheetTrigger } from "../ui/sheet";
 import { CommandPalette } from "./command-palette";
 import { apiFetch, getApiBase } from "../../lib/api";
 import { useDensity } from "../../lib/hooks/use-density";
@@ -59,6 +62,7 @@ type NavItem = {
 };
 
 const SIDEBAR_COLLAPSED_KEY = "vespid.ui.sidebarCollapsed";
+const DESKTOP_HINT_DISMISSED_KEY = "vespid.ui.desktopHintDismissed";
 
 function shortId(value: string): string {
   return value.length > 10 ? `${value.slice(0, 8)}…` : value;
@@ -78,6 +82,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [reachability, setReachability] = useState(() => getApiReachability());
 
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [desktopHintDismissed, setDesktopHintDismissed] = useState(true);
 
   const [activeOrgId, setActiveOrgIdState] = useState<string>("");
   const [knownOrgIds, setKnownOrgIds] = useState<string[]>([]);
@@ -93,6 +99,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
     const rawCollapsed = window.localStorage?.getItem(SIDEBAR_COLLAPSED_KEY);
     setSidebarCollapsed(rawCollapsed === "1");
+    const rawDesktopHint = window.localStorage?.getItem(DESKTOP_HINT_DISMISSED_KEY);
+    setDesktopHintDismissed(rawDesktopHint === "1");
 
     return subscribeActiveOrg((next) => {
       setActiveOrgIdState(next ?? "");
@@ -136,6 +144,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
   }
 
+  function dismissDesktopHint() {
+    setDesktopHintDismissed(true);
+    window.localStorage?.setItem(DESKTOP_HINT_DISMISSED_KEY, "1");
+  }
+
   async function logout() {
     await apiFetch("/v1/auth/logout", { method: "POST" });
     router.refresh();
@@ -163,6 +176,254 @@ export function AppShell({ children }: { children: ReactNode }) {
           { title: t("nav.org"), href: `/${locale}/org`, icon: Users },
         ]}
       />
+
+      <div className="mx-auto min-h-dvh max-w-7xl px-3 py-3 md:hidden" data-testid="mobile-shell">
+        <header
+          className={cn(
+            "sticky top-3 z-10 overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/65 shadow-elev2 backdrop-blur",
+            "relative",
+            "before:content-[''] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/45 before:to-transparent",
+            "after:content-[''] after:absolute after:inset-x-10 after:top-0 after:h-10 after:bg-gradient-to-b after:from-brand/14 after:to-transparent after:blur-xl after:pointer-events-none"
+          )}
+        >
+          <div className="flex items-center justify-between gap-2 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="outline" size="icon" aria-label={t("common.toggle")}>
+                    <Menu className="h-4 w-4" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <div className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/45 shadow-elev1">
+                        <Braces className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate font-[var(--font-display)] text-sm font-semibold tracking-tight">
+                          {t("app.name")}
+                        </div>
+                        <div className="truncate text-xs text-muted">{t("app.tagline")}</div>
+                      </div>
+                    </div>
+                    <SheetClose asChild>
+                      <Button variant="outline" size="icon" aria-label={t("common.close")}>
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </SheetClose>
+                  </div>
+
+                  <nav className="mt-4 grid gap-1">
+                    {nav.map((item) => {
+                      const href = item.href(locale);
+                      const active = isActive(href);
+                      return (
+                        <Link
+                          key={href}
+                          href={href}
+                          onClick={() => setMobileNavOpen(false)}
+                          className={cn(
+                            "group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm",
+                            "transition-[box-shadow,background-color,color,border-color] duration-200",
+                            active
+                              ? "bg-surface2/60 text-text shadow-elev1"
+                              : "text-muted hover:bg-panel/55 hover:text-text hover:shadow-elev1"
+                          )}
+                        >
+                          {active ? (
+                            <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-gradient-to-b from-brand to-brand2" />
+                          ) : null}
+                          {item.icon}
+                          <span>{t(item.labelKey as any)}</span>
+                        </Link>
+                      );
+                    })}
+                  </nav>
+
+                  <div className="mt-4">
+                    <Separator />
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="text-xs font-medium text-muted">{t("org.active")}</div>
+                    <div className="mt-2 grid gap-2">
+                      <select
+                        value={activeOrgId}
+                        onChange={(e) => applyOrgId(e.target.value)}
+                        className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/55 px-2 text-sm text-text shadow-elev1 outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                      >
+                        <option value="">{t("org.noActive")}</option>
+                        {knownOrgIds.map((id) => (
+                          <option key={id} value={id}>
+                            {id}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={draftOrgId}
+                        onChange={(e) => setDraftOrgId(e.target.value)}
+                        placeholder={t("org.paste")}
+                        className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          variant="accent"
+                          onClick={() => {
+                            applyOrgId(draftOrgId);
+                            setMobileNavOpen(false);
+                          }}
+                        >
+                          {t("org.set")}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <Separator />
+                  </div>
+
+                  <div className="mt-4 grid gap-2">
+                    <Button asChild variant="outline" onClick={() => setMobileNavOpen(false)}>
+                      <Link href={`/${locale}/auth`}>{t("nav.auth")}</Link>
+                    </Button>
+                    <Button asChild variant="outline" onClick={() => setMobileNavOpen(false)}>
+                      <Link href={`/${locale}/org`}>{t("nav.org")}</Link>
+                    </Button>
+                    <Button
+                      variant="danger"
+                      onClick={async () => {
+                        await logout();
+                        setMobileNavOpen(false);
+                      }}
+                    >
+                      <LogOut className="h-4 w-4" />
+                      {t("auth.logout")}
+                    </Button>
+                  </div>
+                </SheetContent>
+              </Sheet>
+
+              <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{t("app.name")}</div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="icon" aria-label={t("common.search")} onClick={() => setPaletteOpen(true)}>
+                <Search className="h-4 w-4" />
+              </Button>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon" aria-label={t("settings.title")}>
+                    <Settings2 className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <div className="px-2 py-1 text-xs font-medium text-muted">{t("settings.theme.title")}</div>
+                  <DropdownMenuItem onSelect={() => setTheme("light")}>
+                    <Sun className="h-4 w-4" />
+                    {t("settings.theme.light")}
+                    {themeLabel === "light" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setTheme("dark")}>
+                    <Moon className="h-4 w-4" />
+                    {t("settings.theme.dark")}
+                    {themeLabel === "dark" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setTheme("system")}>
+                    <Monitor className="h-4 w-4" />
+                    {t("settings.theme.system")}
+                    {themeLabel === "system" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+
+                  <div className="px-2 py-1 text-xs font-medium text-muted">{t("settings.density.title")}</div>
+                  <DropdownMenuItem onSelect={() => setDensity("comfortable")}>
+                    {t("settings.density.comfortable")}
+                    {density === "comfortable" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setDensity("compact")}>
+                    {t("settings.density.compact")}
+                    {density === "compact" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+
+                  <div className="px-2 py-1 text-xs font-medium text-muted">{t("settings.locale.title")}</div>
+                  <DropdownMenuItem onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "en"))}>
+                    en
+                    {locale === "en" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "zh-CN"))}
+                  >
+                    zh-CN
+                    {locale === "zh-CN" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon" aria-label={userEmail ?? t("common.notLoggedIn")}>
+                    <Avatar className="h-6 w-6">
+                      <AvatarFallback>{userInitial}</AvatarFallback>
+                    </Avatar>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem asChild>
+                    <Link href={`/${locale}/auth`}>{t("nav.auth")}</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link href={`/${locale}/org`}>{t("nav.org")}</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={logout}>
+                    <LogOut className="h-4 w-4" />
+                    {t("auth.logout")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+
+          {apiUnreachable ? (
+            <div className="border-t border-borderSubtle/60 bg-panel/40 px-3 py-2">
+              <div className="flex flex-wrap items-start gap-2 text-sm">
+                <Badge variant="warn" className="gap-1.5">
+                  <TriangleAlert className="h-3.5 w-3.5" />
+                  {t("errors.apiUnreachable.title")}
+                </Badge>
+                <div className="min-w-0 flex-1 text-muted">
+                  {t("errors.apiUnreachable.description", { base: reachability.base || getApiBase() })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </header>
+
+        {!desktopHintDismissed ? (
+          <div className="mt-3">
+            <Card className="relative p-3">
+              <div className="pr-10 text-sm text-muted">{t("common.desktopOnly")}</div>
+              <Button
+                variant="outline"
+                size="icon"
+                className="absolute right-2 top-2 h-8 w-8"
+                aria-label={t("common.close")}
+                onClick={dismissDesktopHint}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </Card>
+          </div>
+        ) : null}
+
+        <main className="mt-3 min-w-0">
+          <div className="animate-fade-in">{children}</div>
+        </main>
+      </div>
 
       <div
         className={cn(
@@ -418,12 +679,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="animate-fade-in">{children}</div>
           </main>
         </section>
-      </div>
-
-      <div className="mx-auto block max-w-7xl px-4 pb-6 md:hidden">
-        <Card className="p-4 text-sm text-muted">
-          {t("common.desktopOnly")}
-        </Card>
       </div>
     </div>
   );
