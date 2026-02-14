@@ -93,6 +93,25 @@ export async function createOrganizationWithOwner(
   return { organization, membership };
 }
 
+export async function getOrganizationById(db: Db, input: { organizationId: string }) {
+  const [row] = await db.select().from(organizations).where(eq(organizations.id, input.organizationId));
+  return row ?? null;
+}
+
+export async function updateOrganizationSettings(
+  db: Db,
+  input: { organizationId: string; settings: unknown }
+) {
+  const [row] = await db
+    .update(organizations)
+    .set({
+      settings: input.settings as any,
+    })
+    .where(eq(organizations.id, input.organizationId))
+    .returning();
+  return row ?? null;
+}
+
 export async function getMembership(db: Db, input: { organizationId: string; userId: string }) {
   const [row] = await db
     .select()

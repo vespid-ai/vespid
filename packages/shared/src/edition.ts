@@ -42,6 +42,8 @@ export type WorkflowNodeExecutorContext = {
   nodeType: string;
   node: unknown;
   runInput?: unknown;
+  // Organization-scoped configuration blob (e.g. tool policies). Shape is intentionally opaque.
+  organizationSettings?: unknown;
   // Execution steps completed so far for the current attempt.
   steps?: unknown;
   // Opaque workflow-run runtime state persisted under workflow_runs.output.runtime.
@@ -50,6 +52,15 @@ export type WorkflowNodeExecutorContext = {
   // stores the remote result in runtime and re-enqueues the run. Executors
   // may consume it to complete the in-flight operation.
   pendingRemoteResult?: unknown;
+  // Optional per-node event emitter for structured debugging/observability.
+  emitEvent?: (event: {
+    eventType: string;
+    level: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }) => Promise<void>;
+  // Optional checkpoint hook to persist runtime progress mid-node (used for idempotency).
+  checkpointRuntime?: (runtime: unknown) => Promise<void>;
 };
 
 export type WorkflowNodeExecutorResult = {

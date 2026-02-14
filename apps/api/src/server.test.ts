@@ -1095,6 +1095,79 @@ describe("api hardening foundation", () => {
     }
   });
 
+  it("manages org settings and enforces admin-only access", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `settings-owner-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Settings Org", slug: `settings-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const getInitial = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(getInitial.statusCode).toBe(200);
+    expect((getInitial.json() as any).settings.tools.shellRunEnabled).toBe(false);
+
+    const updated = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { tools: { shellRunEnabled: true } },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect((updated.json() as any).settings.tools.shellRunEnabled).toBe(true);
+
+    const memberEmail = `settings-member-${Date.now()}@example.com`;
+    const invite = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { email: memberEmail, roleKey: "member" },
+    });
+    expect(invite.statusCode).toBe(201);
+    const inviteToken = (invite.json() as { invitation: { token: string } }).invitation.token;
+
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: memberEmail, password: "Password123" },
+    });
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+    const accept = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(accept.statusCode).toBe(200);
+
+    const memberGetDenied = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+    });
+    expect(memberGetDenied.statusCode).toBe(403);
+
+    const memberPutDenied = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+      payload: { tools: { shellRunEnabled: false } },
+    });
+    expect(memberPutDenied.statusCode).toBe(403);
+  });
+
 });
 
 describe("api rbac promotion flow", () => {

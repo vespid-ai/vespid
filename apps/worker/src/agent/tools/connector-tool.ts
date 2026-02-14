@@ -40,12 +40,21 @@ export const connectorActionTool: AgentToolDefinition = {
       return { status: "failed", error: "INVALID_ACTION_INPUT" };
     }
 
+    const secretId =
+      parsed.data.auth?.secretId ??
+      ctx.toolAuthDefaults?.connectors?.[parsed.data.connectorId]?.secretId ??
+      null;
+
+    if (action.requiresSecret && (!secretId || secretId.trim().length === 0)) {
+      return { status: "failed", error: "SECRET_REQUIRED" };
+    }
+
     const secret =
-      action.requiresSecret && parsed.data.auth?.secretId
+      action.requiresSecret && secretId
         ? await ctx.loadSecretValue({
             organizationId: ctx.organizationId,
             userId: ctx.userId,
-            secretId: parsed.data.auth.secretId,
+            secretId,
           })
         : null;
 
@@ -100,4 +109,3 @@ export function parseConnectorToolId(toolId: string): { connectorId: string; act
   }
   return { connectorId, actionId };
 }
-

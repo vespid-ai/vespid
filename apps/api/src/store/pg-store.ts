@@ -7,6 +7,7 @@ import {
   createOrganizationWithOwner,
   createMembershipIfNotExists,
   createUser,
+  getOrganizationById,
   deleteConnectorSecret as dbDeleteConnectorSecret,
   ensureDefaultRoles,
   getAuthSessionById,
@@ -43,10 +44,11 @@ import {
   markWorkflowRunQueuedForRetry as dbMarkWorkflowRunQueuedForRetry,
   markWorkflowRunSucceeded as dbMarkWorkflowRunSucceeded,
   markWorkflowRunFailed as dbMarkWorkflowRunFailed,
+  updateOrganizationSettings as dbUpdateOrganizationSettings,
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
-import type { AppStore } from "../types.js";
+import type { AppStore, OrganizationSettings } from "../types.js";
 
 function toIso(value: Date): string {
   return value.toISOString();
@@ -147,6 +149,32 @@ export class PgAppStore implements AppStore {
         createdAt: toIso(membership.createdAt),
       },
     };
+  }
+
+  async getOrganizationSettings(input: { organizationId: string; actorUserId: string }): Promise<OrganizationSettings> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => getOrganizationById(db, { organizationId: input.organizationId })
+    );
+    if (!row) {
+      throw new Error("ORGANIZATION_NOT_FOUND");
+    }
+    return (row.settings ?? {}) as OrganizationSettings;
+  }
+
+  async updateOrganizationSettings(input: {
+    organizationId: string;
+    actorUserId: string;
+    settings: OrganizationSettings;
+  }): Promise<OrganizationSettings> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbUpdateOrganizationSettings(db, { organizationId: input.organizationId, settings: input.settings })
+    );
+    if (!row) {
+      throw new Error("ORGANIZATION_NOT_FOUND");
+    }
+    return (row.settings ?? {}) as OrganizationSettings;
   }
 
   async getMembership(input: { organizationId: string; userId: string; actorUserId?: string }) {

@@ -9,6 +9,9 @@ export type AgentToolContext = {
   workflowId: string;
   attemptCount: number;
   nodeId: string;
+  toolAuthDefaults?: {
+    connectors?: Record<string, { secretId: string }>;
+  } | null;
   // Shared env passed to connector actions.
   githubApiBaseUrl: string;
   // Load/decrypt an org secret (connector or LLM); the caller supplies the secretId.

@@ -38,11 +38,11 @@ function defaultAgentNode(index: number): AgentNodeForm {
   const id = `agent-${index + 1}`;
   return {
     id,
-    instructions: "Create a GitHub issue, then summarize the result.",
+    instructions: "Summarize the run input and decide what to do next.",
     system: "",
     model: "gpt-4.1-mini",
     llmSecretId: "",
-    toolGithubIssueCreate: true,
+    toolGithubIssueCreate: false,
     toolShellRun: false,
     runToolsOnNodeAgent: false,
     githubSecretId: "",
@@ -72,11 +72,11 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
           JSON.stringify(
             {
               input: { repo: node.githubRepo, title: node.githubTitle, body: node.githubBody },
-              auth: node.githubSecretId ? { secretId: node.githubSecretId } : { secretId: "<github-secret-uuid>" },
             },
             null,
             2
           ),
+          "Note: GitHub auth is configured on this node; do not include secret IDs in tool calls.",
         ].join("\n")
       );
     }
@@ -126,14 +126,18 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
           ...(inputTemplate ? { inputTemplate } : {}),
         },
         tools: {
-          allow: toolAllow.length > 0 ? toolAllow : ["connector.github.issue.create"],
+          allow: toolAllow,
           execution: node.runToolsOnNodeAgent ? "node" : "cloud",
+          ...(node.githubSecretId.trim().length > 0
+            ? { authDefaults: { connectors: { github: { secretId: node.githubSecretId.trim() } } } }
+            : {}),
         },
         limits: {
           maxTurns: 8,
           maxToolCalls: 20,
           timeoutMs: 60_000,
           maxOutputChars: 50_000,
+          maxRuntimeChars: 200_000,
         },
         output: {
           mode: node.outputMode,
