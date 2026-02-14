@@ -9,9 +9,24 @@ function defaultConfigPath(): string {
   return path.join(os.homedir(), ".vespid", "agent.json");
 }
 
-function parseFlags(argv: string[]): Record<string, string> {
+function locateCommandIndex(argv: string[]): number {
+  // tsx watch typically inserts a `--` separator before script args, so the command
+  // may not be at argv[2]. We scan for the first recognized command token.
+  for (let i = 2; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (!token || token === "--") {
+      continue;
+    }
+    if (token === "connect" || token === "start") {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function parseFlags(argv: string[], startIndex: number): Record<string, string> {
   const flags: Record<string, string> = {};
-  for (let i = 3; i < argv.length; i += 1) {
+  for (let i = startIndex; i < argv.length; i += 1) {
     const key = argv[i];
     if (!key || !key.startsWith("--")) {
       continue;
@@ -55,8 +70,9 @@ function parseCsvList(value: string | undefined): string[] | undefined {
 }
 
 function parseArgs(argv: string[]): z.infer<typeof argsSchema> {
-  const command = argv[2] === "connect" ? "connect" : "start";
-  const flags = parseFlags(argv);
+  const commandIndex = locateCommandIndex(argv);
+  const command = commandIndex >= 0 && argv[commandIndex] === "connect" ? "connect" : "start";
+  const flags = parseFlags(argv, commandIndex >= 0 ? commandIndex + 1 : 3);
   if (command === "connect") {
     return argsSchema.parse({
       command,
