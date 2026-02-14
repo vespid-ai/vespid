@@ -20,9 +20,15 @@ export function useSession() {
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
           return null;
         }
+        // If the API is down or blocked by CORS, treat as anonymous to avoid
+        // taking down the shell during local dev.
+        if (err instanceof ApiError && err.status === 503 && err.payload?.code === "NETWORK_ERROR") {
+          return null;
+        }
         throw err;
       }
     },
     staleTime: 60_000,
+    retry: 0,
   });
 }
