@@ -63,6 +63,22 @@
     "navigation": "Navigation",
     "other": "Other"
   },
+  "models": {
+    "title": "Models",
+    "subtitle": "Search and select a model. Powered by OpenRouter (auto-updated).",
+    "manage": "Manage",
+    "manageHint": "Hide models you never use. Hidden models won't appear in the picker.",
+    "searchPlaceholder": "Search models (name or ID)...",
+    "noResults": "No matching models.",
+    "recommended": "Recommended",
+    "visible": "Visible",
+    "useCustom": "Use",
+    "inputPlaceholder": "e.g. gpt-4.1-mini",
+    "otherProviders": "Other",
+    "catalogUnavailable": "Model catalog unavailable. You can still type a model ID manually.",
+    "poweredBy": "Catalog",
+    "fetchedAt": "Updated: {ts}"
+  },
   "settings": {
     "title": "Settings",
     "theme": {

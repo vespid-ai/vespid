@@ -10,6 +10,7 @@ import { CodeBlock } from "../../../../components/ui/code-block";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Textarea } from "../../../../components/ui/textarea";
+import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useCreateWorkflow } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
@@ -461,16 +462,13 @@ export default function WorkflowsPage() {
                         />
                       </div>
 
-                      <div className="grid gap-2 md:grid-cols-2">
+                        <div className="grid gap-2 md:grid-cols-2">
                         <div className="grid gap-1.5">
                           <Label htmlFor={`agent-model-${node.id}`}>{t("workflows.model")}</Label>
-                          <Input
-                            id={`agent-model-${node.id}`}
+                          <ModelPickerField
                             value={node.model}
-                            onChange={(e) =>
-                              setAgentNodes((prev) =>
-                                prev.map((n) => (n.id === node.id ? { ...n, model: e.target.value } : n))
-                              )
+                            onChange={(next) =>
+                              setAgentNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, model: next } : n)))
                             }
                           />
                         </div>
@@ -921,17 +919,13 @@ export default function WorkflowsPage() {
                                     <div className="grid gap-2 md:grid-cols-2">
                                       <div className="grid gap-1.5">
                                         <Label htmlFor={`teammate-model-${node.id}-${tmIdx}`}>{t("workflows.model")}</Label>
-                                        <Input
-                                          id={`teammate-model-${node.id}-${tmIdx}`}
+                                        <ModelPickerField
                                           value={tm.model}
-                                          onChange={(e) =>
+                                          onChange={(next) =>
                                             setAgentNodes((prev) =>
                                               prev.map((n) =>
                                                 n.id === node.id
-                                                  ? {
-                                                      ...n,
-                                                      teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, model: e.target.value } : x)),
-                                                    }
+                                                  ? { ...n, teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, model: next } : x)) }
                                                   : n
                                               )
                                             )

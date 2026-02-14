@@ -63,6 +63,22 @@
     "navigation": "导航",
     "other": "其他"
   },
+  "models": {
+    "title": "模型",
+    "subtitle": "搜索并选择模型。由 OpenRouter 提供模型目录（自动更新）。",
+    "manage": "管理",
+    "manageHint": "隐藏不常用的模型。被隐藏的模型不会出现在选择器中。",
+    "searchPlaceholder": "搜索模型（名称或 ID）...",
+    "noResults": "暂无匹配模型。",
+    "recommended": "推荐",
+    "visible": "显示",
+    "useCustom": "使用",
+    "inputPlaceholder": "例如 gpt-4.1-mini",
+    "otherProviders": "其他",
+    "catalogUnavailable": "模型目录暂不可用。你仍可手动输入模型 ID。",
+    "poweredBy": "目录来源",
+    "fetchedAt": "更新时间: {ts}"
+  },
   "settings": {
     "title": "设置",
     "theme": {
