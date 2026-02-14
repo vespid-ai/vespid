@@ -233,6 +233,51 @@ export async function buildGatewayServer(input?: {
     }
   }
 
+  async function selectDispatchAgent(input: {
+    organizationId: string;
+    kind: "connector.action" | "agent.execute";
+    connectorId?: string | null;
+    requestId: string;
+  }): Promise<ConnectedAgent | null> {
+    let agent: ConnectedAgent | null = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const selected = selectAgent(input.organizationId, { kind: input.kind, connectorId: input.connectorId ?? null });
+      if (!selected) {
+        agent = null;
+        break;
+      }
+
+      if (selected.ws.readyState !== selected.ws.OPEN) {
+        removeAgent(selected.organizationId, selected.agentId);
+        server.log.warn({
+          event: "gateway_agent_disconnected",
+          orgId: selected.organizationId,
+          agentId: selected.agentId,
+          reasonCode: "WS_NOT_OPEN",
+        });
+        continue;
+      }
+
+      const row = await withTenantContext(pool, { organizationId: selected.organizationId }, async (db) =>
+        getOrganizationAgentByTokenHash(db, { organizationId: selected.organizationId, tokenHash: selected.tokenHash })
+      );
+      if (!row || row.revokedAt) {
+        removeAgent(selected.organizationId, selected.agentId);
+        server.log.warn({
+          event: "gateway_agent_revoked_skipped",
+          orgId: selected.organizationId,
+          agentId: selected.agentId,
+          requestId: input.requestId,
+        });
+        continue;
+      }
+
+      agent = selected;
+      break;
+    }
+    return agent;
+  }
+
   server.post("/internal/v1/dispatch", async (request, reply) => {
     const token = request.headers["x-gateway-token"];
     if (typeof token !== "string" || token.length === 0 || token !== serviceToken) {
@@ -275,44 +320,12 @@ export async function buildGatewayServer(input?: {
       return reply.status(200).send(cached);
     }
 
-    let agent: ConnectedAgent | null = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const selected = selectAgent(parsed.data.organizationId, { kind: parsed.data.kind, connectorId });
-      if (!selected) {
-        agent = null;
-        break;
-      }
-
-      // Drop disconnected sockets eagerly.
-      if (selected.ws.readyState !== selected.ws.OPEN) {
-        removeAgent(selected.organizationId, selected.agentId);
-        server.log.warn({
-          event: "gateway_agent_disconnected",
-          orgId: selected.organizationId,
-          agentId: selected.agentId,
-          reasonCode: "WS_NOT_OPEN",
-        });
-        continue;
-      }
-
-      // Re-check revocation at dispatch time (revoked agents remain connected but are never used).
-      const row = await withTenantContext(pool, { organizationId: selected.organizationId }, async (db) =>
-        getOrganizationAgentByTokenHash(db, { organizationId: selected.organizationId, tokenHash: selected.tokenHash })
-      );
-      if (!row || row.revokedAt) {
-        removeAgent(selected.organizationId, selected.agentId);
-        server.log.warn({
-          event: "gateway_agent_revoked_skipped",
-          orgId: selected.organizationId,
-          agentId: selected.agentId,
-          requestId,
-        });
-        continue;
-      }
-
-      agent = selected;
-      break;
-    }
+    const agent = await selectDispatchAgent({
+      organizationId: parsed.data.organizationId,
+      kind: parsed.data.kind,
+      connectorId,
+      requestId,
+    });
 
     if (!agent) {
       server.log.warn({ event: "gateway_dispatch_no_agent", orgId: parsed.data.organizationId, requestId });
@@ -378,6 +391,93 @@ export async function buildGatewayServer(input?: {
     });
 
     return reply.status(200).send(response);
+  });
+
+  server.post("/internal/v1/dispatch-async", async (request, reply) => {
+    const token = request.headers["x-gateway-token"];
+    if (typeof token !== "string" || token.length === 0 || token !== serviceToken) {
+      return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid gateway service token" });
+    }
+
+    const parsed = dispatchRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid dispatch payload" });
+    }
+
+    const requestId = `${parsed.data.runId}:${parsed.data.nodeId}:${parsed.data.attemptCount}`;
+    let connectorId: string | null = null;
+    if (parsed.data.kind === "connector.action") {
+      const payloadParsed = connectorActionDispatchPayloadSchema.safeParse(parsed.data.payload);
+      if (!payloadParsed.success) {
+        return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid connector.action payload" });
+      }
+      connectorId = payloadParsed.data.connectorId;
+    }
+
+    server.log.info(
+      {
+        event: "gateway_dispatch_received",
+        orgId: parsed.data.organizationId,
+        runId: parsed.data.runId,
+        workflowId: parsed.data.workflowId,
+        nodeId: parsed.data.nodeId,
+        attemptCount: parsed.data.attemptCount,
+        kind: parsed.data.kind,
+        requestId,
+        async: true,
+      },
+      "gateway dispatch received (async)"
+    );
+
+    // If we already have a cached result, do not re-dispatch.
+    const cached = await resultsStore.get(requestId);
+    if (cached) {
+      return reply.status(200).send({ requestId, dispatched: false, cached: true });
+    }
+
+    const agent = await selectDispatchAgent({
+      organizationId: parsed.data.organizationId,
+      kind: parsed.data.kind,
+      connectorId,
+      requestId,
+    });
+
+    if (!agent) {
+      server.log.warn({ event: "gateway_dispatch_no_agent", orgId: parsed.data.organizationId, requestId });
+      return reply.status(503).send({ code: "NO_AGENT_AVAILABLE", message: "No node-agent is connected for this org" });
+    }
+
+    const message: GatewayServerExecuteMessage = {
+      type: "execute",
+      requestId,
+      organizationId: parsed.data.organizationId,
+      userId: parsed.data.requestedByUserId,
+      kind: parsed.data.kind,
+      payload: parsed.data.payload as GatewayDispatchRequest["payload"],
+      ...(parsed.data.secret ? { secret: parsed.data.secret } : {}),
+    };
+
+    agent.lastUsedAtMs = Date.now();
+    agent.inFlightCount += 1;
+    try {
+      agent.ws.send(JSON.stringify(message));
+    } catch (error) {
+      agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
+      removeAgent(agent.organizationId, agent.agentId);
+      server.log.warn(
+        {
+          event: "gateway_dispatch_ws_send_failed",
+          orgId: parsed.data.organizationId,
+          agentId: agent.agentId,
+          requestId,
+          reasonCode: error instanceof Error ? error.message : "WS_SEND_FAILED",
+        },
+        "gateway dispatch ws send failed"
+      );
+      return reply.status(503).send({ code: "NO_AGENT_AVAILABLE", message: "No node-agent is connected for this org" });
+    }
+
+    return reply.status(201).send({ requestId, dispatched: true });
   });
 
   server.get("/internal/v1/results/:requestId", async (request, reply) => {

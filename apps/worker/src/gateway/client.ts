@@ -7,6 +7,12 @@ const dispatchResponseSchema = z.object({
   error: z.string().min(1).optional(),
 });
 
+const asyncDispatchResponseSchema = z.object({
+  requestId: z.string().min(1),
+  dispatched: z.boolean(),
+  cached: z.boolean().optional(),
+});
+
 export function getGatewayHttpUrl(): string | null {
   const raw = process.env.GATEWAY_HTTP_URL;
   if (!raw || raw.trim().length === 0) {
@@ -77,6 +83,93 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
     ...(parsed.data.output !== undefined ? { output: parsed.data.output } : {}),
     ...(typeof parsed.data.error === "string" ? { error: parsed.data.error } : {}),
   };
+}
+
+export async function dispatchViaGatewayAsync(input: GatewayDispatchRequest): Promise<
+  | { ok: true; requestId: string; dispatched: boolean }
+  | { ok: false; error: string }
+> {
+  const baseUrl = getGatewayHttpUrl();
+  const serviceToken = getGatewayServiceToken();
+  if (!baseUrl || !serviceToken) {
+    return { ok: false, error: "GATEWAY_NOT_CONFIGURED" };
+  }
+
+  const requestId = buildRequestId(input);
+  const url = new URL("/internal/v1/dispatch-async", baseUrl);
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gateway-token": serviceToken,
+      },
+      body: JSON.stringify(input),
+    });
+  } catch {
+    return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+  }
+
+  const raw = await response.text();
+  if (!response.ok) {
+    if (response.status === 503) {
+      return { ok: false, error: "NO_AGENT_AVAILABLE" };
+    }
+    return { ok: false, error: "GATEWAY_DISPATCH_FAILED" };
+  }
+
+  const payload = raw.length > 0 ? (JSON.parse(raw) as unknown) : null;
+  const parsed = asyncDispatchResponseSchema.safeParse(payload);
+  if (!parsed.success) {
+    return { ok: false, error: "GATEWAY_RESPONSE_INVALID" };
+  }
+  if (parsed.data.requestId !== requestId) {
+    return { ok: false, error: "GATEWAY_RESPONSE_INVALID" };
+  }
+  return { ok: true, requestId, dispatched: parsed.data.dispatched };
+}
+
+export async function fetchGatewayResult(requestId: string): Promise<
+  | { ok: true; result: GatewayDispatchResponse }
+  | { ok: false; error: "RESULT_NOT_READY" | "GATEWAY_UNAVAILABLE" | "GATEWAY_RESPONSE_INVALID" }
+> {
+  const baseUrl = getGatewayHttpUrl();
+  const serviceToken = getGatewayServiceToken();
+  if (!baseUrl || !serviceToken) {
+    return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+  }
+
+  try {
+    const url = new URL(`/internal/v1/results/${encodeURIComponent(requestId)}`, baseUrl);
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        "x-gateway-token": serviceToken,
+      },
+    });
+    if (response.status === 404) {
+      return { ok: false, error: "RESULT_NOT_READY" };
+    }
+    if (!response.ok) {
+      return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+    }
+    const payload = await response.json();
+    const parsed = dispatchResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      return { ok: false, error: "GATEWAY_RESPONSE_INVALID" };
+    }
+    return {
+      ok: true,
+      result: {
+        status: parsed.data.status,
+        ...(parsed.data.output !== undefined ? { output: parsed.data.output } : {}),
+        ...(typeof parsed.data.error === "string" ? { error: parsed.data.error } : {}),
+      },
+    };
+  } catch {
+    return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+  }
 }
 
 async function pollResult(input: {

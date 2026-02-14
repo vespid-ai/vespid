@@ -411,12 +411,28 @@ export async function markWorkflowRunRunning(
     startedAt: Date;
     error: null;
     nextAttemptAt: null;
+    output: null;
+    cursorNodeIndex: number;
+    blockedRequestId: null;
+    blockedNodeId: null;
+    blockedNodeType: null;
+    blockedKind: null;
+    blockedAt: null;
+    blockedTimeoutAt: null;
     attemptCount?: number;
   } = {
     status: "running",
     startedAt: new Date(),
     error: null,
     nextAttemptAt: null,
+    output: null,
+    cursorNodeIndex: 0,
+    blockedRequestId: null,
+    blockedNodeId: null,
+    blockedNodeType: null,
+    blockedKind: null,
+    blockedAt: null,
+    blockedTimeoutAt: null,
   };
   if (typeof input.attemptCount === "number") {
     updates.attemptCount = input.attemptCount;
@@ -430,6 +446,79 @@ export async function markWorkflowRunRunning(
         eq(workflowRuns.organizationId, input.organizationId),
         eq(workflowRuns.workflowId, input.workflowId),
         eq(workflowRuns.id, input.runId)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function markWorkflowRunBlocked(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    cursorNodeIndex: number;
+    blockedRequestId: string;
+    blockedNodeId: string;
+    blockedNodeType: string;
+    blockedKind: string;
+    blockedTimeoutAt: Date;
+    output?: unknown;
+  }
+) {
+  const [row] = await db
+    .update(workflowRuns)
+    .set({
+      cursorNodeIndex: input.cursorNodeIndex,
+      blockedRequestId: input.blockedRequestId,
+      blockedNodeId: input.blockedNodeId,
+      blockedNodeType: input.blockedNodeType,
+      blockedKind: input.blockedKind,
+      blockedAt: new Date(),
+      blockedTimeoutAt: input.blockedTimeoutAt,
+      ...(input.output !== undefined ? { output: input.output } : {}),
+    })
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.workflowId, input.workflowId),
+        eq(workflowRuns.id, input.runId)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function clearWorkflowRunBlockAndAdvanceCursor(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    expectedRequestId: string;
+    nextCursorNodeIndex: number;
+    output?: unknown;
+  }
+) {
+  const [row] = await db
+    .update(workflowRuns)
+    .set({
+      cursorNodeIndex: input.nextCursorNodeIndex,
+      blockedRequestId: null,
+      blockedNodeId: null,
+      blockedNodeType: null,
+      blockedKind: null,
+      blockedAt: null,
+      blockedTimeoutAt: null,
+      ...(input.output !== undefined ? { output: input.output } : {}),
+    })
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.workflowId, input.workflowId),
+        eq(workflowRuns.id, input.runId),
+        eq(workflowRuns.blockedRequestId, input.expectedRequestId)
       )
     )
     .returning();
@@ -530,6 +619,33 @@ export async function deleteQueuedWorkflowRun(
   return row ?? null;
 }
 
+export async function updateWorkflowRunProgress(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    cursorNodeIndex: number;
+    output: unknown;
+  }
+) {
+  const [row] = await db
+    .update(workflowRuns)
+    .set({
+      cursorNodeIndex: input.cursorNodeIndex,
+      output: input.output,
+    })
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.workflowId, input.workflowId),
+        eq(workflowRuns.id, input.runId)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
 export async function claimNextQueuedWorkflowRun(db: Db) {
   return db.transaction(async (tx) => {
     const [candidate] = await tx
@@ -581,6 +697,13 @@ export async function markWorkflowRunQueuedForRetry(
       error: input.error,
       nextAttemptAt: input.nextAttemptAt ?? null,
       finishedAt: null,
+      cursorNodeIndex: 0,
+      blockedRequestId: null,
+      blockedNodeId: null,
+      blockedNodeType: null,
+      blockedKind: null,
+      blockedAt: null,
+      blockedTimeoutAt: null,
     })
     .where(
       and(
@@ -628,6 +751,12 @@ export async function markWorkflowRunFailed(
       error: input.error,
       nextAttemptAt: null,
       finishedAt: new Date(),
+      blockedRequestId: null,
+      blockedNodeId: null,
+      blockedNodeType: null,
+      blockedKind: null,
+      blockedAt: null,
+      blockedTimeoutAt: null,
     })
     .where(
       and(

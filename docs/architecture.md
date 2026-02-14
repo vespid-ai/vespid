@@ -32,7 +32,10 @@
   - Encryption uses an environment-provided KEK (`SECRETS_KEK_ID`, `SECRETS_KEK_BASE64`).
 - Remote execution (MVP):
   - Workflows may set `execution.mode="node"` for `agent.execute` and `connector.action`.
-  - `apps/worker` dispatches work to `apps/gateway`, which routes to any connected org-scoped node-agent.
+  - `apps/worker` dispatches work to `apps/gateway` asynchronously and persists a blocked cursor in `workflow_runs`:
+    - `blocked_request_id` (deterministic request id)
+    - `cursor_node_index` (next node position)
+  - A continuation worker polls gateway results and resumes run execution without blocking worker threads.
   - Gateway dispatch is protected by `GATEWAY_SERVICE_TOKEN`; agent auth uses long-lived agent tokens stored hashed.
   - Pairing uses short-lived, single-use pairing tokens stored hashed.
   - Production deployment: terminate TLS in front of gateway (reverse proxy / cloud LB) and keep `/internal/v1/dispatch` private.

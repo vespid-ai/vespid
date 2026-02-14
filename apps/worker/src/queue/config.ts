@@ -17,6 +17,10 @@ export function getWorkflowQueueName(): string {
   return process.env.WORKFLOW_QUEUE_NAME ?? "workflow-runs";
 }
 
+export function getWorkflowContinuationQueueName(): string {
+  return process.env.WORKFLOW_CONTINUATION_QUEUE_NAME ?? "workflow-continuations";
+}
+
 export function getWorkflowQueueConcurrency(): number {
   return Math.max(1, envNumber("WORKFLOW_QUEUE_CONCURRENCY", 5));
 }

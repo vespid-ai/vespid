@@ -26,6 +26,9 @@ Gateway:
 
 Worker:
 - `NODE_EXEC_TIMEOUT_MS` (default `60000`)
+- `WORKFLOW_CONTINUATION_QUEUE_NAME` (default `workflow-continuations`)
+- `WORKFLOW_CONTINUATION_POLL_MS` (default `2000`; result polling interval while blocked)
+- `WORKFLOW_CONTINUATION_CONCURRENCY` (default `10`)
 
 ## Pairing Flow
 1. Create a pairing token (org owner/admin):
@@ -46,13 +49,15 @@ Notes:
 { "execution": { "mode": "node" } }
 ```
 2. Publish and run the workflow.
-3. Confirm `workflow_run_events` contains `node_started/node_succeeded` for that node.
+3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.
+4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
 
 ## Troubleshooting
 - `503 NO_AGENT_AVAILABLE`:
   - No connected agents exist for the organization.
   - Confirm the agent is running and connected to `GATEWAY_WS_URL`.
   - Confirm the gateway is running and reachable from the agent.
+  - Confirm worker has `GATEWAY_HTTP_URL` + `GATEWAY_SERVICE_TOKEN` configured.
 
 - `GATEWAY_NOT_CONFIGURED` (worker):
   - Ensure `GATEWAY_HTTP_URL` and `GATEWAY_SERVICE_TOKEN` are set in the worker environment.

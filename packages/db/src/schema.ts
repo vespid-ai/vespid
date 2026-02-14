@@ -109,6 +109,13 @@ export const workflowRuns = pgTable("workflow_runs", {
   attemptCount: integer("attempt_count").notNull().default(0),
   maxAttempts: integer("max_attempts").notNull().default(3),
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  cursorNodeIndex: integer("cursor_node_index").notNull().default(0),
+  blockedRequestId: text("blocked_request_id"),
+  blockedNodeId: text("blocked_node_id"),
+  blockedNodeType: text("blocked_node_type"),
+  blockedKind: text("blocked_kind"),
+  blockedAt: timestamp("blocked_at", { withTimezone: true }),
+  blockedTimeoutAt: timestamp("blocked_timeout_at", { withTimezone: true }),
   requestedByUserId: uuid("requested_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
   input: jsonb("input"),
   output: jsonb("output"),
@@ -120,6 +127,11 @@ export const workflowRuns = pgTable("workflow_runs", {
   workflowRunsOrgIdIdx: index("workflow_runs_org_id_idx").on(table.organizationId),
   workflowRunsWorkflowIdIdx: index("workflow_runs_workflow_id_idx").on(table.workflowId),
   workflowRunsStatusIdx: index("workflow_runs_status_idx").on(table.status),
+  workflowRunsOrgStatusBlockedIdx: index("workflow_runs_org_status_blocked_idx").on(
+    table.organizationId,
+    table.status,
+    table.blockedRequestId
+  ),
 }));
 
 export const workflowRunEvents = pgTable("workflow_run_events", {

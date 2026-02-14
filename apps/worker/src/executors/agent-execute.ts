@@ -1,4 +1,4 @@
-import type { GatewayDispatchRequest, GatewayDispatchResponse, WorkflowNodeExecutor } from "@vespid/shared";
+import type { WorkflowNodeExecutor } from "@vespid/shared";
 import { z } from "zod";
 
 const agentExecuteNodeSchema = z.object({
@@ -16,8 +16,8 @@ const agentExecuteNodeSchema = z.object({
 });
 
 export function createAgentExecuteExecutor(input?: {
-  dispatchToGateway?: (input: GatewayDispatchRequest) => Promise<GatewayDispatchResponse>;
-  nodeExecTimeoutMs?: number;
+  // Remote execution is handled by the worker state machine (async continuation),
+  // not inside the executor.
 }): WorkflowNodeExecutor {
   return {
     nodeType: "agent.execute",
@@ -25,33 +25,6 @@ export function createAgentExecuteExecutor(input?: {
       const parsed = agentExecuteNodeSchema.safeParse(context.node);
       if (!parsed.success) {
         return { status: "failed", error: "INVALID_NODE_CONFIG" };
-      }
-
-      const executionMode = parsed.data.config?.execution?.mode ?? "cloud";
-      if (executionMode === "node") {
-        if (!input?.dispatchToGateway) {
-          return { status: "failed", error: "GATEWAY_NOT_CONFIGURED" };
-        }
-
-        const response = await input.dispatchToGateway({
-          organizationId: context.organizationId,
-          requestedByUserId: context.requestedByUserId,
-          runId: context.runId,
-          workflowId: context.workflowId,
-          nodeId: context.nodeId,
-          nodeType: context.nodeType,
-          attemptCount: context.attemptCount,
-          kind: "agent.execute",
-          payload: {
-            nodeId: context.nodeId,
-            node: context.node,
-          },
-          ...(input.nodeExecTimeoutMs ? { timeoutMs: input.nodeExecTimeoutMs } : {}),
-        });
-
-        return response.status === "succeeded"
-          ? { status: "succeeded", output: response.output }
-          : { status: "failed", error: response.error ?? "NODE_EXECUTION_FAILED" };
       }
 
       return {
@@ -64,4 +37,3 @@ export function createAgentExecuteExecutor(input?: {
     },
   };
 }
-

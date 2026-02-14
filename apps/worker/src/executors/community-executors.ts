@@ -2,13 +2,10 @@ import type { WorkflowNodeExecutor } from "@vespid/shared";
 import { createConnectorActionExecutor } from "./connector-action.js";
 import { createLegacyGithubIssueCreateExecutor } from "./github-issue-create.js";
 import { createAgentExecuteExecutor } from "./agent-execute.js";
-import type { GatewayDispatchRequest, GatewayDispatchResponse } from "@vespid/shared";
 
 export function getCommunityWorkflowNodeExecutors(input?: {
   githubApiBaseUrl?: string;
   loadConnectorSecretValue?: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
-  dispatchToGateway?: (input: GatewayDispatchRequest) => Promise<GatewayDispatchResponse>;
-  nodeExecTimeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor[] {
   return [
@@ -29,8 +26,6 @@ export function getCommunityWorkflowNodeExecutors(input?: {
           createConnectorActionExecutor({
             githubApiBaseUrl: input.githubApiBaseUrl,
             loadConnectorSecretValue: input.loadConnectorSecretValue,
-            ...(input.dispatchToGateway ? { dispatchToGateway: input.dispatchToGateway } : {}),
-            ...(input.nodeExecTimeoutMs ? { nodeExecTimeoutMs: input.nodeExecTimeoutMs } : {}),
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),
           createLegacyGithubIssueCreateExecutor({
@@ -41,8 +36,7 @@ export function getCommunityWorkflowNodeExecutors(input?: {
         ]
       : []),
     createAgentExecuteExecutor({
-      ...(input?.dispatchToGateway ? { dispatchToGateway: input.dispatchToGateway } : {}),
-      ...(input?.nodeExecTimeoutMs ? { nodeExecTimeoutMs: input.nodeExecTimeoutMs } : {}),
+      // Remote execution is handled by the worker state machine.
     }),
     {
       nodeType: "condition",

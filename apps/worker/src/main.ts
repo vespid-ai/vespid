@@ -2,13 +2,16 @@ import { Worker, type Job } from "bullmq";
 import {
   createPool,
   appendWorkflowRunEvent,
+  clearWorkflowRunBlockAndAdvanceCursor,
   getConnectorSecretById,
   getWorkflowById,
   getWorkflowRunById,
+  markWorkflowRunBlocked,
   markWorkflowRunFailed,
   markWorkflowRunQueuedForRetry,
   markWorkflowRunRunning,
   markWorkflowRunSucceeded,
+  updateWorkflowRunProgress,
   withTenantContext,
 } from "@vespid/db";
 import {
@@ -21,14 +24,20 @@ import {
   type WorkflowRunJobPayload,
 } from "@vespid/shared";
 import { workflowDslSchema, type WorkflowExecutionResult, type WorkflowExecutionStep } from "@vespid/workflow";
+import { getCommunityConnectorAction } from "@vespid/connectors";
 import {
   getRedisConnectionOptions,
+  getWorkflowContinuationQueueName,
   getWorkflowQueueConcurrency,
   getWorkflowQueueName,
+  getWorkflowRetryBackoffMs,
   getWorkflowRetryAttempts,
 } from "./queue/config.js";
 import { getCommunityWorkflowNodeExecutors } from "./executors/community-executors.js";
-import { dispatchViaGateway } from "./gateway/client.js";
+import { dispatchViaGatewayAsync } from "./gateway/client.js";
+import { createWorkflowRunQueue } from "./queue/run-queue.js";
+import { createContinuationQueue } from "./continuations/queue.js";
+import { startContinuationWorker } from "./continuations/worker.js";
 
 type WorkflowRunJobLike = Pick<Job<WorkflowRunJobPayload>, "data" | "attemptsMade" | "opts">;
 type ExecutorRegistry = Map<string, WorkflowNodeExecutor>;
@@ -99,6 +108,33 @@ function summarizeForEvent(value: unknown, maxChars = WORKFLOW_EVENT_PAYLOAD_MAX
   }
 }
 
+function parseStepsFromRunOutput(output: unknown): WorkflowExecutionStep[] {
+  if (!output || typeof output !== "object") {
+    return [];
+  }
+  const maybe = output as { steps?: unknown };
+  return Array.isArray(maybe.steps) ? (maybe.steps as WorkflowExecutionStep[]) : [];
+}
+
+function buildProgressOutput(steps: WorkflowExecutionStep[]): WorkflowExecutionResult {
+  const completedNodeCount = steps.filter((step) => step.status === "succeeded").length;
+  const failedNodeId = steps.find((step) => step.status === "failed")?.nodeId ?? null;
+  return {
+    status: failedNodeId ? "failed" : "succeeded",
+    steps,
+    output: {
+      completedNodeCount,
+      failedNodeId,
+    },
+  };
+}
+
+function retryDelayMs(attemptCount: number): number {
+  const base = getWorkflowRetryBackoffMs();
+  const cappedAttempt = Math.min(10, Math.max(1, attemptCount));
+  return Math.min(60_000, Math.floor(base * Math.pow(2, cappedAttempt - 1)));
+}
+
 function buildExecutorRegistry(input: {
   communityExecutors: WorkflowNodeExecutor[];
   enterpriseExecutors?: WorkflowNodeExecutor[] | null;
@@ -119,17 +155,57 @@ export async function processWorkflowRunJob(
   input?: {
     executorRegistry?: ExecutorRegistry;
     enterpriseProvider?: EnterpriseProvider;
+    enqueueRun?: (input: { payload: WorkflowRunJobPayload; delayMs?: number }) => Promise<void>;
+    enqueueContinuationPoll?: (input: {
+      organizationId: string;
+      workflowId: string;
+      runId: string;
+      requestId: string;
+      attemptCount: number;
+    }) => Promise<void>;
   }
 ): Promise<void> {
-  const configuredAttempts =
-    typeof job.opts.attempts === "number" && Number.isFinite(job.opts.attempts)
-      ? Math.max(1, job.opts.attempts)
-      : getWorkflowRetryAttempts();
-  const attemptCount = job.attemptsMade + 1;
   const actor = {
     userId: job.data.requestedByUserId,
     organizationId: job.data.organizationId,
   };
+
+  const loadConnectorSecretValue = async (secretInput: {
+    organizationId: string;
+    userId: string;
+    secretId: string;
+  }): Promise<string> => {
+    const secret = await withTenantContext(
+      pool,
+      { userId: secretInput.userId, organizationId: secretInput.organizationId },
+      async (tenantDb) =>
+        getConnectorSecretById(tenantDb, {
+          organizationId: secretInput.organizationId,
+          secretId: secretInput.secretId,
+        })
+    );
+
+    if (!secret) {
+      throw new Error("SECRET_NOT_FOUND");
+    }
+
+    const kek = parseKekFromEnv();
+    return decryptSecret({
+      encrypted: {
+        kekId: secret.kekId,
+        dekCiphertext: secret.dekCiphertext,
+        dekIv: secret.dekIv,
+        dekTag: secret.dekTag,
+        secretCiphertext: secret.secretCiphertext,
+        secretIv: secret.secretIv,
+        secretTag: secret.secretTag,
+      },
+      resolveKek(kekId) {
+        return kekId === kek.kekId ? kek.kekKeyBytes : null;
+      },
+    });
+  };
+
   const executorRegistry =
     input?.executorRegistry ??
     (() => {
@@ -137,41 +213,9 @@ export async function processWorkflowRunJob(
         ? resolveWorkflowNodeExecutors(input.enterpriseProvider)
         : null;
 
-      const loadConnectorSecretValue = async (secretInput: {
-        organizationId: string;
-        userId: string;
-        secretId: string;
-      }): Promise<string> => {
-        const secret = await withTenantContext(pool, { userId: secretInput.userId, organizationId: secretInput.organizationId }, async (tenantDb) =>
-          getConnectorSecretById(tenantDb, { organizationId: secretInput.organizationId, secretId: secretInput.secretId })
-        );
-
-        if (!secret) {
-          throw new Error("SECRET_NOT_FOUND");
-        }
-
-        const kek = parseKekFromEnv();
-        return decryptSecret({
-          encrypted: {
-            kekId: secret.kekId,
-            dekCiphertext: secret.dekCiphertext,
-            dekIv: secret.dekIv,
-            dekTag: secret.dekTag,
-            secretCiphertext: secret.secretCiphertext,
-            secretIv: secret.secretIv,
-            secretTag: secret.secretTag,
-          },
-          resolveKek(kekId) {
-            return kekId === kek.kekId ? kek.kekKeyBytes : null;
-          },
-        });
-      };
-
       const communityExecutors = getCommunityWorkflowNodeExecutors({
         githubApiBaseUrl: getGithubApiBaseUrl(),
         loadConnectorSecretValue,
-        dispatchToGateway: dispatchViaGateway,
-        nodeExecTimeoutMs: envNumber("NODE_EXEC_TIMEOUT_MS", 60_000),
       });
 
       return buildExecutorRegistry({
@@ -179,6 +223,8 @@ export async function processWorkflowRunJob(
         enterpriseExecutors,
       });
     })();
+
+  let attemptCount = 0;
 
   async function appendEvent(event: {
     eventType: string;
@@ -222,6 +268,21 @@ export async function processWorkflowRunJob(
     });
     return;
   }
+
+  if (run.status === "succeeded" || run.status === "failed") {
+    return;
+  }
+
+  if (run.status === "running" && run.blockedRequestId) {
+    // Another worker already dispatched a remote node for this attempt.
+    return;
+  }
+
+  const maxAttempts = typeof run.maxAttempts === "number" && Number.isFinite(run.maxAttempts) ? run.maxAttempts : getWorkflowRetryAttempts();
+  const isStartingAttempt = run.status === "queued";
+  attemptCount = isStartingAttempt ? Math.max(1, (run.attemptCount ?? 0) + 1) : Math.max(1, run.attemptCount ?? 1);
+  const initialCursorNodeIndex = isStartingAttempt ? 0 : Math.max(0, run.cursorNodeIndex ?? 0);
+  const initialSteps = isStartingAttempt ? [] : parseStepsFromRunOutput(run.output);
 
   const workflow = await withTenantContext(pool, actor, async (tenantDb) =>
     getWorkflowById(tenantDb, {
@@ -267,56 +328,249 @@ export async function processWorkflowRunJob(
     return;
   }
 
-  await appendEvent({
-    eventType: "run_started",
-    level: "info",
-    payload: {
-      runId: job.data.runId,
-      workflowId: job.data.workflowId,
-      orgId: job.data.organizationId,
-      attemptCount,
-    },
-  });
+  let cursorNodeIndex = initialCursorNodeIndex;
+  const steps: WorkflowExecutionStep[] = [...initialSteps];
 
-  const running = await withTenantContext(pool, actor, async (tenantDb) =>
-    markWorkflowRunRunning(tenantDb, {
-      organizationId: job.data.organizationId,
-      workflowId: job.data.workflowId,
-      runId: job.data.runId,
-      attemptCount,
-    })
-  );
-
-  if (!running) {
-    jsonLog("warn", {
-      event: "workflow_run_orphaned",
-      reasonCode: "RUN_NOT_FOUND_ON_START",
-      runId: job.data.runId,
-      workflowId: job.data.workflowId,
-      orgId: job.data.organizationId,
+  if (isStartingAttempt) {
+    await appendEvent({
+      eventType: "run_started",
+      level: "info",
+      payload: {
+        runId: job.data.runId,
+        workflowId: job.data.workflowId,
+        orgId: job.data.organizationId,
+        attemptCount,
+      },
     });
-    return;
-  }
 
-  jsonLog("info", {
-    event: "workflow_run_started",
-    runId: job.data.runId,
-    workflowId: job.data.workflowId,
-    orgId: job.data.organizationId,
-    attemptCount,
-  });
+    const running = await withTenantContext(pool, actor, async (tenantDb) =>
+      markWorkflowRunRunning(tenantDb, {
+        organizationId: job.data.organizationId,
+        workflowId: job.data.workflowId,
+        runId: job.data.runId,
+        attemptCount,
+      })
+    );
+
+    if (!running) {
+      jsonLog("warn", {
+        event: "workflow_run_orphaned",
+        reasonCode: "RUN_NOT_FOUND_ON_START",
+        runId: job.data.runId,
+        workflowId: job.data.workflowId,
+        orgId: job.data.organizationId,
+      });
+      return;
+    }
+
+    cursorNodeIndex = 0;
+    steps.length = 0;
+    jsonLog("info", {
+      event: "workflow_run_started",
+      runId: job.data.runId,
+      workflowId: job.data.workflowId,
+      orgId: job.data.organizationId,
+      attemptCount,
+    });
+  } else {
+    jsonLog("info", {
+      event: "workflow_run_resumed",
+      runId: job.data.runId,
+      workflowId: job.data.workflowId,
+      orgId: job.data.organizationId,
+      attemptCount,
+      cursorNodeIndex,
+    });
+  }
 
   try {
     const dsl = workflowDslSchema.parse(workflow.dsl);
-    const steps: WorkflowExecutionStep[] = [];
+    const nodeExecTimeoutMs = envNumber("NODE_EXEC_TIMEOUT_MS", 60_000);
 
-    for (const node of dsl.nodes) {
+    for (let index = cursorNodeIndex; index < dsl.nodes.length; index += 1) {
+      const node = dsl.nodes[index];
+      if (!node) {
+        break;
+      }
       await appendEvent({
         eventType: "node_started",
         level: "info",
         nodeId: node.id,
         nodeType: node.type,
       });
+
+      const executionMode =
+        node.type === "agent.execute"
+          ? (node.config?.execution?.mode ?? "cloud")
+          : node.type === "connector.action"
+            ? (node.config.execution?.mode ?? "cloud")
+            : "cloud";
+
+      if (executionMode === "node") {
+        if (!input?.enqueueContinuationPoll) {
+          throw new Error("CONTINUATION_QUEUE_NOT_CONFIGURED");
+        }
+
+        if (node.type === "agent.execute") {
+          const dispatchInput = {
+            organizationId: job.data.organizationId,
+            requestedByUserId: job.data.requestedByUserId,
+            runId: job.data.runId,
+            workflowId: job.data.workflowId,
+            nodeId: node.id,
+            nodeType: node.type,
+            attemptCount,
+            kind: "agent.execute" as const,
+            payload: {
+              nodeId: node.id,
+              node,
+            },
+            timeoutMs: nodeExecTimeoutMs,
+          };
+
+          const dispatched = await dispatchViaGatewayAsync(dispatchInput);
+          if (!dispatched.ok) {
+            throw new Error(dispatched.error);
+          }
+
+          await appendEvent({
+            eventType: "node_dispatched",
+            level: "info",
+            nodeId: node.id,
+            nodeType: node.type,
+            payload: { requestId: dispatched.requestId, kind: "agent.execute" },
+          });
+
+          await withTenantContext(pool, actor, async (tenantDb) =>
+            markWorkflowRunBlocked(tenantDb, {
+              organizationId: job.data.organizationId,
+              workflowId: job.data.workflowId,
+              runId: job.data.runId,
+              cursorNodeIndex: index,
+              blockedRequestId: dispatched.requestId,
+              blockedNodeId: node.id,
+              blockedNodeType: node.type,
+              blockedKind: "agent.execute",
+              blockedTimeoutAt: new Date(Date.now() + nodeExecTimeoutMs),
+              output: buildProgressOutput(steps),
+            })
+          );
+
+          await input.enqueueContinuationPoll({
+            organizationId: job.data.organizationId,
+            workflowId: job.data.workflowId,
+            runId: job.data.runId,
+            requestId: dispatched.requestId,
+            attemptCount,
+          });
+
+          jsonLog("info", {
+            event: "workflow_node_dispatched",
+            runId: job.data.runId,
+            workflowId: job.data.workflowId,
+            orgId: job.data.organizationId,
+            attemptCount,
+            nodeId: node.id,
+            nodeType: node.type,
+            requestId: dispatched.requestId,
+          });
+
+          return;
+        }
+
+        if (node.type === "connector.action") {
+          const action = getCommunityConnectorAction({
+            connectorId: node.config.connectorId as any,
+            actionId: node.config.actionId,
+          });
+          if (!action) {
+            throw new Error(`ACTION_NOT_SUPPORTED:${node.config.connectorId}:${node.config.actionId}`);
+          }
+
+          const actionInputParsed = action.inputSchema.safeParse(node.config.input);
+          if (!actionInputParsed.success) {
+            throw new Error("INVALID_ACTION_INPUT");
+          }
+
+          const secret = action.requiresSecret
+            ? await loadConnectorSecretValue({
+                organizationId: job.data.organizationId,
+                userId: job.data.requestedByUserId,
+                secretId: node.config.auth.secretId,
+              })
+            : null;
+
+          const dispatchInput = {
+            organizationId: job.data.organizationId,
+            requestedByUserId: job.data.requestedByUserId,
+            runId: job.data.runId,
+            workflowId: job.data.workflowId,
+            nodeId: node.id,
+            nodeType: node.type,
+            attemptCount,
+            kind: "connector.action" as const,
+            payload: {
+              connectorId: node.config.connectorId,
+              actionId: node.config.actionId,
+              input: actionInputParsed.data,
+              env: {
+                githubApiBaseUrl: getGithubApiBaseUrl(),
+              },
+            },
+            ...(secret ? { secret } : {}),
+            timeoutMs: nodeExecTimeoutMs,
+          };
+
+          const dispatched = await dispatchViaGatewayAsync(dispatchInput);
+          if (!dispatched.ok) {
+            throw new Error(dispatched.error);
+          }
+
+          await appendEvent({
+            eventType: "node_dispatched",
+            level: "info",
+            nodeId: node.id,
+            nodeType: node.type,
+            payload: { requestId: dispatched.requestId, kind: "connector.action" },
+          });
+
+          await withTenantContext(pool, actor, async (tenantDb) =>
+            markWorkflowRunBlocked(tenantDb, {
+              organizationId: job.data.organizationId,
+              workflowId: job.data.workflowId,
+              runId: job.data.runId,
+              cursorNodeIndex: index,
+              blockedRequestId: dispatched.requestId,
+              blockedNodeId: node.id,
+              blockedNodeType: node.type,
+              blockedKind: "connector.action",
+              blockedTimeoutAt: new Date(Date.now() + nodeExecTimeoutMs),
+              output: buildProgressOutput(steps),
+            })
+          );
+
+          await input.enqueueContinuationPoll({
+            organizationId: job.data.organizationId,
+            workflowId: job.data.workflowId,
+            runId: job.data.runId,
+            requestId: dispatched.requestId,
+            attemptCount,
+          });
+
+          jsonLog("info", {
+            event: "workflow_node_dispatched",
+            runId: job.data.runId,
+            workflowId: job.data.workflowId,
+            orgId: job.data.organizationId,
+            attemptCount,
+            nodeId: node.id,
+            nodeType: node.type,
+            requestId: dispatched.requestId,
+          });
+
+          return;
+        }
+      }
 
       const executor = executorRegistry.get(node.type);
       if (!executor) {
@@ -386,16 +640,20 @@ export async function processWorkflowRunJob(
         status: "succeeded",
         output: nodeResult.output,
       });
+
+      cursorNodeIndex = index + 1;
+      await withTenantContext(pool, actor, async (tenantDb) =>
+        updateWorkflowRunProgress(tenantDb, {
+          organizationId: job.data.organizationId,
+          workflowId: job.data.workflowId,
+          runId: job.data.runId,
+          cursorNodeIndex,
+          output: buildProgressOutput(steps),
+        })
+      );
     }
 
-    const execution: WorkflowExecutionResult = {
-      status: "succeeded",
-      steps,
-      output: {
-        completedNodeCount: steps.length,
-        failedNodeId: null,
-      },
-    };
+    const execution = buildProgressOutput(steps);
 
     await withTenantContext(pool, actor, async (tenantDb) =>
       markWorkflowRunSucceeded(tenantDb, {
@@ -422,16 +680,21 @@ export async function processWorkflowRunJob(
     return;
   } catch (error) {
     const message = errorMessage(error);
-    const isFinalAttempt = attemptCount >= configuredAttempts;
+    const isFinalAttempt = attemptCount >= maxAttempts;
 
     if (!isFinalAttempt) {
+      if (!input?.enqueueRun) {
+        throw error instanceof Error ? error : new Error(message);
+      }
+
+      const delayMs = retryDelayMs(attemptCount);
       await withTenantContext(pool, actor, async (tenantDb) =>
         markWorkflowRunQueuedForRetry(tenantDb, {
           organizationId: job.data.organizationId,
           workflowId: job.data.workflowId,
           runId: job.data.runId,
           error: message,
-          nextAttemptAt: null,
+          nextAttemptAt: new Date(Date.now() + delayMs),
         })
       );
       await appendEvent({
@@ -440,7 +703,7 @@ export async function processWorkflowRunJob(
         message,
         payload: {
           attemptCount,
-          maxAttempts: configuredAttempts,
+          maxAttempts,
           error: message,
         },
       });
@@ -450,10 +713,13 @@ export async function processWorkflowRunJob(
         workflowId: job.data.workflowId,
         orgId: job.data.organizationId,
         attemptCount,
-        maxAttempts: configuredAttempts,
+        maxAttempts,
         error: message,
+        delayMs,
       });
-      throw error instanceof Error ? error : new Error(message);
+
+      await input.enqueueRun({ payload: job.data, delayMs });
+      return;
     }
 
     await withTenantContext(pool, actor, async (tenantDb) =>
@@ -471,7 +737,7 @@ export async function processWorkflowRunJob(
       message,
       payload: {
         attemptCount,
-        maxAttempts: configuredAttempts,
+        maxAttempts,
         error: message,
       },
     });
@@ -482,7 +748,7 @@ export async function processWorkflowRunJob(
       workflowId: job.data.workflowId,
       orgId: job.data.organizationId,
       attemptCount,
-      maxAttempts: configuredAttempts,
+      maxAttempts,
       error: message,
     });
   }
@@ -499,6 +765,8 @@ export async function startWorkflowWorker(input?: {
   const pool = input?.pool ?? createPool(process.env.DATABASE_URL);
   const connection = input?.connection ?? getRedisConnectionOptions();
   const ownsPool = !input?.pool;
+  const continuationQueueName = getWorkflowContinuationQueueName();
+  const continuationPollMs = Math.max(250, envNumber("WORKFLOW_CONTINUATION_POLL_MS", 2000));
 
   const enterpriseProvider = await loadEnterpriseProvider({
     logger: {
@@ -555,9 +823,50 @@ export async function startWorkflowWorker(input?: {
 
   const executorRegistry = buildExecutorRegistry({ communityExecutors, enterpriseExecutors });
 
+  const runQueue = createWorkflowRunQueue({ queueName, connection });
+  const continuationQueue = createContinuationQueue({ queueName: continuationQueueName, connection });
+  const continuationRuntime = startContinuationWorker({
+    pool,
+    connection,
+    queueName: continuationQueueName,
+    runQueue,
+  });
+
+  async function enqueueContinuationPoll(payload: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    requestId: string;
+    attemptCount: number;
+  }) {
+    await continuationQueue.queue.add(
+      "continuation",
+      {
+        type: "remote.poll",
+        organizationId: payload.organizationId,
+        workflowId: payload.workflowId,
+        runId: payload.runId,
+        requestId: payload.requestId,
+        attemptCount: payload.attemptCount,
+      },
+      {
+        jobId: payload.requestId,
+        attempts: 500,
+        backoff: { type: "fixed", delay: continuationPollMs },
+        removeOnComplete: 1000,
+        removeOnFail: 1000,
+      }
+    );
+  }
+
   const worker = new Worker<WorkflowRunJobPayload>(
     queueName,
-    async (job) => processWorkflowRunJob(pool, job, { executorRegistry }),
+    async (job) =>
+      processWorkflowRunJob(pool, job, {
+        executorRegistry,
+        enqueueRun: runQueue.enqueue,
+        enqueueContinuationPoll,
+      }),
     {
       connection,
       concurrency,
@@ -575,6 +884,9 @@ export async function startWorkflowWorker(input?: {
     worker,
     async close() {
       await worker.close();
+      await continuationRuntime.close();
+      await continuationQueue.close();
+      await runQueue.close();
       if (ownsPool) {
         await pool.end();
       }

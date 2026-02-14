@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getConnectorSecretById: vi.fn(),
   appendWorkflowRunEvent: vi.fn(),
   markWorkflowRunRunning: vi.fn(),
+  markWorkflowRunBlocked: vi.fn(),
+  updateWorkflowRunProgress: vi.fn(),
   markWorkflowRunQueuedForRetry: vi.fn(),
   markWorkflowRunSucceeded: vi.fn(),
   markWorkflowRunFailed: vi.fn(),
@@ -23,6 +25,8 @@ vi.mock("@vespid/db", () => ({
   getConnectorSecretById: mocks.getConnectorSecretById,
   appendWorkflowRunEvent: mocks.appendWorkflowRunEvent,
   markWorkflowRunRunning: mocks.markWorkflowRunRunning,
+  markWorkflowRunBlocked: mocks.markWorkflowRunBlocked,
+  updateWorkflowRunProgress: mocks.updateWorkflowRunProgress,
   markWorkflowRunQueuedForRetry: mocks.markWorkflowRunQueuedForRetry,
   markWorkflowRunSucceeded: mocks.markWorkflowRunSucceeded,
   markWorkflowRunFailed: mocks.markWorkflowRunFailed,
@@ -59,6 +63,12 @@ describe("workflow worker", () => {
       id: "run-1",
       organizationId: "org-1",
       workflowId: "wf-1",
+      status: "queued",
+      attemptCount: 0,
+      maxAttempts: 3,
+      cursorNodeIndex: 0,
+      blockedRequestId: null,
+      output: null,
       input: { k: "v" },
     });
     mocks.getWorkflowById.mockResolvedValue({
@@ -68,6 +78,8 @@ describe("workflow worker", () => {
       dsl: { version: "v2", trigger: { type: "trigger.manual" }, nodes: [{ id: "n1", type: "agent.execute" }] },
     });
     mocks.markWorkflowRunRunning.mockResolvedValue({ id: "run-1" });
+    mocks.markWorkflowRunBlocked.mockResolvedValue({ id: "run-1" });
+    mocks.updateWorkflowRunProgress.mockResolvedValue({ id: "run-1" });
     mocks.markWorkflowRunQueuedForRetry.mockResolvedValue({ id: "run-1" });
     mocks.markWorkflowRunSucceeded.mockResolvedValue({ id: "run-1" });
     mocks.markWorkflowRunFailed.mockResolvedValue({ id: "run-1" });
@@ -113,7 +125,7 @@ describe("workflow worker", () => {
     );
   });
 
-  it("requeues and throws when execution fails before final attempt", async () => {
+  it("requeues when execution fails before final attempt", async () => {
     const executor: WorkflowNodeExecutor = {
       nodeType: "agent.execute",
       async execute() {
@@ -122,9 +134,8 @@ describe("workflow worker", () => {
     };
     const executorRegistry = new Map<string, WorkflowNodeExecutor>([[executor.nodeType, executor]]);
 
-    await expect(processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry })).rejects.toThrow(
-      "boom"
-    );
+    const enqueueRun = vi.fn().mockResolvedValue(undefined);
+    await processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry, enqueueRun });
 
     expect(mocks.markWorkflowRunQueuedForRetry).toHaveBeenCalledWith(
       expect.anything(),
@@ -133,6 +144,7 @@ describe("workflow worker", () => {
         error: "boom",
       })
     );
+    expect(enqueueRun).toHaveBeenCalledTimes(1);
     expect(mocks.markWorkflowRunFailed).not.toHaveBeenCalled();
     expect(mocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
       expect.anything(),
@@ -149,15 +161,20 @@ describe("workflow worker", () => {
     };
     const executorRegistry = new Map<string, WorkflowNodeExecutor>([[executor.nodeType, executor]]);
 
-    await processWorkflowRunJob(
-      pool,
-      {
-        ...jobBase,
-        attemptsMade: 2,
-        opts: { attempts: 3 },
-      },
-      { executorRegistry }
-    );
+    mocks.getWorkflowRunById.mockResolvedValue({
+      id: "run-1",
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      status: "queued",
+      attemptCount: 2,
+      maxAttempts: 3,
+      cursorNodeIndex: 0,
+      blockedRequestId: null,
+      output: null,
+      input: { k: "v" },
+    });
+
+    await processWorkflowRunJob(pool, { ...jobBase, attemptsMade: 0 }, { executorRegistry, enqueueRun: vi.fn() });
 
     expect(mocks.markWorkflowRunQueuedForRetry).not.toHaveBeenCalled();
     expect(mocks.markWorkflowRunFailed).toHaveBeenCalledWith(
