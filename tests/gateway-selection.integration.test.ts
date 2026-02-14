@@ -190,7 +190,7 @@ describe("gateway selection integration", () => {
         },
       });
       expect(pairRes.statusCode).toBe(201);
-      return pairRes.json() as { agentToken: string };
+      return pairRes.json() as { agentId: string; agentToken: string };
     }
 
     const a = await pairAgent("agent-a");
@@ -240,6 +240,216 @@ describe("gateway selection integration", () => {
     }
 
     expect(seen).toEqual(["agent-a", "agent-b", "agent-a", "agent-b", "agent-a", "agent-b"]);
+  });
+
+  it("routes using selectorAgentId when provided", async () => {
+    if (!available || !api || !gatewayBaseUrl || !gatewayWsUrl) {
+      return;
+    }
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `aid-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "AgentId Org", slug: randomSlug("aid-org") },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const pairingA = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(pairingA.statusCode).toBe(201);
+    const tokenA = (pairingA.json() as { token: string }).token;
+    const pairA = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken: tokenA,
+        name: "aid-a",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["agent.execute"] },
+      },
+    });
+    expect(pairA.statusCode).toBe(201);
+    const a = pairA.json() as { agentId: string; agentToken: string };
+
+    const pairingB = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(pairingB.statusCode).toBe(201);
+    const tokenB = (pairingB.json() as { token: string }).token;
+    const pairB = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken: tokenB,
+        name: "aid-b",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["agent.execute"] },
+      },
+    });
+    expect(pairB.statusCode).toBe(201);
+    const b = pairB.json() as { agentId: string; agentToken: string };
+
+    const agent1 = await startEchoAgent({
+      gatewayWsUrl,
+      agentToken: a.agentToken,
+      name: "aid-a",
+      capabilities: { kinds: ["agent.execute"] },
+    });
+    const agent2 = await startEchoAgent({
+      gatewayWsUrl,
+      agentToken: b.agentToken,
+      name: "aid-b",
+      capabilities: { kinds: ["agent.execute"] },
+    });
+
+    const runId = crypto.randomUUID();
+    const nodeId = "n1";
+    const response = await fetch(`${gatewayBaseUrl}/internal/v1/dispatch`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-gateway-token": "ci-gateway-token" },
+      body: JSON.stringify({
+        organizationId: orgId,
+        requestedByUserId: crypto.randomUUID(),
+        runId,
+        workflowId: crypto.randomUUID(),
+        nodeId,
+        nodeType: "agent.execute",
+        attemptCount: 1,
+        kind: "agent.execute",
+        payload: { nodeId, node: { id: nodeId, type: "agent.execute" } },
+        selectorAgentId: b.agentId,
+        timeoutMs: 10_000,
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { status: string; output?: { agentName?: string } };
+    expect(body.output?.agentName).toBe("aid-b");
+
+    await agent1.close();
+    await agent2.close();
+  });
+
+  it("routes using selectorGroup when provided (group:<name> tag)", async () => {
+    if (!available || !api || !gatewayBaseUrl || !gatewayWsUrl) {
+      return;
+    }
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `grp-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Group Org", slug: randomSlug("grp-org") },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const pairingA = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(pairingA.statusCode).toBe(201);
+    const tokenA = (pairingA.json() as { token: string }).token;
+    const pairA = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken: tokenA,
+        name: "grp-a",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["agent.execute"], tags: ["group:alpha"] },
+      },
+    });
+    expect(pairA.statusCode).toBe(201);
+    const alpha = pairA.json() as { agentToken: string };
+
+    const pairingB = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(pairingB.statusCode).toBe(201);
+    const tokenB = (pairingB.json() as { token: string }).token;
+    const pairB = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken: tokenB,
+        name: "grp-b",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["agent.execute"], tags: ["group:beta"] },
+      },
+    });
+    expect(pairB.statusCode).toBe(201);
+    const beta = pairB.json() as { agentToken: string };
+
+    const agent1 = await startEchoAgent({
+      gatewayWsUrl,
+      agentToken: alpha.agentToken,
+      name: "grp-a",
+      capabilities: { kinds: ["agent.execute"], tags: ["group:alpha"] },
+    });
+    const agent2 = await startEchoAgent({
+      gatewayWsUrl,
+      agentToken: beta.agentToken,
+      name: "grp-b",
+      capabilities: { kinds: ["agent.execute"], tags: ["group:beta"] },
+    });
+
+    const runId = crypto.randomUUID();
+    const nodeId = "n1";
+    const response = await fetch(`${gatewayBaseUrl}/internal/v1/dispatch`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-gateway-token": "ci-gateway-token" },
+      body: JSON.stringify({
+        organizationId: orgId,
+        requestedByUserId: crypto.randomUUID(),
+        runId,
+        workflowId: crypto.randomUUID(),
+        nodeId,
+        nodeType: "agent.execute",
+        attemptCount: 1,
+        kind: "agent.execute",
+        payload: { nodeId, node: { id: nodeId, type: "agent.execute" } },
+        selectorGroup: "beta",
+        timeoutMs: 10_000,
+      }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { status: string; output?: { agentName?: string } };
+    expect(body.output?.agentName).toBe("grp-b");
+
+    await agent1.close();
+    await agent2.close();
   });
 
   it("routes using selectorTag when provided", async () => {
@@ -350,4 +560,3 @@ describe("gateway selection integration", () => {
     await west.close();
   });
 });
-

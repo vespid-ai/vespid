@@ -403,16 +403,34 @@ export async function processWorkflowRunJob(
           throw new Error("CONTINUATION_QUEUE_NOT_CONFIGURED");
         }
 
+        function selectorFromExecution(execution: any): {
+          selectorTag?: string;
+          selectorAgentId?: string;
+          selectorGroup?: string;
+        } {
+          const selector = execution?.selector;
+          if (!selector || typeof selector !== "object") {
+            return {};
+          }
+          if (typeof selector.tag === "string" && selector.tag.trim().length > 0) {
+            return { selectorTag: selector.tag.trim() };
+          }
+          if (typeof selector.agentId === "string" && selector.agentId.trim().length > 0) {
+            return { selectorAgentId: selector.agentId.trim() };
+          }
+          if (typeof selector.group === "string" && selector.group.trim().length > 0) {
+            return { selectorGroup: selector.group.trim() };
+          }
+          return {};
+        }
+
         if (node.type === "agent.execute") {
           const nodeTimeoutMs =
             typeof node.config?.sandbox?.timeoutMs === "number" && Number.isFinite(node.config.sandbox.timeoutMs)
               ? node.config.sandbox.timeoutMs
               : nodeExecTimeoutMs;
 
-          const selectorTag =
-            typeof node.config?.execution?.selector?.tag === "string" && node.config.execution.selector.tag.trim().length > 0
-              ? node.config.execution.selector.tag.trim()
-              : undefined;
+          const selector = selectorFromExecution(node.config?.execution);
 
           const dispatchInput = {
             organizationId: job.data.organizationId,
@@ -430,7 +448,7 @@ export async function processWorkflowRunJob(
               workflowId: job.data.workflowId,
               attemptCount,
             },
-            ...(selectorTag ? { selectorTag } : {}),
+            ...selector,
             timeoutMs: nodeTimeoutMs,
           };
 
@@ -506,10 +524,7 @@ export async function processWorkflowRunJob(
               })
             : null;
 
-          const selectorTag =
-            typeof node.config.execution?.selector?.tag === "string" && node.config.execution.selector.tag.trim().length > 0
-              ? node.config.execution.selector.tag.trim()
-              : undefined;
+          const selector = selectorFromExecution(node.config.execution);
 
           const dispatchInput = {
             organizationId: job.data.organizationId,
@@ -528,7 +543,7 @@ export async function processWorkflowRunJob(
                 githubApiBaseUrl: getGithubApiBaseUrl(),
               },
             },
-            ...(selectorTag ? { selectorTag } : {}),
+            ...selector,
             ...(secret ? { secret } : {}),
             timeoutMs: nodeExecTimeoutMs,
           };

@@ -40,6 +40,11 @@ Worker:
 pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001
 ```
 
+Optional: publish tags for targeted dispatch:
+```bash
+pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001 --tags "east,group:alpha"
+```
+
 Notes:
 - Pairing tokens are short-lived (15 minutes) and single-use.
 - The agent token is returned once and stored locally in `~/.vespid/agent.json` by default.
@@ -54,11 +59,17 @@ Notes:
 3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.
 4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
 
+Targeting notes:
+- To target a specific agent, set `execution.selector.agentId = "<uuid>"` (agent IDs are visible via `GET /v1/orgs/:orgId/agents`).
+- To target a group, set `execution.selector.group = "<name>"` and ensure matching agents publish tag `group:<name>`.
+
 ## Agent Capabilities (MVP)
 Agents declare capabilities in the WS `hello` message:
 - `kinds`: `["connector.action", "agent.execute"]`
 - `connectors`: optional list of connector IDs the agent can execute (used for `connector.action` routing)
-- `tags`: optional list of tags (used for targeted dispatch via DSL `execution.selector.tag`)
+- `tags`: optional list of tags (used for targeted dispatch)
+  - DSL: `execution.selector.tag = "<tag>"`
+  - DSL: `execution.selector.group = "<name>"` maps to agent tag `group:<name>`
 - `maxInFlight`: optional integer concurrency hint (default 10)
 
 ## Docker Sandbox (agent.execute)

@@ -100,6 +100,8 @@ export type GatewayDispatchRequest = {
   kind: GatewayExecutionKind;
   payload: unknown;
   selectorTag?: string;
+  selectorAgentId?: string;
+  selectorGroup?: string;
   secret?: string;
   timeoutMs?: number;
 };

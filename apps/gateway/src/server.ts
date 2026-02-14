@@ -92,6 +92,8 @@ const dispatchRequestSchema = z.object({
   payload: z.unknown(),
   secret: z.string().min(1).optional(),
   selectorTag: z.string().min(1).max(64).optional(),
+  selectorAgentId: z.string().uuid().optional(),
+  selectorGroup: z.string().min(1).max(64).optional(),
   timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
 });
 
@@ -233,7 +235,13 @@ export async function buildGatewayServer(input?: {
 
   function selectAgent(
     orgId: string,
-    required: { kind: string; connectorId?: string | null; selectorTag?: string | null }
+    required: {
+      kind: string;
+      connectorId?: string | null;
+      selectorTag?: string | null;
+      selectorAgentId?: string | null;
+      selectorGroup?: string | null;
+    }
   ): ConnectedAgent | null {
     const now = Date.now();
     const agents = agentsByOrg.get(orgId) ?? [];
@@ -258,6 +266,11 @@ export async function buildGatewayServer(input?: {
       if (!capabilities.kinds.has(required.kind)) {
         continue;
       }
+      if (required.selectorAgentId) {
+        if (agent.agentId !== required.selectorAgentId) {
+          continue;
+        }
+      }
       if (getInFlight(agent.agentId) >= capabilities.maxInFlight) {
         continue;
       }
@@ -268,6 +281,12 @@ export async function buildGatewayServer(input?: {
       }
       if (required.selectorTag) {
         if (!capabilities.tags || !capabilities.tags.has(required.selectorTag)) {
+          continue;
+        }
+      }
+      if (required.selectorGroup) {
+        const key = `group:${required.selectorGroup}`;
+        if (!capabilities.tags || !capabilities.tags.has(key)) {
           continue;
         }
       }
@@ -335,6 +354,8 @@ export async function buildGatewayServer(input?: {
     kind: "connector.action" | "agent.execute";
     connectorId?: string | null;
     selectorTag?: string | null;
+    selectorAgentId?: string | null;
+    selectorGroup?: string | null;
     requestId: string;
   }): Promise<ConnectedAgent | null> {
     let agent: ConnectedAgent | null = null;
@@ -343,6 +364,8 @@ export async function buildGatewayServer(input?: {
         kind: input.kind,
         connectorId: input.connectorId ?? null,
         selectorTag: input.selectorTag ?? null,
+        selectorAgentId: input.selectorAgentId ?? null,
+        selectorGroup: input.selectorGroup ?? null,
       });
       if (!selected) {
         agent = null;
@@ -427,6 +450,8 @@ export async function buildGatewayServer(input?: {
       kind: parsed.data.kind,
       connectorId,
       selectorTag: parsed.data.selectorTag ?? null,
+      selectorAgentId: parsed.data.selectorAgentId ?? null,
+      selectorGroup: parsed.data.selectorGroup ?? null,
       requestId,
     });
 
@@ -547,6 +572,8 @@ export async function buildGatewayServer(input?: {
       kind: parsed.data.kind,
       connectorId,
       selectorTag: parsed.data.selectorTag ?? null,
+      selectorAgentId: parsed.data.selectorAgentId ?? null,
+      selectorGroup: parsed.data.selectorGroup ?? null,
       requestId,
     });
 

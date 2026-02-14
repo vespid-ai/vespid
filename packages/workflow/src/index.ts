@@ -25,6 +25,18 @@ const agentExecuteSandboxSchema = z.object({
   envPassthroughAllowlist: z.array(z.string().min(1)).max(50).optional(),
 });
 
+const nodeExecutionSelectorSchema = z.union([
+  z.object({
+    tag: z.string().min(1).max(64),
+  }),
+  z.object({
+    agentId: z.string().uuid(),
+  }),
+  z.object({
+    group: z.string().min(1).max(64),
+  }),
+]);
+
 export const workflowNodeSchema = z.discriminatedUnion("type", [
   z.object({ id: z.string().min(1), type: z.literal("http.request") }),
   z.object({
@@ -35,11 +47,7 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
         execution: z
           .object({
             mode: z.enum(["cloud", "node"]).default("cloud"),
-            selector: z
-              .object({
-                tag: z.string().min(1).max(64),
-              })
-              .optional(),
+            selector: nodeExecutionSelectorSchema.optional(),
           })
           .optional(),
         task: agentExecuteTaskSchema.optional(),
@@ -60,11 +68,7 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
       execution: z
         .object({
           mode: z.enum(["cloud", "node"]).default("cloud"),
-          selector: z
-            .object({
-              tag: z.string().min(1).max(64),
-            })
-            .optional(),
+          selector: nodeExecutionSelectorSchema.optional(),
         })
         .optional(),
     }),

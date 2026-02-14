@@ -34,6 +34,7 @@ const argsSchema = z.discriminatedUnion("command", [
     pairingToken: z.string().min(1),
     apiBase: z.string().url().default("http://localhost:3001"),
     name: z.string().min(1).max(120).optional(),
+    tags: z.array(z.string().min(1).max(64)).max(50).optional(),
     configPath: z.string().min(1).optional(),
   }),
   z.object({
@@ -41,6 +42,17 @@ const argsSchema = z.discriminatedUnion("command", [
     configPath: z.string().min(1).optional(),
   }),
 ]);
+
+function parseCsvList(value: string | undefined): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const items = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
 
 function parseArgs(argv: string[]): z.infer<typeof argsSchema> {
   const command = argv[2] === "connect" ? "connect" : "start";
@@ -51,6 +63,7 @@ function parseArgs(argv: string[]): z.infer<typeof argsSchema> {
       pairingToken: flags["pairing-token"],
       apiBase: flags["api-base"] ?? "http://localhost:3001",
       name: flags["name"],
+      tags: parseCsvList(flags["tags"] ?? process.env.VESPID_AGENT_TAGS),
       configPath: flags["config-path"],
     });
   }
@@ -91,6 +104,7 @@ async function pairAgent(input: {
   pairingToken: string;
   name: string;
   agentVersion: string;
+  tags?: string[];
 }): Promise<Pick<NodeAgentConfig, "agentId" | "agentToken" | "organizationId" | "gatewayWsUrl">> {
   const url = new URL("/v1/agents/pair", input.apiBaseUrl);
   const response = await fetch(url.toString(), {
@@ -102,6 +116,7 @@ async function pairAgent(input: {
       agentVersion: input.agentVersion,
       capabilities: {
         kinds: ["connector.action", "agent.execute"],
+        ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
       },
     }),
   });
@@ -134,6 +149,7 @@ async function main(): Promise<void> {
       pairingToken: parsed.pairingToken,
       name,
       agentVersion,
+      ...(parsed.tags ? { tags: parsed.tags } : {}),
     });
 
     const config: NodeAgentConfig = {
@@ -144,7 +160,10 @@ async function main(): Promise<void> {
       apiBaseUrl: parsed.apiBase,
       name,
       agentVersion,
-      capabilities: { kinds: ["connector.action", "agent.execute"] },
+      capabilities: {
+        kinds: ["connector.action", "agent.execute"],
+        ...(parsed.tags && parsed.tags.length > 0 ? { tags: parsed.tags } : {}),
+      },
     };
 
     await saveConfig(configPath, config);
@@ -164,4 +183,3 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });
-
