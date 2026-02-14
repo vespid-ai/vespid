@@ -30,6 +30,20 @@ describe("workflow dsl", () => {
             },
             limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
             output: { mode: "text" },
+            team: {
+              mode: "supervisor",
+              maxParallel: 3,
+              leadMode: "normal",
+              teammates: [
+                {
+                  id: "ux",
+                  prompt: { instructions: "Review UX." },
+                  tools: { allow: [], execution: "cloud" },
+                  limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+                  output: { mode: "json", jsonSchema: { type: "object" } },
+                },
+              ],
+            },
           },
         },
       ],
