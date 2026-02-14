@@ -25,6 +25,8 @@
     "copyPath": "Copy path",
     "pin": "Pin",
     "pinned": "Pinned",
+    "unpin": "Unpin",
+    "unpinned": "Unpinned",
     "showMore": "Show more",
     "showLess": "Show less",
     "expandAll": "Expand",

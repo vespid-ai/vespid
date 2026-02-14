@@ -571,7 +571,7 @@ export default function RunReplayPage() {
                     </CardHeader>
                     <CardContent>
                       {run ? (
-                        <JsonExplorer value={run} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                        <JsonExplorer value={run} pinnedPaths={pinnedPaths} onPinPath={addPinPath} onUnpinPath={removePin} />
                       ) : (
                         <div className="text-sm text-muted">{t("runs.noRun")}</div>
                       )}
@@ -587,7 +587,12 @@ export default function RunReplayPage() {
                     </CardHeader>
                     <CardContent>
                       {selectedEvent ? (
-                        <JsonExplorer value={selectedEvent} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                        <JsonExplorer
+                          value={selectedEvent}
+                          pinnedPaths={pinnedPaths}
+                          onPinPath={addPinPath}
+                          onUnpinPath={removePin}
+                        />
                       ) : (
                         <div className="text-sm text-muted">{t("runs.noEvent")}</div>
                       )}
@@ -640,7 +645,12 @@ export default function RunReplayPage() {
                               {sectionInputs === undefined ? (
                                 <div className="text-sm text-muted">-</div>
                               ) : (
-                                <JsonExplorer value={sectionInputs} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                                <JsonExplorer
+                                  value={sectionInputs}
+                                  pinnedPaths={pinnedPaths}
+                                  onPinPath={addPinPath}
+                                  onUnpinPath={removePin}
+                                />
                               )}
                             </div>
                           </div>
@@ -650,7 +660,12 @@ export default function RunReplayPage() {
                               {sectionOutputs === undefined ? (
                                 <div className="text-sm text-muted">-</div>
                               ) : (
-                                <JsonExplorer value={sectionOutputs} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                                <JsonExplorer
+                                  value={sectionOutputs}
+                                  pinnedPaths={pinnedPaths}
+                                  onPinPath={addPinPath}
+                                  onUnpinPath={removePin}
+                                />
                               )}
                             </div>
                           </div>
@@ -662,7 +677,12 @@ export default function RunReplayPage() {
                             {sectionErrors === undefined ? (
                               <div className="text-sm text-muted">-</div>
                             ) : (
-                              <JsonExplorer value={sectionErrors} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                              <JsonExplorer
+                                value={sectionErrors}
+                                pinnedPaths={pinnedPaths}
+                                onPinPath={addPinPath}
+                                onUnpinPath={removePin}
+                              />
                             )}
                           </div>
                         </div>

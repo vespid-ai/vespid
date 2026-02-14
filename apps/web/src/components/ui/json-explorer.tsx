@@ -11,6 +11,7 @@ export type JsonExplorerProps = {
   value: unknown;
   className?: string;
   onPinPath?: (path: string) => void;
+  onUnpinPath?: (path: string) => void;
   pinnedPaths?: string[];
   defaultExpandedDepth?: number;
   collapseLongStringsAfter?: number;
@@ -82,6 +83,7 @@ export function JsonExplorer({
   value,
   className,
   onPinPath,
+  onUnpinPath,
   pinnedPaths,
   defaultExpandedDepth = 2,
   collapseLongStringsAfter = 180,
@@ -265,20 +267,28 @@ export function JsonExplorer({
                       <Copy className="h-3.5 w-3.5" />
                     </Button>
 
-                    {onPinPath ? (
+                    {onPinPath || onUnpinPath ? (
                       <Button
                         type="button"
                         size="icon"
                         variant="ghost"
                         className="h-7 w-7 border border-borderSubtle bg-panel/40"
                         onClick={() => {
-                          if (!pinned) {
+                          if (pinned) {
+                            if (onUnpinPath) {
+                              onUnpinPath(node.path);
+                              toast.success(t("common.unpinned"));
+                            }
+                            return;
+                          }
+
+                          if (onPinPath) {
                             onPinPath(node.path);
                             toast.success(t("common.pinned"));
                           }
                         }}
-                        aria-label={pinned ? t("common.pinned") : t("common.pin")}
-                        disabled={pinned}
+                        aria-label={pinned ? t("common.unpin") : t("common.pin")}
+                        disabled={pinned ? !onUnpinPath : !onPinPath}
                       >
                         {pinned ? <PinOff className="h-3.5 w-3.5 text-muted" /> : <Pin className="h-3.5 w-3.5" />}
                       </Button>
