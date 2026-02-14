@@ -30,7 +30,10 @@ export async function apiFetch(path: string, init?: RequestInit, options?: ApiFe
 
   try {
     const base = getApiBase();
-    const response = await fetch(`${base}${path}`, {
+    // In browsers, route through the Next.js BFF proxy so cookie-based auth works
+    // without cross-origin SameSite edge cases (localhost port differences).
+    const url = typeof window === "undefined" ? `${base}${path}` : `/api/proxy${path}`;
+    const response = await fetch(url, {
       ...init,
       headers,
       credentials: "include",
