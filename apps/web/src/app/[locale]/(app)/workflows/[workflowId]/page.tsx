@@ -6,14 +6,18 @@ import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
+import { Badge } from "../../../../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
 import { CodeBlock } from "../../../../../components/ui/code-block";
+import { DataTable } from "../../../../../components/ui/data-table";
+import { EmptyState } from "../../../../../components/ui/empty-state";
 import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
+import { Skeleton } from "../../../../../components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../components/ui/tabs";
 import { Textarea } from "../../../../../components/ui/textarea";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
-import { usePublishWorkflow, useRunWorkflow, useRuns, useWorkflow } from "../../../../../lib/hooks/use-workflows";
+import { type WorkflowRun, usePublishWorkflow, useRunWorkflow, useRuns, useWorkflow } from "../../../../../lib/hooks/use-workflows";
 import { addRecentRunId, addRecentWorkflowId, getRecentRunIds } from "../../../../../lib/recents";
 
 function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false; message: string } {
@@ -53,6 +57,41 @@ export default function WorkflowDetailPage() {
   }, [workflowId]);
 
   const recentRuns = useMemo(() => (workflowId ? getRecentRunIds(workflowId) : []), [workflowId, runsQuery.data]);
+  const runs = runsQuery.data?.runs ?? [];
+
+  const columns = useMemo(() => {
+    return [
+      {
+        header: "Run",
+        accessorKey: "id",
+        cell: ({ row }: any) => (
+          <div className="min-w-0">
+            <div className="truncate font-mono text-xs text-muted">{row.original.id}</div>
+            <div className="text-xs text-muted">{row.original.createdAt ?? ""}</div>
+          </div>
+        ),
+      },
+      {
+        header: "Status",
+        accessorKey: "status",
+        cell: ({ row }: any) => {
+          const status = String(row.original.status ?? "");
+          const variant =
+            status === "succeeded" ? "ok" : status === "failed" ? "danger" : status === "running" ? "accent" : "neutral";
+          return <Badge variant={variant as any}>{status}</Badge>;
+        },
+      },
+      {
+        header: "Open",
+        id: "open",
+        cell: ({ row }: any) => (
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/${locale}/workflows/${workflowId}/runs/${row.original.id}`}>Replay</Link>
+          </Button>
+        ),
+      },
+    ] as const;
+  }, [locale, workflowId]);
 
   async function doPublish() {
     if (!orgId) {
@@ -129,32 +168,17 @@ export default function WorkflowDetailPage() {
                 <CardDescription>{runsQuery.isFetching ? t("common.loading") : "Latest runs for this workflow."}</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="overflow-hidden rounded-lg border border-border">
-                  <div className="grid grid-cols-[1fr_140px_120px] border-b border-border bg-panel/60 px-3 py-2 text-xs font-medium text-muted">
-                    <div>Run</div>
-                    <div>Status</div>
-                    <div>Open</div>
+                {runsQuery.isLoading ? (
+                  <div className="grid gap-2">
+                    <Skeleton className="h-10" />
+                    <Skeleton className="h-10" />
+                    <Skeleton className="h-10" />
                   </div>
-
-                  {(runsQuery.data?.runs ?? []).length === 0 ? (
-                    <div className="px-3 py-6 text-sm text-muted">No runs yet.</div>
-                  ) : (
-                    (runsQuery.data?.runs ?? []).map((r) => (
-                      <div key={r.id} className="grid grid-cols-[1fr_140px_120px] items-center px-3 py-3 text-sm">
-                        <div className="min-w-0">
-                          <div className="truncate font-mono text-xs text-muted">{r.id}</div>
-                          <div className="text-xs text-muted">{r.createdAt ?? ""}</div>
-                        </div>
-                        <div className="text-muted">{r.status}</div>
-                        <div>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${locale}/workflows/${workflowId}/runs/${r.id}`}>Replay</Link>
-                          </Button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+                ) : runs.length === 0 ? (
+                  <EmptyState title="No runs yet" description="Queue a run from the panel on the right." />
+                ) : (
+                  <DataTable<WorkflowRun> data={runs} columns={columns as any} />
+                )}
 
                 {recentRuns.length ? (
                   <div className="mt-4">
