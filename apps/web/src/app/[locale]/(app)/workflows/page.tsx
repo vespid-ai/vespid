@@ -14,6 +14,19 @@ import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useCreateWorkflow } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
 
+type TeammateForm = {
+  id: string;
+  displayName: string;
+  instructions: string;
+  system: string;
+  model: string;
+
+  toolGithubIssueCreate: boolean;
+
+  outputMode: "text" | "json";
+  jsonSchema: string;
+};
+
 type AgentNodeForm = {
   id: string;
   instructions: string;
@@ -25,6 +38,11 @@ type AgentNodeForm = {
   toolShellRun: boolean;
   runToolsOnNodeAgent: boolean;
 
+  teamEnabled: boolean;
+  teamLeadDelegateOnly: boolean;
+  teamMaxParallel: number;
+  teammates: TeammateForm[];
+
   githubSecretId: string;
   githubRepo: string;
   githubTitle: string;
@@ -33,6 +51,20 @@ type AgentNodeForm = {
   outputMode: "text" | "json";
   jsonSchema: string;
 };
+
+function defaultTeammate(index: number): TeammateForm {
+  const id = `teammate-${index + 1}`;
+  return {
+    id,
+    displayName: "",
+    instructions: "Help the lead agent by completing the delegated task.",
+    system: "",
+    model: "gpt-4.1-mini",
+    toolGithubIssueCreate: false,
+    outputMode: "text",
+    jsonSchema: "",
+  };
+}
 
 function defaultAgentNode(index: number): AgentNodeForm {
   const id = `agent-${index + 1}`;
@@ -45,6 +77,10 @@ function defaultAgentNode(index: number): AgentNodeForm {
     toolGithubIssueCreate: false,
     toolShellRun: false,
     runToolsOnNodeAgent: false,
+    teamEnabled: false,
+    teamLeadDelegateOnly: false,
+    teamMaxParallel: 3,
+    teammates: [],
     githubSecretId: "",
     githubRepo: "octo/test",
     githubTitle: "Vespid Issue",
@@ -56,15 +92,44 @@ function defaultAgentNode(index: number): AgentNodeForm {
 
 function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
   const nodes: Array<Record<string, unknown>> = params.nodes.map((node) => {
-    const toolAllow: string[] = [];
+    const toolAllowPolicy: string[] = [];
     if (node.toolGithubIssueCreate) {
-      toolAllow.push("connector.github.issue.create");
+      toolAllowPolicy.push("connector.github.issue.create");
     }
     if (node.toolShellRun) {
-      toolAllow.push("shell.run");
+      toolAllowPolicy.push("shell.run");
     }
+    if (node.teamEnabled) {
+      for (const teammate of node.teammates) {
+        if (teammate.toolGithubIssueCreate) {
+          toolAllowPolicy.push("connector.github.issue.create");
+        }
+      }
+    }
+    const toolAllow = Array.from(new Set(toolAllowPolicy));
 
     const toolHints: string[] = [];
+    if (node.teamEnabled) {
+      toolHints.push(
+        [
+          "If you need to delegate a task to a teammate, call toolId team.delegate with input:",
+          JSON.stringify({ teammateId: node.teammates[0]?.id ?? "ux", task: "Review the UX", input: { focus: "onboarding" } }, null, 2),
+          "To delegate multiple tasks with bounded parallelism, call toolId team.map with input:",
+          JSON.stringify(
+            {
+              maxParallel: node.teamMaxParallel,
+              tasks: (node.teammates.length > 0 ? node.teammates : [{ id: "ux" } as any]).slice(0, 3).map((t) => ({
+                teammateId: t.id,
+                task: "Do your part and return a structured result.",
+              })),
+            },
+            null,
+            2
+          ),
+          `Teammates: ${JSON.stringify(node.teammates.map((t) => t.id))}`,
+        ].join("\n")
+      );
+    }
     if (node.toolGithubIssueCreate) {
       toolHints.push(
         [
@@ -80,7 +145,7 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
         ].join("\n")
       );
     }
-    if (node.toolShellRun) {
+    if (node.toolShellRun && !node.teamLeadDelegateOnly) {
       toolHints.push(
         [
           "If you need to run a shell command, call toolId shell.run with input:",
@@ -97,7 +162,10 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
       );
     }
 
-    const inputTemplate = toolHints.length > 0 ? toolHints.join("\n\n") : undefined;
+    // Delegate-only lead: hide non-team tool hints to reduce accidental tool use.
+    const toolHintsEffective = node.teamEnabled && node.teamLeadDelegateOnly ? toolHints.filter((h) => h.includes("team.")) : toolHints;
+
+    const inputTemplateEffective = toolHintsEffective.length > 0 ? toolHintsEffective.join("\n\n") : undefined;
 
     let jsonSchemaValue: unknown | undefined;
     if (node.outputMode === "json" && node.jsonSchema.trim().length > 0) {
@@ -107,6 +175,72 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
         jsonSchemaValue = undefined;
       }
     }
+
+    const teammates =
+      node.teamEnabled && node.teammates.length > 0
+        ? node.teammates.map((t) => {
+            const teammateAllow: string[] = [];
+            if (t.toolGithubIssueCreate) {
+              teammateAllow.push("connector.github.issue.create");
+            }
+
+            const teammateToolHints: string[] = [];
+            if (t.toolGithubIssueCreate) {
+              teammateToolHints.push(
+                [
+                  "If you need to create a GitHub issue, call toolId connector.github.issue.create with input:",
+                  JSON.stringify(
+                    {
+                      input: { repo: node.githubRepo, title: node.githubTitle, body: node.githubBody },
+                    },
+                    null,
+                    2
+                  ),
+                  "Note: GitHub auth is configured on this agent; do not include secret IDs in tool calls.",
+                ].join("\n")
+              );
+            }
+            const teammateInputTemplate = teammateToolHints.length > 0 ? teammateToolHints.join("\n\n") : undefined;
+
+            let teammateJsonSchemaValue: unknown | undefined;
+            if (t.outputMode === "json" && t.jsonSchema.trim().length > 0) {
+              try {
+                teammateJsonSchemaValue = JSON.parse(t.jsonSchema);
+              } catch {
+                teammateJsonSchemaValue = undefined;
+              }
+            }
+
+            return {
+              id: t.id,
+              ...(t.displayName.trim().length > 0 ? { displayName: t.displayName.trim() } : {}),
+              ...(t.model.trim().length > 0 ? { llm: { model: t.model.trim() } } : {}),
+              prompt: {
+                ...(t.system.trim().length > 0 ? { system: t.system } : {}),
+                instructions: t.instructions,
+                ...(teammateInputTemplate ? { inputTemplate: teammateInputTemplate } : {}),
+              },
+              tools: {
+                allow: teammateAllow,
+                execution: "cloud",
+                ...(node.githubSecretId.trim().length > 0
+                  ? { authDefaults: { connectors: { github: { secretId: node.githubSecretId.trim() } } } }
+                  : {}),
+              },
+              limits: {
+                maxTurns: 6,
+                maxToolCalls: 12,
+                timeoutMs: 60_000,
+                maxOutputChars: 50_000,
+                maxRuntimeChars: 200_000,
+              },
+              output: {
+                mode: t.outputMode,
+                ...(teammateJsonSchemaValue !== undefined ? { jsonSchema: teammateJsonSchemaValue } : {}),
+              },
+            };
+          })
+        : undefined;
 
     return {
       id: node.id,
@@ -123,7 +257,7 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
         prompt: {
           ...(node.system.trim().length > 0 ? { system: node.system } : {}),
           instructions: node.instructions,
-          ...(inputTemplate ? { inputTemplate } : {}),
+          ...(inputTemplateEffective ? { inputTemplate: inputTemplateEffective } : {}),
         },
         tools: {
           allow: toolAllow,
@@ -143,6 +277,16 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
           mode: node.outputMode,
           ...(jsonSchemaValue !== undefined ? { jsonSchema: jsonSchemaValue } : {}),
         },
+        ...(node.teamEnabled && teammates
+          ? {
+              team: {
+                mode: "supervisor",
+                maxParallel: Math.max(1, Math.min(16, Number.isFinite(node.teamMaxParallel) ? node.teamMaxParallel : 3)),
+                leadMode: node.teamLeadDelegateOnly ? "delegate_only" : "normal",
+                teammates,
+              },
+            }
+          : {}),
       },
     };
   });
@@ -177,7 +321,11 @@ export default function WorkflowsPage() {
   const canCreate =
     Boolean(orgId) &&
     agentNodes.length > 0 &&
-    agentNodes.every((n) => !n.toolGithubIssueCreate || n.githubSecretId.trim().length > 0);
+    agentNodes.every((n) => {
+      const needsGithub =
+        n.toolGithubIssueCreate || (n.teamEnabled && n.teammates.some((t) => t.toolGithubIssueCreate));
+      return !needsGithub || n.githubSecretId.trim().length > 0;
+    });
 
   const dslPreview = useMemo(() => buildDsl({ nodes: agentNodes }), [agentNodes]);
 
@@ -187,7 +335,11 @@ export default function WorkflowsPage() {
       return;
     }
 
-    const missingGithubSecret = agentNodes.some((n) => n.toolGithubIssueCreate && n.githubSecretId.trim().length === 0);
+    const missingGithubSecret = agentNodes.some((n) => {
+      const needsGithub =
+        n.toolGithubIssueCreate || (n.teamEnabled && n.teammates.some((t) => t.toolGithubIssueCreate));
+      return needsGithub && n.githubSecretId.trim().length === 0;
+    });
     if (missingGithubSecret) {
       toast.error(t("workflows.errors.githubSecretRequired"));
       return;
@@ -346,7 +498,7 @@ export default function WorkflowsPage() {
                             onChange={(e) =>
                               setAgentNodes((prev) =>
                                 prev.map((n) =>
-                                  n.id === node.id ? { ...n, toolGithubIssueCreate: e.target.checked || n.toolShellRun } : n
+                                  n.id === node.id ? { ...n, toolGithubIssueCreate: e.target.checked } : n
                                 )
                               )
                             }
@@ -360,7 +512,7 @@ export default function WorkflowsPage() {
                             onChange={(e) =>
                               setAgentNodes((prev) =>
                                 prev.map((n) =>
-                                  n.id === node.id ? { ...n, toolShellRun: e.target.checked || n.toolGithubIssueCreate } : n
+                                  n.id === node.id ? { ...n, toolShellRun: e.target.checked } : n
                                 )
                               )
                             }
@@ -440,7 +592,7 @@ export default function WorkflowsPage() {
                       <div className="grid gap-2 md:grid-cols-2">
                         <div className="grid gap-1.5">
                           <Label htmlFor={`agent-output-mode-${node.id}`}>{t("workflows.outputMode")}</Label>
-                          <Input
+                          <select
                             id={`agent-output-mode-${node.id}`}
                             value={node.outputMode}
                             onChange={(e) =>
@@ -450,8 +602,11 @@ export default function WorkflowsPage() {
                                 )
                               )
                             }
-                            placeholder="text | json"
-                          />
+                            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:ring-2 focus:ring-ring"
+                          >
+                            <option value="text">text</option>
+                            <option value="json">json</option>
+                          </select>
                         </div>
                         {node.outputMode === "json" ? (
                           <div className="grid gap-1.5">
@@ -467,6 +622,415 @@ export default function WorkflowsPage() {
                               rows={4}
                               placeholder='{"type":"object","properties":{}}'
                             />
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-medium text-text">{t("workflows.teamTitle")}</div>
+                          <label className="ml-auto flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={node.teamEnabled}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) =>
+                                    n.id === node.id
+                                      ? {
+                                          ...n,
+                                          teamEnabled: e.target.checked,
+                                          teammates: e.target.checked && n.teammates.length === 0 ? [defaultTeammate(0)] : n.teammates,
+                                        }
+                                      : n
+                                  )
+                                )
+                              }
+                            />
+                            {t("workflows.teamEnable")}
+                          </label>
+                        </div>
+
+                        {node.teamEnabled ? (
+                          <div className="grid gap-3">
+                            <div className="grid gap-2 md:grid-cols-2">
+                              <label className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={node.teamLeadDelegateOnly}
+                                  onChange={(e) =>
+                                    setAgentNodes((prev) =>
+                                      prev.map((n) => (n.id === node.id ? { ...n, teamLeadDelegateOnly: e.target.checked } : n))
+                                    )
+                                  }
+                                />
+                                {t("workflows.teamLeadDelegateOnly")}
+                              </label>
+                              <div className="grid gap-1.5">
+                                <Label htmlFor={`team-max-parallel-${node.id}`}>{t("workflows.teamMaxParallel")}</Label>
+                                <Input
+                                  id={`team-max-parallel-${node.id}`}
+                                  value={String(node.teamMaxParallel)}
+                                  onChange={(e) => {
+                                    const v = Number.parseInt(e.target.value, 10);
+                                    setAgentNodes((prev) =>
+                                      prev.map((n) =>
+                                        n.id === node.id ? { ...n, teamMaxParallel: Number.isFinite(v) ? v : 3 } : n
+                                      )
+                                    );
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) =>
+                                      n.id === node.id
+                                        ? {
+                                            ...n,
+                                            teamEnabled: true,
+                                            teamLeadDelegateOnly: true,
+                                            teammates: [
+                                              {
+                                                ...defaultTeammate(0),
+                                                id: "ux",
+                                                instructions: "Review the UX and propose improvements as JSON.",
+                                                outputMode: "json",
+                                                jsonSchema:
+                                                  '{"type":"object","properties":{"summary":{"type":"string"},"issues":{"type":"array","items":{"type":"string"}}},"required":["summary","issues"],"additionalProperties":false}',
+                                              },
+                                              {
+                                                ...defaultTeammate(1),
+                                                id: "architect",
+                                                instructions: "Review architecture and propose changes as JSON.",
+                                                outputMode: "json",
+                                                jsonSchema:
+                                                  '{"type":"object","properties":{"risks":{"type":"array","items":{"type":"string"}},"recommendations":{"type":"array","items":{"type":"string"}}},"required":["risks","recommendations"],"additionalProperties":false}',
+                                              },
+                                              {
+                                                ...defaultTeammate(2),
+                                                id: "devils_advocate",
+                                                instructions: "Challenge assumptions and find failure modes as JSON.",
+                                                outputMode: "json",
+                                                jsonSchema:
+                                                  '{"type":"object","properties":{"concerns":{"type":"array","items":{"type":"string"}},"counterexamples":{"type":"array","items":{"type":"string"}}},"required":["concerns","counterexamples"],"additionalProperties":false}',
+                                              },
+                                            ],
+                                          }
+                                        : n
+                                    )
+                                  )
+                                }
+                              >
+                                {t("workflows.teamTemplateResearchTriad")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) =>
+                                      n.id === node.id
+                                        ? {
+                                            ...n,
+                                            teamEnabled: true,
+                                            teamLeadDelegateOnly: true,
+                                            teammates: [
+                                              { ...defaultTeammate(0), id: "planner", instructions: "Plan the approach and return JSON.", outputMode: "json" },
+                                              { ...defaultTeammate(1), id: "implementer", instructions: "Implement the plan. Use tools if allowed.", outputMode: "text", toolGithubIssueCreate: n.toolGithubIssueCreate },
+                                              { ...defaultTeammate(2), id: "reviewer", instructions: "Review for correctness and risks. Return JSON.", outputMode: "json" },
+                                            ],
+                                          }
+                                        : n
+                                    )
+                                  )
+                                }
+                              >
+                                {t("workflows.teamTemplateBuildPipeline")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) =>
+                                      n.id === node.id
+                                        ? {
+                                            ...n,
+                                            teamEnabled: true,
+                                            teamLeadDelegateOnly: true,
+                                            teammates: [
+                                              { ...defaultTeammate(0), id: "tester", instructions: "Write test cases and edge cases as JSON.", outputMode: "json" },
+                                              { ...defaultTeammate(1), id: "security", instructions: "Perform a security review and threats as JSON.", outputMode: "json" },
+                                              { ...defaultTeammate(2), id: "perf", instructions: "Find performance risks and mitigations as JSON.", outputMode: "json" },
+                                            ],
+                                          }
+                                        : n
+                                    )
+                                  )
+                                }
+                              >
+                                {t("workflows.teamTemplateQaSwarm")}
+                              </Button>
+                            </div>
+
+                            <div className="grid gap-3">
+                              {node.teammates.map((tm, tmIdx) => {
+                                const canRemoveTeammate = node.teammates.length > 1;
+                                return (
+                                  <div key={`${node.id}:${tm.id}`} className="grid gap-3 rounded-lg border border-border bg-panel/60 p-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <div className="text-sm font-medium text-text">
+                                        {tmIdx + 1}. {tm.id}
+                                      </div>
+                                      <div className="ml-auto flex flex-wrap gap-2">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          disabled={tmIdx === 0}
+                                          onClick={() =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) => {
+                                                if (n.id !== node.id) {
+                                                  return n;
+                                                }
+                                                const next = [...n.teammates];
+                                                const a = next[tmIdx - 1];
+                                                const b = next[tmIdx];
+                                                if (!a || !b) {
+                                                  return n;
+                                                }
+                                                next[tmIdx - 1] = b;
+                                                next[tmIdx] = a;
+                                                return { ...n, teammates: next };
+                                              })
+                                            )
+                                          }
+                                        >
+                                          {t("workflows.up")}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          disabled={tmIdx === node.teammates.length - 1}
+                                          onClick={() =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) => {
+                                                if (n.id !== node.id) {
+                                                  return n;
+                                                }
+                                                const next = [...n.teammates];
+                                                const a = next[tmIdx];
+                                                const b = next[tmIdx + 1];
+                                                if (!a || !b) {
+                                                  return n;
+                                                }
+                                                next[tmIdx] = b;
+                                                next[tmIdx + 1] = a;
+                                                return { ...n, teammates: next };
+                                              })
+                                            )
+                                          }
+                                        >
+                                          {t("workflows.down")}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="danger"
+                                          disabled={!canRemoveTeammate}
+                                          onClick={() =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === node.id ? { ...n, teammates: n.teammates.filter((x) => x.id !== tm.id) } : n
+                                              )
+                                            )
+                                          }
+                                        >
+                                          {t("workflows.remove")}
+                                        </Button>
+                                      </div>
+                                    </div>
+
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                      <div className="grid gap-1.5">
+                                        <Label htmlFor={`teammate-id-${node.id}-${tmIdx}`}>{t("workflows.teammateId")}</Label>
+                                        <Input
+                                          id={`teammate-id-${node.id}-${tmIdx}`}
+                                          value={tm.id}
+                                          onChange={(e) =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === node.id
+                                                  ? {
+                                                      ...n,
+                                                      teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, id: e.target.value } : x)),
+                                                    }
+                                                  : n
+                                              )
+                                            )
+                                          }
+                                        />
+                                      </div>
+                                      <div className="grid gap-1.5">
+                                        <Label htmlFor={`teammate-name-${node.id}-${tmIdx}`}>{t("workflows.teammateDisplayName")}</Label>
+                                        <Input
+                                          id={`teammate-name-${node.id}-${tmIdx}`}
+                                          value={tm.displayName}
+                                          onChange={(e) =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === node.id
+                                                  ? {
+                                                      ...n,
+                                                      teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, displayName: e.target.value } : x)),
+                                                    }
+                                                  : n
+                                              )
+                                            )
+                                          }
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div className="grid gap-1.5">
+                                      <Label htmlFor={`teammate-instructions-${node.id}-${tmIdx}`}>{t("workflows.instructions")}</Label>
+                                      <Textarea
+                                        id={`teammate-instructions-${node.id}-${tmIdx}`}
+                                        value={tm.instructions}
+                                        onChange={(e) =>
+                                          setAgentNodes((prev) =>
+                                            prev.map((n) =>
+                                              n.id === node.id
+                                                ? {
+                                                    ...n,
+                                                    teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, instructions: e.target.value } : x)),
+                                                  }
+                                                : n
+                                            )
+                                          )
+                                        }
+                                        rows={3}
+                                      />
+                                    </div>
+
+                                    <div className="grid gap-2 md:grid-cols-2">
+                                      <div className="grid gap-1.5">
+                                        <Label htmlFor={`teammate-model-${node.id}-${tmIdx}`}>{t("workflows.model")}</Label>
+                                        <Input
+                                          id={`teammate-model-${node.id}-${tmIdx}`}
+                                          value={tm.model}
+                                          onChange={(e) =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === node.id
+                                                  ? {
+                                                      ...n,
+                                                      teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, model: e.target.value } : x)),
+                                                    }
+                                                  : n
+                                              )
+                                            )
+                                          }
+                                        />
+                                      </div>
+                                      <div className="grid gap-1.5">
+                                        <Label htmlFor={`teammate-output-${node.id}-${tmIdx}`}>{t("workflows.outputMode")}</Label>
+                                        <select
+                                          id={`teammate-output-${node.id}-${tmIdx}`}
+                                          value={tm.outputMode}
+                                          onChange={(e) =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === node.id
+                                                  ? {
+                                                      ...n,
+                                                      teammates: n.teammates.map((x) =>
+                                                        x.id === tm.id ? { ...x, outputMode: e.target.value === "json" ? "json" : "text" } : x
+                                                      ),
+                                                    }
+                                                  : n
+                                              )
+                                            )
+                                          }
+                                          className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:ring-2 focus:ring-ring"
+                                        >
+                                          <option value="text">text</option>
+                                          <option value="json">json</option>
+                                        </select>
+                                      </div>
+                                    </div>
+
+                                    <label className="flex items-center gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={tm.toolGithubIssueCreate}
+                                        onChange={(e) =>
+                                          setAgentNodes((prev) =>
+                                            prev.map((n) =>
+                                              n.id === node.id
+                                                ? {
+                                                    ...n,
+                                                    teammates: n.teammates.map((x) =>
+                                                      x.id === tm.id ? { ...x, toolGithubIssueCreate: e.target.checked } : x
+                                                    ),
+                                                  }
+                                                : n
+                                            )
+                                          )
+                                        }
+                                      />
+                                      {t("workflows.githubIssueCreate")}
+                                    </label>
+
+                                    {tm.outputMode === "json" ? (
+                                      <div className="grid gap-1.5">
+                                        <Label htmlFor={`teammate-schema-${node.id}-${tmIdx}`}>{t("workflows.jsonSchema")}</Label>
+                                        <Textarea
+                                          id={`teammate-schema-${node.id}-${tmIdx}`}
+                                          value={tm.jsonSchema}
+                                          onChange={(e) =>
+                                            setAgentNodes((prev) =>
+                                              prev.map((n) =>
+                                                n.id === node.id
+                                                  ? {
+                                                      ...n,
+                                                      teammates: n.teammates.map((x) => (x.id === tm.id ? { ...x, jsonSchema: e.target.value } : x)),
+                                                    }
+                                                  : n
+                                              )
+                                            )
+                                          }
+                                          rows={4}
+                                          placeholder='{"type":"object","properties":{}}'
+                                        />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    setAgentNodes((prev) =>
+                                      prev.map((n) =>
+                                        n.id === node.id ? { ...n, teammates: [...n.teammates, defaultTeammate(n.teammates.length)] } : n
+                                      )
+                                    )
+                                  }
+                                  disabled={node.teammates.length >= 12}
+                                >
+                                  {t("workflows.addTeammate")}
+                                </Button>
+                              </div>
+                            </div>
                           </div>
                         ) : null}
                       </div>

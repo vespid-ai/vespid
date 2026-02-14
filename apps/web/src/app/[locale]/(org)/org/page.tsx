@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { apiFetch } from "../../../../lib/api";
 import { getActiveOrgId, getKnownOrgIds, setActiveOrgId, subscribeActiveOrg } from "../../../../lib/org-context";
 import { Button } from "../../../../components/ui/button";
@@ -13,6 +14,21 @@ import { Label } from "../../../../components/ui/label";
 type CreateOrgResponse = {
   organization?: { id: string; slug: string; name: string };
 };
+
+function formatApiError(payload: unknown, status: number): string {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const obj = payload as any;
+    const code = typeof obj.code === "string" ? obj.code : null;
+    const message = typeof obj.message === "string" ? obj.message : null;
+    if (code && message) {
+      return `${code}: ${message}`;
+    }
+    if (message) {
+      return message;
+    }
+  }
+  return `Request failed (HTTP ${status})`;
+}
 
 export default function OrganizationPage() {
   const t = useTranslations();
@@ -47,16 +63,23 @@ export default function OrganizationPage() {
     const payload = (await response.json()) as CreateOrgResponse;
     setResult(payload);
 
+    if (!response.ok) {
+      toast.error(formatApiError(payload, response.status));
+      return;
+    }
+
     const createdOrgId = payload.organization?.id;
     if (createdOrgId) {
       setOrgId(createdOrgId);
       setActiveOrgId(createdOrgId);
+      toast.success(`Organization created (${createdOrgId.slice(0, 8)})`);
     }
   }
 
   async function inviteMember() {
     if (!orgId) {
       setResult({ code: "ORG_CONTEXT_REQUIRED", message: t("org.requireActive") });
+      toast.error(t("org.requireActive"));
       return;
     }
 
@@ -70,6 +93,12 @@ export default function OrganizationPage() {
     );
     const payload = await response.json();
     setResult(payload);
+
+    if (!response.ok) {
+      toast.error(formatApiError(payload, response.status));
+      return;
+    }
+    toast.success("Invitation sent");
   }
 
   return (
