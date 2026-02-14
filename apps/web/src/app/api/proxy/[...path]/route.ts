@@ -48,12 +48,15 @@ async function proxy(request: Request, pathParts: string[]) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(upstreamUrl, {
+    const init: RequestInit = {
       method: request.method,
       headers: filterRequestHeaders(request),
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.text(),
       cache: "no-store",
-    });
+    };
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      init.body = await request.text();
+    }
+    upstream = await fetch(upstreamUrl, init);
   } catch (err) {
     const payload: NetworkErrorPayload = { code: "NETWORK_ERROR", message: parseErrorMessage(err), base };
     return NextResponse.json(payload, { status: 503 });
@@ -110,4 +113,3 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ path: st
   const params = await ctx.params;
   return proxy(request, params.path);
 }
-
