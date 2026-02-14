@@ -40,7 +40,7 @@ Worker:
 pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001
 ```
 
-Optional: publish tags for targeted dispatch:
+Optional: report tags for observability (capability hints only):
 ```bash
 pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001 --tags "east,group:alpha"
 ```
@@ -49,6 +49,7 @@ Notes:
 - Pairing tokens are short-lived (15 minutes) and single-use.
 - The agent token is returned once and stored locally in `~/.vespid/agent.json` by default.
 - The `/agents` API reports `online/offline` by comparing `last_seen_at` to `GATEWAY_AGENT_STALE_MS` (clamped).
+- Agent-reported tags (from the WS `hello.capabilities.tags` field) are surfaced as `reportedTags` and are not used for routing.
 
 ## Verifying Remote Execution
 1. Create a workflow containing a `connector.action` node with:
@@ -61,15 +62,21 @@ Notes:
 
 Targeting notes:
 - To target a specific agent, set `execution.selector.agentId = "<uuid>"` (agent IDs are visible via `GET /v1/orgs/:orgId/agents`).
-- To target a group, set `execution.selector.group = "<name>"` and ensure matching agents publish tag `group:<name>`.
+- To target a group, set `execution.selector.group = "<name>"` and ensure the agent is configured with the control-plane tag `group:<name>`.
+- To target a tag, set `execution.selector.tag = "<tag>"` and ensure the agent is configured with the control-plane tag `<tag>`.
+
+Control-plane tags are authoritative:
+1. Pair agent (above).
+2. Configure tags in the control plane (owner/admin):
+   - Web: `/agents`
+   - API: `PUT /v1/orgs/:orgId/agents/:agentId/tags` body `{ "tags": ["west", "group:beta"] }` (with `X-Org-Id`)
+3. Use DSL selectors (`execution.selector.tag` or `execution.selector.group`) to route to the intended agents.
 
 ## Agent Capabilities (MVP)
 Agents declare capabilities in the WS `hello` message:
 - `kinds`: `["connector.action", "agent.execute"]`
 - `connectors`: optional list of connector IDs the agent can execute (used for `connector.action` routing)
-- `tags`: optional list of tags (used for targeted dispatch)
-  - DSL: `execution.selector.tag = "<tag>"`
-  - DSL: `execution.selector.group = "<name>"` maps to agent tag `group:<name>`
+- `tags`: optional list of tags, treated as a capability hint (`reportedTags`) for operator visibility
 - `maxInFlight`: optional integer concurrency hint (default 10)
 
 ## Docker Sandbox (agent.execute)

@@ -146,6 +146,14 @@ Pairing flow:
 pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001
 ```
 
+Tag targeting notes:
+- Control-plane tags are authoritative for routing.
+  - Set them via Web: `/agents` (recommended), or API: `PUT /v1/orgs/:orgId/agents/:agentId/tags`.
+- Agent-reported tags (from the WS `hello.capabilities.tags` field) are shown as `reportedTags` only and are not used for routing.
+- In workflow DSL, use:
+  - `execution.selector.tag = "<tag>"`
+  - `execution.selector.group = "<name>"` (matches agents tagged `group:<name>`)
+
 ## Summary (English Only)
 - Open Core licensing: community core is AGPL, SDK is Apache-2.0, enterprise modules are under a commercial license.
 - The private repository is the source of truth; the public community mirror is generated from an allowlist.
