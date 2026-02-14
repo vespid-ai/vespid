@@ -13,6 +13,7 @@ import type { WorkflowExecutionResult, WorkflowExecutionStep } from "@vespid/wor
 import { workflowDslSchema } from "@vespid/workflow";
 import type { WorkflowRunJobPayload } from "@vespid/shared";
 import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import type { GatewayDispatchResponse } from "@vespid/shared";
 import { fetchGatewayResult } from "../gateway/client.js";
 import type { WorkflowContinuationJobPayload } from "./types.js";
 import { getWorkflowRetryBackoffMs } from "../queue/config.js";
@@ -98,7 +99,7 @@ export function startContinuationWorker(input: {
     input.queueName,
     async (job: Job<WorkflowContinuationJobPayload>) => {
       const payload = job.data;
-      if (payload.type !== "remote.poll") {
+      if (payload.type !== "remote.poll" && payload.type !== "remote.apply") {
         return;
       }
 
@@ -152,30 +153,39 @@ export function startContinuationWorker(input: {
       const timeoutAtMs = run.blockedTimeoutAt ? new Date(run.blockedTimeoutAt).getTime() : null;
       const timedOut = timeoutAtMs !== null && Date.now() >= timeoutAtMs;
 
-      const result = timedOut
-        ? { ok: true as const, result: { status: "failed" as const, error: REMOTE_EXEC_ERROR.NodeExecutionTimeout } }
-        : await fetchGatewayResult(payload.requestId);
+      let remoteResult: GatewayDispatchResponse | null = null;
+      if (payload.type === "remote.apply") {
+        remoteResult = payload.result;
+      } else if (timedOut) {
+        remoteResult = { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout };
+      } else {
+        const fetched = await fetchGatewayResult(payload.requestId);
+        if (!fetched.ok) {
+          if (fetched.error === "RESULT_NOT_READY" || fetched.error === "GATEWAY_UNAVAILABLE") {
+            throw new Error(fetched.error);
+          }
 
-      if (!result.ok) {
-        if (result.error === "RESULT_NOT_READY" || result.error === "GATEWAY_UNAVAILABLE") {
-          throw new Error(result.error);
+          await applyRemoteFailure({
+            pool,
+            actor,
+            runQueue: input.runQueue,
+            payload,
+            node,
+            cursorNodeIndex,
+            errorMessage: fetched.error,
+            output: null,
+            maxAttempts: run.maxAttempts,
+          });
+          return;
         }
+        remoteResult = fetched.result;
+      }
 
-        await applyRemoteFailure({
-          pool,
-          actor,
-          runQueue: input.runQueue,
-          payload,
-          node,
-          cursorNodeIndex,
-          errorMessage: result.error,
-          output: null,
-          maxAttempts: run.maxAttempts,
-        });
+      if (!remoteResult) {
         return;
       }
 
-      if (result.result.status === "failed") {
+      if (remoteResult.status === "failed") {
         await applyRemoteFailure({
           pool,
           actor,
@@ -183,8 +193,8 @@ export function startContinuationWorker(input: {
           payload,
           node,
           cursorNodeIndex,
-          errorMessage: result.result.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
-          output: result.result.output ?? null,
+          errorMessage: remoteResult.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
+          output: remoteResult.output ?? null,
           maxAttempts: run.maxAttempts,
         });
         return;
@@ -195,7 +205,7 @@ export function startContinuationWorker(input: {
         nodeId: node.id,
         nodeType: node.type,
         status: "succeeded",
-        output: result.result.output,
+        output: remoteResult.output,
       });
       const progress = buildProgressOutput(steps);
 
@@ -209,7 +219,7 @@ export function startContinuationWorker(input: {
           nodeId: node.id,
           nodeType: node.type,
           level: "info",
-          payload: summarizeForEvent(result.result.output ?? null),
+          payload: summarizeForEvent(remoteResult.output ?? null),
         })
       );
 
@@ -257,7 +267,13 @@ async function applyRemoteFailure(input: {
   pool: ReturnType<typeof createPool>;
   actor: { userId: string; organizationId: string };
   runQueue: WorkflowRunQueue;
-  payload: Extract<WorkflowContinuationJobPayload, { type: "remote.poll" }>;
+  payload: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    requestId: string;
+    attemptCount: number;
+  };
   node: { id: string; type: string };
   cursorNodeIndex: number;
   errorMessage: string;

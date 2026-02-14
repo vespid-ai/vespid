@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import Fastify from "fastify";
 import { z } from "zod";
 import { WebSocketServer, type WebSocket } from "ws";
+import { Queue, type ConnectionOptions } from "bullmq";
+import { Redis } from "ioredis";
 import { createPool, withTenantContext, getOrganizationAgentByTokenHash, touchOrganizationAgentLastSeen } from "@vespid/db";
 import type {
   GatewayAgentHelloMessage,
@@ -12,6 +14,7 @@ import type {
   GatewayDispatchResponse,
 } from "@vespid/shared";
 import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import type { WorkflowContinuationJobPayload } from "@vespid/shared";
 import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "./results-store.js";
 
 type ConnectedAgent = {
@@ -36,6 +39,7 @@ type PendingRequest = {
 type AgentCapabilities = {
   kinds: Set<string>;
   connectors: Set<string> | null;
+  tags: Set<string> | null;
   maxInFlight: number;
 };
 
@@ -60,11 +64,15 @@ function normalizeCapabilities(input: Record<string, unknown> | null): AgentCapa
     : [];
   const connectors = connectorsList.length > 0 ? new Set(connectorsList) : null;
 
+  const tagsRaw = input?.["tags"];
+  const tagsList = Array.isArray(tagsRaw) ? tagsRaw.filter((item): item is string => typeof item === "string") : [];
+  const tags = tagsList.length > 0 ? new Set(tagsList) : null;
+
   const maxInFlightRaw = input?.["maxInFlight"];
   const maxInFlight =
     typeof maxInFlightRaw === "number" && Number.isFinite(maxInFlightRaw) ? Math.max(1, maxInFlightRaw) : 10;
 
-  return { kinds: new Set(kinds), connectors, maxInFlight };
+  return { kinds: new Set(kinds), connectors, tags, maxInFlight };
 }
 
 const connectorActionDispatchPayloadSchema = z.object({
@@ -83,8 +91,42 @@ const dispatchRequestSchema = z.object({
   kind: z.enum(["connector.action", "agent.execute"]),
   payload: z.unknown(),
   secret: z.string().min(1).optional(),
+  selectorTag: z.string().min(1).max(64).optional(),
   timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
 });
+
+const gatewayDispatchMetaSchema = z.object({
+  organizationId: z.string().uuid(),
+  workflowId: z.string().uuid(),
+  runId: z.string().uuid(),
+  requestId: z.string().min(1),
+  attemptCount: z.number().int().min(1),
+});
+
+function parseRedisConnectionOptions(redisUrl: string): ConnectionOptions {
+  const url = new URL(redisUrl);
+  const port = Number(url.port || 6379);
+  const host = url.hostname || "127.0.0.1";
+  const password = url.password ? decodeURIComponent(url.password) : null;
+  const username = url.username ? decodeURIComponent(url.username) : null;
+  const tls = url.protocol === "rediss:";
+
+  const options: ConnectionOptions = { host, port };
+  if (username) {
+    (options as any).username = username;
+  }
+  if (password) {
+    (options as any).password = password;
+  }
+  if (tls) {
+    (options as any).tls = {};
+  }
+  return options;
+}
+
+function metaKey(requestId: string): string {
+  return `gateway:meta:${requestId}`;
+}
 
 function sha256Hex(value: string): string {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
@@ -151,11 +193,27 @@ export async function buildGatewayServer(input?: {
   const wsPath = input?.wsPath ?? "/ws";
   const staleAgentMs = Math.max(5_000, envNumber("GATEWAY_AGENT_STALE_MS", 60_000));
   const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
+  const agentSelection = process.env.GATEWAY_AGENT_SELECTION ?? "least_in_flight_lru";
   const resultsStore =
     input?.resultsStore ??
     (process.env.REDIS_URL ? createRedisResultsStore(process.env.REDIS_URL) : createInMemoryResultsStore());
 
+  const redisUrl = process.env.REDIS_URL ?? null;
+  const continuationQueueName = process.env.WORKFLOW_CONTINUATION_QUEUE_NAME ?? "workflow-continuations";
+  const enableContinuationPush = process.env.GATEWAY_CONTINUATION_PUSH !== "0";
+  const continuationQueue =
+    redisUrl && enableContinuationPush
+      ? new Queue<WorkflowContinuationJobPayload>(continuationQueueName, {
+          connection: parseRedisConnectionOptions(redisUrl),
+        })
+      : null;
+  const metaRedis =
+    redisUrl && enableContinuationPush
+      ? new Redis(redisUrl, { maxRetriesPerRequest: 2, enableReadyCheck: true, lazyConnect: false })
+      : null;
+
   const agentsByOrg = new Map<string, ConnectedAgent[]>();
+  const rrCursorByOrg = new Map<string, number>();
   const inFlightByAgentId = new Map<string, number>();
   const pendingByRequestId = new Map<string, PendingRequest>();
   const dispatchedByRequestId = new Map<string, string>();
@@ -175,7 +233,7 @@ export async function buildGatewayServer(input?: {
 
   function selectAgent(
     orgId: string,
-    required: { kind: string; connectorId?: string | null }
+    required: { kind: string; connectorId?: string | null; selectorTag?: string | null }
   ): ConnectedAgent | null {
     const now = Date.now();
     const agents = agentsByOrg.get(orgId) ?? [];
@@ -208,6 +266,11 @@ export async function buildGatewayServer(input?: {
           continue;
         }
       }
+      if (required.selectorTag) {
+        if (!capabilities.tags || !capabilities.tags.has(required.selectorTag)) {
+          continue;
+        }
+      }
       fresh.push(agent);
     }
 
@@ -216,7 +279,21 @@ export async function buildGatewayServer(input?: {
       return null;
     }
 
-    // Prefer least in-flight, then LRU.
+    if (agentSelection === "round_robin") {
+      const cursor = rrCursorByOrg.get(orgId) ?? 0;
+      for (let offset = 0; offset < fresh.length; offset += 1) {
+        const index = (cursor + offset) % fresh.length;
+        const selected = fresh[index];
+        if (!selected) {
+          continue;
+        }
+        rrCursorByOrg.set(orgId, (index + 1) % fresh.length);
+        return selected;
+      }
+      return null;
+    }
+
+    // Default: prefer least in-flight, then LRU.
     let best: ConnectedAgent | null = null;
     for (const agent of fresh) {
       if (
@@ -257,11 +334,16 @@ export async function buildGatewayServer(input?: {
     organizationId: string;
     kind: "connector.action" | "agent.execute";
     connectorId?: string | null;
+    selectorTag?: string | null;
     requestId: string;
   }): Promise<ConnectedAgent | null> {
     let agent: ConnectedAgent | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const selected = selectAgent(input.organizationId, { kind: input.kind, connectorId: input.connectorId ?? null });
+      const selected = selectAgent(input.organizationId, {
+        kind: input.kind,
+        connectorId: input.connectorId ?? null,
+        selectorTag: input.selectorTag ?? null,
+      });
       if (!selected) {
         agent = null;
         break;
@@ -344,6 +426,7 @@ export async function buildGatewayServer(input?: {
       organizationId: parsed.data.organizationId,
       kind: parsed.data.kind,
       connectorId,
+      selectorTag: parsed.data.selectorTag ?? null,
       requestId,
     });
 
@@ -463,6 +546,7 @@ export async function buildGatewayServer(input?: {
       organizationId: parsed.data.organizationId,
       kind: parsed.data.kind,
       connectorId,
+      selectorTag: parsed.data.selectorTag ?? null,
       requestId,
     });
 
@@ -481,12 +565,34 @@ export async function buildGatewayServer(input?: {
       ...(parsed.data.secret ? { secret: parsed.data.secret } : {}),
     };
 
+    if (metaRedis && continuationQueue) {
+      const meta = {
+        organizationId: parsed.data.organizationId,
+        workflowId: parsed.data.workflowId,
+        runId: parsed.data.runId,
+        requestId,
+        attemptCount: parsed.data.attemptCount,
+      };
+      try {
+        await metaRedis.set(metaKey(requestId), JSON.stringify(meta), "EX", resultsTtlSec);
+      } catch {
+        // Best-effort; if meta is missing, worker polling fallback will apply results.
+      }
+    }
+
     agent.lastUsedAtMs = Date.now();
     incInFlight(agent.agentId);
     dispatchedByRequestId.set(requestId, agent.agentId);
     try {
       agent.ws.send(JSON.stringify(message));
     } catch (error) {
+      if (metaRedis && continuationQueue) {
+        try {
+          await metaRedis.del(metaKey(requestId));
+        } catch {
+          // ignore
+        }
+      }
       dispatchedByRequestId.delete(requestId);
       decInFlight(agent.agentId);
       removeAgent(agent.organizationId, agent.agentId);
@@ -626,6 +732,48 @@ export async function buildGatewayServer(input?: {
         };
         await resultsStore.set(parsed.data.requestId, result, resultsTtlSec);
 
+        if (metaRedis && continuationQueue) {
+          try {
+            const raw = await metaRedis.get(metaKey(parsed.data.requestId));
+            if (!raw) {
+              server.log.info({
+                event: "gateway_result_meta_missing",
+                orgId: agent.organizationId,
+                agentId: agent.agentId,
+                requestId: parsed.data.requestId,
+              });
+            } else {
+              const parsedMeta = gatewayDispatchMetaSchema.safeParse(JSON.parse(raw) as unknown);
+              if (!parsedMeta.success) {
+                server.log.warn({
+                  event: "gateway_result_meta_invalid",
+                  orgId: agent.organizationId,
+                  agentId: agent.agentId,
+                  requestId: parsed.data.requestId,
+                });
+              } else {
+                const payload: WorkflowContinuationJobPayload = {
+                  type: "remote.apply",
+                  organizationId: parsedMeta.data.organizationId,
+                  workflowId: parsedMeta.data.workflowId,
+                  runId: parsedMeta.data.runId,
+                  requestId: parsedMeta.data.requestId,
+                  attemptCount: parsedMeta.data.attemptCount,
+                  result,
+                };
+                await continuationQueue.add("continuation", payload, {
+                  jobId: `apply:${parsed.data.requestId}`,
+                  removeOnComplete: 1000,
+                  removeOnFail: 1000,
+                });
+                await metaRedis.del(metaKey(parsed.data.requestId));
+              }
+            }
+          } catch {
+            // Best-effort; worker polling fallback remains.
+          }
+        }
+
         const asyncTimeout = asyncTimeoutByRequestId.get(parsed.data.requestId);
         if (asyncTimeout) {
           clearTimeout(asyncTimeout);
@@ -728,6 +876,12 @@ export async function buildGatewayServer(input?: {
       pending.resolve({ status: "failed", error: REMOTE_EXEC_ERROR.GatewayShutdown });
     }
     pendingByRequestId.clear();
+    if (continuationQueue) {
+      await continuationQueue.close();
+    }
+    if (metaRedis) {
+      await metaRedis.quit();
+    }
     await resultsStore.close();
     if (ownsPool) {
       await pool.end();

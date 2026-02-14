@@ -13,6 +13,7 @@
   "dependencies": {
     "@vespid/api": "workspace:*",
     "@vespid/connectors": "workspace:*",
+    "ioredis": "^5.9.3",
     "ws": "^8.18.3"
   }
 }

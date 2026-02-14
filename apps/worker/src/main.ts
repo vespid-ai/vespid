@@ -409,6 +409,11 @@ export async function processWorkflowRunJob(
               ? node.config.sandbox.timeoutMs
               : nodeExecTimeoutMs;
 
+          const selectorTag =
+            typeof node.config?.execution?.selector?.tag === "string" && node.config.execution.selector.tag.trim().length > 0
+              ? node.config.execution.selector.tag.trim()
+              : undefined;
+
           const dispatchInput = {
             organizationId: job.data.organizationId,
             requestedByUserId: job.data.requestedByUserId,
@@ -425,6 +430,7 @@ export async function processWorkflowRunJob(
               workflowId: job.data.workflowId,
               attemptCount,
             },
+            ...(selectorTag ? { selectorTag } : {}),
             timeoutMs: nodeTimeoutMs,
           };
 
@@ -500,6 +506,11 @@ export async function processWorkflowRunJob(
               })
             : null;
 
+          const selectorTag =
+            typeof node.config.execution?.selector?.tag === "string" && node.config.execution.selector.tag.trim().length > 0
+              ? node.config.execution.selector.tag.trim()
+              : undefined;
+
           const dispatchInput = {
             organizationId: job.data.organizationId,
             requestedByUserId: job.data.requestedByUserId,
@@ -517,6 +528,7 @@ export async function processWorkflowRunJob(
                 githubApiBaseUrl: getGithubApiBaseUrl(),
               },
             },
+            ...(selectorTag ? { selectorTag } : {}),
             ...(secret ? { secret } : {}),
             timeoutMs: nodeExecTimeoutMs,
           };

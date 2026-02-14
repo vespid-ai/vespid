@@ -19,6 +19,7 @@ Gateway:
 - `GATEWAY_PORT` (default `3002`)
 - `GATEWAY_LOG_LEVEL` (default `info`)
 - `GATEWAY_AGENT_STALE_MS` (default `60000`; disconnects stale WS sessions)
+- `GATEWAY_AGENT_SELECTION` (default `least_in_flight_lru`; optional `round_robin`)
 - `GATEWAY_SERVICE_TOKEN` (required in non-test; used by worker -> gateway internal dispatch)
 - `GATEWAY_HTTP_URL` (default `http://localhost:3002`)
 - `GATEWAY_WS_URL` (default `ws://localhost:3002/ws`)
@@ -52,6 +53,13 @@ Notes:
 2. Publish and run the workflow.
 3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.
 4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
+
+## Agent Capabilities (MVP)
+Agents declare capabilities in the WS `hello` message:
+- `kinds`: `["connector.action", "agent.execute"]`
+- `connectors`: optional list of connector IDs the agent can execute (used for `connector.action` routing)
+- `tags`: optional list of tags (used for targeted dispatch via DSL `execution.selector.tag`)
+- `maxInFlight`: optional integer concurrency hint (default 10)
 
 ## Docker Sandbox (agent.execute)
 `agent.execute` supports an optional shell task payload. When `execution.mode="node"` and the node-agent is configured for Docker, the task runs inside a hardened container.

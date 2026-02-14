@@ -99,6 +99,7 @@ export type GatewayDispatchRequest = {
   attemptCount: number;
   kind: GatewayExecutionKind;
   payload: unknown;
+  selectorTag?: string;
   secret?: string;
   timeoutMs?: number;
 };

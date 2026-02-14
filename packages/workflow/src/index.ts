@@ -35,6 +35,11 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
         execution: z
           .object({
             mode: z.enum(["cloud", "node"]).default("cloud"),
+            selector: z
+              .object({
+                tag: z.string().min(1).max(64),
+              })
+              .optional(),
           })
           .optional(),
         task: agentExecuteTaskSchema.optional(),
@@ -55,6 +60,11 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
       execution: z
         .object({
           mode: z.enum(["cloud", "node"]).default("cloud"),
+          selector: z
+            .object({
+              tag: z.string().min(1).max(64),
+            })
+            .optional(),
         })
         .optional(),
     }),

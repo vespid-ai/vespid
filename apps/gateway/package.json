@@ -17,6 +17,7 @@
   "dependencies": {
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
+    "bullmq": "^5.69.1",
     "fastify": "^5.6.1",
     "ioredis": "^5.9.3",
     "ws": "^8.18.3",

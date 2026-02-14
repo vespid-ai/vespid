@@ -5,3 +5,4 @@ export * from "./edition.js";
 export * from "./enterprise-provider.js";
 export * from "./secrets.js";
 export * from "./remote-exec-errors.js";
+export * from "./workflow-continuations.js";
