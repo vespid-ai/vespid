@@ -813,6 +813,7 @@ export class MemoryAppStore implements AppStore {
       revokedAt: null,
       lastSeenAt: null,
       capabilities: input.capabilities ?? null,
+      tags: [],
       createdByUserId: input.createdByUserId,
       createdAt: nowIso(),
     };
@@ -831,9 +832,35 @@ export class MemoryAppStore implements AppStore {
         revokedAt: agent.revokedAt,
         lastSeenAt: agent.lastSeenAt,
         capabilities: agent.capabilities,
+        tags: agent.tags ?? [],
         createdByUserId: agent.createdByUserId,
         createdAt: agent.createdAt,
       }));
+  }
+
+  async setOrganizationAgentTags(input: {
+    organizationId: string;
+    actorUserId: string;
+    agentId: string;
+    tags: string[];
+  }): Promise<OrganizationAgentRecord | null> {
+    const existing = this.organizationAgents.get(input.agentId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return null;
+    }
+    const updated: OrganizationAgentRecord = {
+      id: existing.id,
+      organizationId: existing.organizationId,
+      name: existing.name,
+      revokedAt: existing.revokedAt,
+      lastSeenAt: existing.lastSeenAt,
+      capabilities: existing.capabilities,
+      tags: input.tags,
+      createdByUserId: existing.createdByUserId,
+      createdAt: existing.createdAt,
+    };
+    this.organizationAgents.set(updated.id, { ...updated, tokenHash: (existing as any).tokenHash });
+    return updated;
   }
 
   async revokeOrganizationAgent(input: { organizationId: string; actorUserId: string; agentId: string }): Promise<boolean> {

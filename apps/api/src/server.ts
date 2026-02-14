@@ -1251,6 +1251,13 @@ export async function buildServer(input?: {
         const lastSeenMs = agent.lastSeenAt ? new Date(agent.lastSeenAt).getTime() : null;
         const online = Boolean(lastSeenMs && nowMs - lastSeenMs < onlineWindowMs);
         const status = agent.revokedAt ? "revoked" : online ? "online" : "offline";
+        const reportedTagsRaw =
+          agent.capabilities && typeof agent.capabilities === "object"
+            ? (agent.capabilities as any).tags
+            : null;
+        const reportedTags = Array.isArray(reportedTagsRaw)
+          ? reportedTagsRaw.filter((item): item is string => typeof item === "string")
+          : [];
         return {
           id: agent.id,
           name: agent.name,
@@ -1258,9 +1265,47 @@ export async function buildServer(input?: {
           lastSeenAt: agent.lastSeenAt,
           createdAt: agent.createdAt,
           revokedAt: agent.revokedAt,
+          tags: agent.tags ?? [],
+          reportedTags,
         };
       }),
     };
+  });
+
+  server.put("/v1/orgs/:orgId/agents/:agentId/tags", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; agentId?: string };
+    if (!params.orgId || !params.agentId) {
+      throw badRequest("Missing orgId or agentId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage agents");
+    }
+
+    const body = z
+      .object({
+        tags: z.array(z.string().min(1).max(64)).max(50),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      throw badRequest("Invalid tags payload", body.error.flatten());
+    }
+
+    const normalized = [...new Set(body.data.tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0))];
+
+    const updated = await store.setOrganizationAgentTags({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      agentId: params.agentId,
+      tags: normalized,
+    });
+    if (!updated) {
+      throw agentNotFound();
+    }
+
+    return { ok: true, agent: { id: updated.id, tags: updated.tags ?? [] } };
   });
 
   server.post("/v1/orgs/:orgId/agents/pairing-tokens", async (request, reply) => {

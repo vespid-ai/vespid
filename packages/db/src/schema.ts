@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   customType,
   index,
@@ -194,6 +194,7 @@ export const organizationAgents = pgTable("organization_agents", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   capabilities: jsonb("capabilities"),
+  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
   createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({

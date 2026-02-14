@@ -1001,6 +1001,18 @@ export async function listOrganizationAgents(db: Db, input: { organizationId: st
   return rows;
 }
 
+export async function setOrganizationAgentTags(
+  db: Db,
+  input: { organizationId: string; agentId: string; tags: string[] }
+) {
+  const [row] = await db
+    .update(organizationAgents)
+    .set({ tags: input.tags })
+    .where(and(eq(organizationAgents.organizationId, input.organizationId), eq(organizationAgents.id, input.agentId)))
+    .returning();
+  return row ?? null;
+}
+
 export async function touchOrganizationAgentLastSeen(
   db: Db,
   input: { organizationId: string; agentId: string }

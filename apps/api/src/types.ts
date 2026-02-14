@@ -116,6 +116,7 @@ export type OrganizationAgentRecord = {
   revokedAt: string | null;
   lastSeenAt: string | null;
   capabilities: unknown;
+  tags: string[];
   createdByUserId: string;
   createdAt: string;
 };
@@ -321,6 +322,12 @@ export interface AppStore {
     organizationId: string;
     actorUserId: string;
   }): Promise<OrganizationAgentRecord[]>;
+  setOrganizationAgentTags(input: {
+    organizationId: string;
+    actorUserId: string;
+    agentId: string;
+    tags: string[];
+  }): Promise<OrganizationAgentRecord | null>;
   revokeOrganizationAgent(input: {
     organizationId: string;
     actorUserId: string;

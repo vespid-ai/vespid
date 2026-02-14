@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { CodeBlock } from "../../../../components/ui/code-block";
 import { Badge } from "../../../../components/ui/badge";
@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Separator } from "../../../../components/ui/separator";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
-import { useAgents, useCreatePairingToken, useRevokeAgent } from "../../../../lib/hooks/use-agents";
+import { useAgents, useCreatePairingToken, useRevokeAgent, useUpdateAgentTags } from "../../../../lib/hooks/use-agents";
 
 function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   const normalized = status.toLowerCase();
@@ -27,12 +27,14 @@ export default function AgentsPage() {
   const agentsQuery = useAgents(orgId);
   const pairing = useCreatePairingToken(orgId);
   const revoke = useRevokeAgent(orgId);
+  const updateTags = useUpdateAgentTags(orgId);
 
   const agents = agentsQuery.data?.agents ?? [];
 
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [tagsDraftByAgentId, setTagsDraftByAgentId] = useState<Record<string, string>>({});
 
   const canOperate = Boolean(orgId);
 
@@ -55,8 +57,6 @@ export default function AgentsPage() {
     toast.success("Pairing token created");
   }
 
-  const selectedForRevoke = useMemo(() => agents[0]?.id ?? "", [agents]);
-
   return (
     <div className="grid gap-4">
       <div>
@@ -72,30 +72,18 @@ export default function AgentsPage() {
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={refresh}>{t("common.refresh")}</Button>
-            {selectedForRevoke ? (
-              <ConfirmButton
-                title="Revoke agent"
-                description="This will prevent the agent from executing future jobs."
-                confirmText={t("agents.revoke")}
-                onConfirm={async () => {
-                  await revoke.mutateAsync(selectedForRevoke);
-                  toast.success("Agent revoked");
-                }}
-              >
-                {t("agents.revoke")}
-              </ConfirmButton>
-            ) : null}
             <div className="ml-auto text-xs text-muted">
               {agentsQuery.isFetching ? t("common.loading") : `${agents.length} agent(s)`}
             </div>
           </div>
 
           <div className="mt-4 overflow-hidden rounded-lg border border-border">
-            <div className="grid grid-cols-[1.2fr_0.6fr_0.8fr_0.8fr] gap-0 border-b border-border bg-panel/60 px-3 py-2 text-xs font-medium text-muted">
+            <div className="grid grid-cols-[1.1fr_0.55fr_0.9fr_0.9fr_1.2fr] gap-0 border-b border-border bg-panel/60 px-3 py-2 text-xs font-medium text-muted">
               <div>Name</div>
               <div>Status</div>
               <div>Last seen</div>
               <div>Created</div>
+              <div>Tags (control plane)</div>
             </div>
 
             {agents.length === 0 ? (
@@ -104,17 +92,66 @@ export default function AgentsPage() {
               agents.map((agent) => (
                 <div
                   key={agent.id}
-                  className="grid grid-cols-[1.2fr_0.6fr_0.8fr_0.8fr] gap-0 px-3 py-3 text-sm"
+                  className="grid grid-cols-[1.1fr_0.55fr_0.9fr_0.9fr_1.2fr] gap-0 px-3 py-3 text-sm"
                 >
                   <div className="min-w-0">
                     <div className="truncate font-medium text-text">{agent.name}</div>
                     <div className="truncate text-xs text-muted">{agent.id}</div>
+                    {agent.reportedTags && agent.reportedTags.length > 0 ? (
+                      <div className="mt-1 truncate text-[11px] text-muted">
+                        reported: {agent.reportedTags.join(", ")}
+                      </div>
+                    ) : null}
                   </div>
                   <div>
                     <Badge variant={statusVariant(agent.status)}>{agent.status}</Badge>
                   </div>
                   <div className="text-muted">{agent.lastSeenAt ?? "-"}</div>
                   <div className="text-muted">{agent.createdAt}</div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        className="w-full rounded-md border border-border bg-panel px-2 py-1 text-xs text-text outline-none focus:ring-2 focus:ring-accent/40"
+                        placeholder="e.g. west,group:alpha"
+                        value={tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",")}
+                        onChange={(e) =>
+                          setTagsDraftByAgentId((prev) => ({
+                            ...prev,
+                            [agent.id]: e.target.value,
+                          }))
+                        }
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            if (!orgId) return;
+                            const raw = tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",");
+                            const tags = raw
+                              .split(",")
+                              .map((tag) => tag.trim())
+                              .filter((tag) => tag.length > 0);
+                            await updateTags.mutateAsync({ agentId: agent.id, tags });
+                            toast.success("Agent tags updated");
+                          }}
+                          disabled={!canOperate || updateTags.isPending}
+                        >
+                          Save
+                        </Button>
+                        <ConfirmButton
+                          title="Revoke agent"
+                          description="This will prevent the agent from executing future jobs."
+                          confirmText={t("agents.revoke")}
+                          onConfirm={async () => {
+                            await revoke.mutateAsync(agent.id);
+                            toast.success("Agent revoked");
+                          }}
+                        >
+                          {t("agents.revoke")}
+                        </ConfirmButton>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ))
             )}

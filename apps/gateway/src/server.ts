@@ -25,6 +25,7 @@ type ConnectedAgent = {
   lastSeenAtMs: number;
   lastUsedAtMs: number;
   capabilities: Record<string, unknown> | null;
+  authoritativeTags: Set<string>;
   name: string | null;
   agentVersion: string | null;
 };
@@ -39,7 +40,6 @@ type PendingRequest = {
 type AgentCapabilities = {
   kinds: Set<string>;
   connectors: Set<string> | null;
-  tags: Set<string> | null;
   maxInFlight: number;
 };
 
@@ -64,15 +64,11 @@ function normalizeCapabilities(input: Record<string, unknown> | null): AgentCapa
     : [];
   const connectors = connectorsList.length > 0 ? new Set(connectorsList) : null;
 
-  const tagsRaw = input?.["tags"];
-  const tagsList = Array.isArray(tagsRaw) ? tagsRaw.filter((item): item is string => typeof item === "string") : [];
-  const tags = tagsList.length > 0 ? new Set(tagsList) : null;
-
   const maxInFlightRaw = input?.["maxInFlight"];
   const maxInFlight =
     typeof maxInFlightRaw === "number" && Number.isFinite(maxInFlightRaw) ? Math.max(1, maxInFlightRaw) : 10;
 
-  return { kinds: new Set(kinds), connectors, tags, maxInFlight };
+  return { kinds: new Set(kinds), connectors, maxInFlight };
 }
 
 const connectorActionDispatchPayloadSchema = z.object({
@@ -280,13 +276,13 @@ export async function buildGatewayServer(input?: {
         }
       }
       if (required.selectorTag) {
-        if (!capabilities.tags || !capabilities.tags.has(required.selectorTag)) {
+        if (!agent.authoritativeTags.has(required.selectorTag)) {
           continue;
         }
       }
       if (required.selectorGroup) {
         const key = `group:${required.selectorGroup}`;
-        if (!capabilities.tags || !capabilities.tags.has(key)) {
+        if (!agent.authoritativeTags.has(key)) {
           continue;
         }
       }
@@ -395,6 +391,18 @@ export async function buildGatewayServer(input?: {
           requestId: input.requestId,
         });
         continue;
+      }
+
+      // Control-plane tags are authoritative. Refresh cached tags from DB so changes apply without reconnect.
+      selected.authoritativeTags = new Set((row.tags ?? []).filter((tag): tag is string => typeof tag === "string"));
+      if (input.selectorTag && !selected.authoritativeTags.has(input.selectorTag)) {
+        continue;
+      }
+      if (input.selectorGroup) {
+        const key = `group:${input.selectorGroup}`;
+        if (!selected.authoritativeTags.has(key)) {
+          continue;
+        }
       }
 
       agent = selected;
@@ -877,6 +885,7 @@ export async function buildGatewayServer(input?: {
         agentRow.capabilities && typeof agentRow.capabilities === "object"
           ? (agentRow.capabilities as Record<string, unknown>)
           : null,
+      authoritativeTags: new Set((agentRow.tags ?? []).filter((tag): tag is string => typeof tag === "string")),
       name: agentRow.name ?? null,
       agentVersion: null,
     };

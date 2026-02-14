@@ -27,6 +27,7 @@ import {
   consumeAgentPairingToken as dbConsumeAgentPairingToken,
   createOrganizationAgent as dbCreateOrganizationAgent,
   listOrganizationAgents as dbListOrganizationAgents,
+  setOrganizationAgentTags as dbSetOrganizationAgentTags,
   revokeOrganizationAgent as dbRevokeOrganizationAgent,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
@@ -985,6 +986,7 @@ export class PgAppStore implements AppStore {
       revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
       lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
       capabilities: row.capabilities,
+      tags: row.tags ?? [],
       createdByUserId: row.createdByUserId,
       createdAt: toIso(row.createdAt),
     };
@@ -1002,9 +1004,36 @@ export class PgAppStore implements AppStore {
       revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
       lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
       capabilities: row.capabilities,
+      tags: row.tags ?? [],
       createdByUserId: row.createdByUserId,
       createdAt: toIso(row.createdAt),
     }));
+  }
+
+  async setOrganizationAgentTags(input: { organizationId: string; actorUserId: string; agentId: string; tags: string[] }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbSetOrganizationAgentTags(db, {
+          organizationId: input.organizationId,
+          agentId: input.agentId,
+          tags: input.tags,
+        })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      capabilities: row.capabilities,
+      tags: row.tags ?? [],
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
   }
 
   async revokeOrganizationAgent(input: { organizationId: string; actorUserId: string; agentId: string }) {

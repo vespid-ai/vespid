@@ -8,6 +8,8 @@ export type AgentMeta = {
   lastSeenAt: string | null;
   createdAt: string;
   revokedAt?: string | null;
+  tags?: string[];
+  reportedTags?: string[];
 };
 
 export function useAgents(orgId: string | null) {
@@ -43,6 +45,27 @@ export function useRevokeAgent(orgId: string | null) {
   return useMutation({
     mutationFn: async (agentId: string) => {
       return apiFetchJson<unknown>(`/v1/orgs/${orgId}/agents/${agentId}/revoke`, { method: "POST" }, { orgScoped: true });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agents", orgId] });
+    },
+  });
+}
+
+export function useUpdateAgentTags(orgId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { agentId: string; tags: string[] }) => {
+      return apiFetchJson<{ ok: true; agent: { id: string; tags: string[] } }>(
+        `/v1/orgs/${orgId}/agents/${input.agentId}/tags`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ tags: input.tags }),
+        },
+        { orgScoped: true }
+      );
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["agents", orgId] });

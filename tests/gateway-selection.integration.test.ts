@@ -170,7 +170,7 @@ describe("gateway selection integration", () => {
     expect(orgRes.statusCode).toBe(201);
     const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
 
-    async function pairAgent(name: string, tags?: string[]) {
+    async function pairAgent(name: string) {
       const pairing = await api.inject({
         method: "POST",
         url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
@@ -186,7 +186,7 @@ describe("gateway selection integration", () => {
           pairingToken,
           name,
           agentVersion: "test-agent",
-          capabilities: { kinds: ["agent.execute"], ...(tags ? { tags } : {}) },
+          capabilities: { kinds: ["agent.execute"] },
         },
       });
       expect(pairRes.statusCode).toBe(201);
@@ -390,7 +390,16 @@ describe("gateway selection integration", () => {
       },
     });
     expect(pairA.statusCode).toBe(201);
-    const alpha = pairA.json() as { agentToken: string };
+    const alphaPaired = pairA.json() as { agentId: string; agentToken: string };
+    const alpha = alphaPaired.agentToken;
+
+    const setAlpha = await api.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/agents/${alphaPaired.agentId}/tags`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { tags: ["group:alpha"] },
+    });
+    expect(setAlpha.statusCode).toBe(200);
 
     const pairingB = await api.inject({
       method: "POST",
@@ -410,17 +419,26 @@ describe("gateway selection integration", () => {
       },
     });
     expect(pairB.statusCode).toBe(201);
-    const beta = pairB.json() as { agentToken: string };
+    const betaPaired = pairB.json() as { agentId: string; agentToken: string };
+    const beta = betaPaired.agentToken;
+
+    const setBeta = await api.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/agents/${betaPaired.agentId}/tags`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { tags: ["group:beta"] },
+    });
+    expect(setBeta.statusCode).toBe(200);
 
     const agent1 = await startEchoAgent({
       gatewayWsUrl,
-      agentToken: alpha.agentToken,
+      agentToken: alpha,
       name: "grp-a",
       capabilities: { kinds: ["agent.execute"], tags: ["group:alpha"] },
     });
     const agent2 = await startEchoAgent({
       gatewayWsUrl,
-      agentToken: beta.agentToken,
+      agentToken: beta,
       name: "grp-b",
       capabilities: { kinds: ["agent.execute"], tags: ["group:beta"] },
     });
@@ -495,7 +513,16 @@ describe("gateway selection integration", () => {
       },
     });
     expect(pairA.statusCode).toBe(201);
-    const eastToken = (pairA.json() as { agentToken: string }).agentToken;
+    const eastPaired = pairA.json() as { agentId: string; agentToken: string };
+    const eastToken = eastPaired.agentToken;
+
+    const setEast = await api.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/agents/${eastPaired.agentId}/tags`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { tags: ["east"] },
+    });
+    expect(setEast.statusCode).toBe(200);
 
     const pairingB = await api.inject({
       method: "POST",
@@ -515,7 +542,16 @@ describe("gateway selection integration", () => {
       },
     });
     expect(pairB.statusCode).toBe(201);
-    const westToken = (pairB.json() as { agentToken: string }).agentToken;
+    const westPaired = pairB.json() as { agentId: string; agentToken: string };
+    const westToken = westPaired.agentToken;
+
+    const setWest = await api.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/agents/${westPaired.agentId}/tags`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { tags: ["west"] },
+    });
+    expect(setWest.statusCode).toBe(200);
 
     const east = await startEchoAgent({
       gatewayWsUrl,
