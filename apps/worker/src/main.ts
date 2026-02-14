@@ -3,6 +3,7 @@ import {
   createPool,
   appendWorkflowRunEvent,
   getConnectorSecretById,
+  getOrganizationById,
   getWorkflowById,
   getWorkflowRunById,
   markWorkflowRunBlocked,
@@ -295,6 +296,11 @@ export async function processWorkflowRunJob(
     return;
   }
 
+  const organization = await withTenantContext(pool, actor, async (tenantDb) =>
+    getOrganizationById(tenantDb, { organizationId: job.data.organizationId })
+  );
+  const organizationSettings = organization?.settings ?? {};
+
   const maxAttempts = typeof run.maxAttempts === "number" && Number.isFinite(run.maxAttempts) ? run.maxAttempts : getWorkflowRetryAttempts();
   const isStartingAttempt = run.status === "queued";
   attemptCount = isStartingAttempt ? Math.max(1, (run.attemptCount ?? 0) + 1) : Math.max(1, run.attemptCount ?? 1);
@@ -446,6 +452,35 @@ export async function processWorkflowRunJob(
         runtime?: unknown;
       };
       try {
+        const emitEvent = async (event: {
+          eventType: string;
+          level: "info" | "warn" | "error";
+          message?: string | null;
+          payload?: unknown;
+        }) => {
+          await appendEvent({
+            eventType: event.eventType,
+            level: event.level,
+            message: event.message ?? null,
+            payload: event.payload ?? null,
+            nodeId: node.id,
+            nodeType: node.type,
+          });
+        };
+
+        const checkpointRuntime = async (runtimeOverride: unknown) => {
+          runtime = mergeRuntime(runtime, runtimeOverride);
+          await withTenantContext(pool, actor, async (tenantDb) =>
+            updateWorkflowRunProgress(tenantDb, {
+              organizationId: job.data.organizationId,
+              workflowId: job.data.workflowId,
+              runId: job.data.runId,
+              cursorNodeIndex: index,
+              output: buildProgressOutput(steps, runtime),
+            })
+          );
+        };
+
         nodeResult = await executor.execute({
           organizationId: job.data.organizationId,
           workflowId: job.data.workflowId,
@@ -455,6 +490,7 @@ export async function processWorkflowRunJob(
           nodeId: node.id,
           nodeType: node.type,
           node,
+          organizationSettings,
           runInput: run.input ?? undefined,
           steps,
           runtime,
@@ -462,6 +498,8 @@ export async function processWorkflowRunJob(
             runtime && typeof runtime === "object" && (runtime as any).pendingRemoteResult != null
               ? (runtime as any).pendingRemoteResult
               : undefined,
+          emitEvent,
+          checkpointRuntime,
         });
       } catch (error) {
         nodeResult = { status: "failed", error: errorMessage(error) };

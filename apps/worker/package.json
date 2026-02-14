@@ -18,6 +18,7 @@
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",
+    "ajv": "^8.17.1",
     "bullmq": "^5.69.1",
     "ioredis": "^5.9.3",
     "zod": "^4.3.6"

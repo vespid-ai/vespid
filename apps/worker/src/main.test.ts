@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getWorkflowRunById: vi.fn(),
   getWorkflowById: vi.fn(),
   getConnectorSecretById: vi.fn(),
+  getOrganizationById: vi.fn(),
   appendWorkflowRunEvent: vi.fn(),
   markWorkflowRunRunning: vi.fn(),
   markWorkflowRunBlocked: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@vespid/db", () => ({
   getWorkflowRunById: mocks.getWorkflowRunById,
   getWorkflowById: mocks.getWorkflowById,
   getConnectorSecretById: mocks.getConnectorSecretById,
+  getOrganizationById: mocks.getOrganizationById,
   appendWorkflowRunEvent: mocks.appendWorkflowRunEvent,
   markWorkflowRunRunning: mocks.markWorkflowRunRunning,
   markWorkflowRunBlocked: mocks.markWorkflowRunBlocked,
@@ -68,6 +70,7 @@ describe("workflow worker", () => {
     vi.clearAllMocks();
     gatewayMocks.dispatchViaGatewayAsync.mockResolvedValue({ ok: true, requestId: "req-1", dispatched: true });
     mocks.withTenantContext.mockImplementation(async (_pool: unknown, _ctx: unknown, fn: Function) => fn({}));
+    mocks.getOrganizationById.mockResolvedValue({ id: "org-1", settings: {} });
     mocks.getWorkflowRunById.mockResolvedValue({
       id: "run-1",
       organizationId: "org-1",
