@@ -18,6 +18,7 @@
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
     "fastify": "^5.6.1",
+    "ioredis": "^5.9.3",
     "ws": "^8.18.3",
     "zod": "^4.3.6"
   },
@@ -26,4 +27,3 @@
     "@types/ws": "^8.18.1"
   }
 }
-

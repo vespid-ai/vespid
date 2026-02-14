@@ -75,6 +75,9 @@ importers:
       fastify:
         specifier: ^5.6.1
         version: 5.7.4
+      ioredis:
+        specifier: ^5.9.3
+        version: 5.9.3
       ws:
         specifier: ^8.18.3
         version: 8.19.0

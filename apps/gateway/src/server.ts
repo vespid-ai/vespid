@@ -11,6 +11,7 @@ import type {
   GatewayDispatchRequest,
   GatewayDispatchResponse,
 } from "@vespid/shared";
+import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "./results-store.js";
 
 type ConnectedAgent = {
   ws: WebSocket;
@@ -121,6 +122,7 @@ export async function buildGatewayServer(input?: {
   pool?: ReturnType<typeof createPool>;
   serviceToken?: string;
   wsPath?: string;
+  resultsStore?: ResultsStore;
 }) {
   const server = Fastify({
     logger: {
@@ -143,6 +145,10 @@ export async function buildGatewayServer(input?: {
   const serviceToken = input?.serviceToken ?? process.env.GATEWAY_SERVICE_TOKEN ?? "dev-gateway-token";
   const wsPath = input?.wsPath ?? "/ws";
   const staleAgentMs = Math.max(5_000, envNumber("GATEWAY_AGENT_STALE_MS", 60_000));
+  const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
+  const resultsStore =
+    input?.resultsStore ??
+    (process.env.REDIS_URL ? createRedisResultsStore(process.env.REDIS_URL) : createInMemoryResultsStore());
 
   const agentsByOrg = new Map<string, ConnectedAgent[]>();
   const pendingByRequestId = new Map<string, PendingRequest>();
@@ -263,6 +269,12 @@ export async function buildGatewayServer(input?: {
       connectorId = payloadParsed.data.connectorId;
     }
 
+    // If we already have a cached result for this deterministic requestId, return it.
+    const cached = await resultsStore.get(requestId);
+    if (cached) {
+      return reply.status(200).send(cached);
+    }
+
     let agent: ConnectedAgent | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const selected = selectAgent(parsed.data.organizationId, { kind: parsed.data.kind, connectorId });
@@ -329,7 +341,9 @@ export async function buildGatewayServer(input?: {
           requestId,
           timeoutMs,
         });
-        resolve({ status: "failed", error: "NODE_EXECUTION_TIMEOUT" });
+        const result: GatewayDispatchResponse = { status: "failed", error: "NODE_EXECUTION_TIMEOUT" };
+        void resultsStore.set(requestId, result, resultsTtlSec);
+        resolve(result);
       }, timeoutMs);
 
       pendingByRequestId.set(requestId, {
@@ -357,11 +371,31 @@ export async function buildGatewayServer(input?: {
           },
           "gateway dispatch ws send failed"
         );
-        resolve({ status: "failed", error: "AGENT_DISCONNECTED" });
+        const result: GatewayDispatchResponse = { status: "failed", error: "AGENT_DISCONNECTED" };
+        void resultsStore.set(requestId, result, resultsTtlSec);
+        resolve(result);
       }
     });
 
     return reply.status(200).send(response);
+  });
+
+  server.get("/internal/v1/results/:requestId", async (request, reply) => {
+    const token = request.headers["x-gateway-token"];
+    if (typeof token !== "string" || token.length === 0 || token !== serviceToken) {
+      return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid gateway service token" });
+    }
+
+    const requestId = (request.params as { requestId?: string }).requestId;
+    if (!requestId || requestId.length < 10) {
+      return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid requestId" });
+    }
+
+    const result = await resultsStore.get(requestId);
+    if (!result) {
+      return reply.status(404).send({ code: "RESULT_NOT_READY", message: "Result not ready" });
+    }
+    return reply.status(200).send(result);
   });
 
   server.get("/healthz", async () => ({ ok: true }));
@@ -427,18 +461,27 @@ export async function buildGatewayServer(input?: {
         await touchAgent(agent.organizationId, agent.agentId);
 
         const pending = pendingByRequestId.get(parsed.data.requestId);
+        const result: GatewayDispatchResponse = {
+          status: parsed.data.status,
+          ...(parsed.data.output !== undefined ? { output: parsed.data.output } : {}),
+          ...(parsed.data.error ? { error: parsed.data.error } : {}),
+        };
+        await resultsStore.set(parsed.data.requestId, result, resultsTtlSec);
+
         if (!pending) {
+          server.log.info({
+            event: "gateway_orphan_result_stored",
+            orgId: agent.organizationId,
+            agentId: agent.agentId,
+            requestId: parsed.data.requestId,
+          });
           return;
         }
 
         agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
         clearTimeout(pending.timeout);
         pendingByRequestId.delete(parsed.data.requestId);
-        pending.resolve({
-          status: parsed.data.status,
-          ...(parsed.data.output !== undefined ? { output: parsed.data.output } : {}),
-          ...(parsed.data.error ? { error: parsed.data.error } : {}),
-        });
+        pending.resolve(result);
         return;
       }
     });
@@ -513,6 +556,7 @@ export async function buildGatewayServer(input?: {
       pending.resolve({ status: "failed", error: "GATEWAY_SHUTDOWN" });
     }
     pendingByRequestId.clear();
+    await resultsStore.close();
     if (ownsPool) {
       await pool.end();
     }

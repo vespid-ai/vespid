@@ -22,6 +22,7 @@ Gateway:
 - `GATEWAY_SERVICE_TOKEN` (required in non-test; used by worker -> gateway internal dispatch)
 - `GATEWAY_HTTP_URL` (default `http://localhost:3002`)
 - `GATEWAY_WS_URL` (default `ws://localhost:3002/ws`)
+- `GATEWAY_RESULTS_TTL_SEC` (default `900`; stores execution results for recovery across gateway restarts)
 
 Worker:
 - `NODE_EXEC_TIMEOUT_MS` (default `60000`)

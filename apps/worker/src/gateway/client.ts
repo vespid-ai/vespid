@@ -23,6 +23,14 @@ export function getGatewayServiceToken(): string | null {
   return raw;
 }
 
+function buildRequestId(input: GatewayDispatchRequest): string {
+  return `${input.runId}:${input.nodeId}:${input.attemptCount}`;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise<GatewayDispatchResponse> {
   const baseUrl = getGatewayHttpUrl();
   const serviceToken = getGatewayServiceToken();
@@ -30,6 +38,7 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
     return { status: "failed", error: "GATEWAY_NOT_CONFIGURED" };
   }
 
+  const requestId = buildRequestId(input);
   const url = new URL("/internal/v1/dispatch", baseUrl);
   let response: Response;
   try {
@@ -42,7 +51,8 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
       body: JSON.stringify(input),
     });
   } catch {
-    return { status: "failed", error: "GATEWAY_UNAVAILABLE" };
+    // If the gateway is restarting, the agent may still complete. Poll for a cached result.
+    return await pollResult({ baseUrl, serviceToken, requestId, timeoutMs: input.timeoutMs ?? 60_000 });
   }
 
   const body = await response.text();
@@ -50,7 +60,10 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
     if (response.status === 503) {
       return { status: "failed", error: "NO_AGENT_AVAILABLE" };
     }
-    return { status: "failed", error: `GATEWAY_DISPATCH_FAILED:${response.status}` };
+    if (response.status >= 500) {
+      return await pollResult({ baseUrl, serviceToken, requestId, timeoutMs: input.timeoutMs ?? 60_000 });
+    }
+    return { status: "failed", error: "GATEWAY_DISPATCH_FAILED" };
   }
 
   const payload = body.length > 0 ? (JSON.parse(body) as unknown) : null;
@@ -64,4 +77,46 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
     ...(parsed.data.output !== undefined ? { output: parsed.data.output } : {}),
     ...(typeof parsed.data.error === "string" ? { error: parsed.data.error } : {}),
   };
+}
+
+async function pollResult(input: {
+  baseUrl: string;
+  serviceToken: string;
+  requestId: string;
+  timeoutMs: number;
+}): Promise<GatewayDispatchResponse> {
+  const start = Date.now();
+  let delay = 250;
+  while (Date.now() - start < input.timeoutMs) {
+    try {
+      const url = new URL(`/internal/v1/results/${encodeURIComponent(input.requestId)}`, input.baseUrl);
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "x-gateway-token": input.serviceToken,
+        },
+      });
+      if (response.status === 404) {
+        // Not ready yet.
+      } else if (!response.ok) {
+        // Retry on transient gateway issues.
+      } else {
+        const payload = await response.json();
+        const parsed = dispatchResponseSchema.safeParse(payload);
+        if (!parsed.success) {
+          return { status: "failed", error: "GATEWAY_RESPONSE_INVALID" };
+        }
+        return {
+          status: parsed.data.status,
+          ...(parsed.data.output !== undefined ? { output: parsed.data.output } : {}),
+          ...(typeof parsed.data.error === "string" ? { error: parsed.data.error } : {}),
+        };
+      }
+    } catch {
+      // retry
+    }
+    await sleep(delay);
+    delay = Math.min(2000, Math.floor(delay * 1.6));
+  }
+  return { status: "failed", error: "NODE_EXECUTION_TIMEOUT" };
 }

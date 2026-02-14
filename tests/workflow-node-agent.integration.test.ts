@@ -782,6 +782,88 @@ describe("workflow node-agent integration", () => {
     await wsB.close();
   });
 
+  it("stores orphan execute_result for recovery (results endpoint)", async () => {
+    if (!available || !api || !githubStub || !gatewayWsUrl || !gatewayBaseUrl) {
+      return;
+    }
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `node-agent-orphan-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Node Agent Orphan Org",
+        slug: randomSlug("node-agent-orphan-org"),
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const pairing = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(pairing.statusCode).toBe(201);
+    const pairingToken = (pairing.json() as { token: string }).token;
+
+    const pairRes = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken,
+        name: "stub-agent-orphan",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["agent.execute"] },
+      },
+    });
+    expect(pairRes.statusCode).toBe(201);
+    const agentToken = (pairRes.json() as { agentToken: string }).agentToken;
+
+    // Connect a raw WS client that sends an execute_result for an unknown requestId.
+    const ws = new WebSocket(gatewayWsUrl, {
+      headers: { authorization: `Bearer ${agentToken}` },
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", (err) => reject(err));
+    });
+    ws.send(JSON.stringify({ type: "hello", agentVersion: "test-agent", name: "orphan-agent", capabilities: { kinds: ["agent.execute"] } }));
+
+    const requestId = `${crypto.randomUUID()}:node:1`;
+    ws.send(JSON.stringify({ type: "execute_result", requestId, status: "succeeded", output: { ok: true } }));
+
+    // Poll results endpoint until stored.
+    let found = false;
+    for (let i = 0; i < 20; i += 1) {
+      const res = await fetch(`${gatewayBaseUrl}/internal/v1/results/${encodeURIComponent(requestId)}`, {
+        headers: { "x-gateway-token": "ci-gateway-token" },
+      });
+      if (res.status === 200) {
+        const body = (await res.json()) as { status: string; output?: unknown };
+        expect(body.status).toBe("succeeded");
+        expect(body.output).toEqual({ ok: true });
+        found = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(found).toBe(true);
+
+    ws.close();
+  });
+
   it("does not dispatch to revoked agents", async () => {
     if (!available || !api || !githubStub || !gatewayWsUrl) {
       return;

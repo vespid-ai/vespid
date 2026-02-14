@@ -109,12 +109,6 @@ function safeJsonParse(input: string): unknown {
 }
 
 async function connectGateway(config: AgentConfig): Promise<void> {
-  const ws = new WebSocket(config.gatewayWsUrl, {
-    headers: {
-      authorization: `Bearer ${config.agentToken}`,
-    },
-  });
-
   const hello: GatewayAgentHelloMessage = {
     type: "hello",
     agentVersion: config.agentVersion,
@@ -123,64 +117,36 @@ async function connectGateway(config: AgentConfig): Promise<void> {
   };
 
   const pingIntervalMs = 15_000;
-  let pingTimer: NodeJS.Timeout | null = null;
+  const pendingResults = new Map<string, unknown>();
 
-  ws.on("open", () => {
-    ws.send(JSON.stringify(hello));
-    pingTimer = setInterval(() => {
-      const ping: GatewayAgentPingMessage = { type: "ping", ts: Date.now() };
-      ws.send(JSON.stringify(ping));
-    }, pingIntervalMs);
-  });
-
-  ws.on("message", async (data) => {
-    const raw = typeof data === "string" ? data : data.toString("utf8");
-    const message = safeJsonParse(raw);
-    if (!message || typeof message !== "object") {
-      return;
-    }
-    const type = (message as { type?: unknown }).type;
-    if (type !== "execute") {
-      return;
-    }
-
-    const parsed = z
-      .object({
-        type: z.literal("execute"),
-        requestId: z.string().min(1),
-        organizationId: z.string().uuid(),
-        userId: z.string().uuid(),
-        kind: z.enum(["connector.action", "agent.execute"]),
-        payload: z.unknown(),
-        secret: z.string().min(1).optional(),
-      })
-      .safeParse(message) as { success: boolean; data?: GatewayServerExecuteMessage };
-
-    if (!parsed.success || !parsed.data) {
-      return;
-    }
-
-    const requestId = parsed.data.requestId;
+  function safeSend(ws: WebSocket, message: unknown) {
     try {
-      if (parsed.data.kind === "agent.execute") {
-        const payload = z
-          .object({
-            nodeId: z.string().min(1),
-          })
-          .safeParse(parsed.data.payload);
+      if (ws.readyState !== ws.OPEN) {
+        return false;
+      }
+      ws.send(JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
+  async function handleExecute(ws: WebSocket, incoming: GatewayServerExecuteMessage) {
+    const requestId = incoming.requestId;
+    try {
+      if (incoming.kind === "agent.execute") {
+        const payload = z.object({ nodeId: z.string().min(1) }).safeParse(incoming.payload);
         const nodeId = payload.success ? payload.data.nodeId : "node";
-        ws.send(
-          JSON.stringify({
-            type: "execute_result",
-            requestId,
-            status: "succeeded",
-            output: {
-              accepted: true,
-              taskId: `${nodeId}-remote-task`,
-            },
-          })
-        );
+        const result = {
+          type: "execute_result",
+          requestId,
+          status: "succeeded",
+          output: { accepted: true, taskId: `${nodeId}-remote-task` },
+        };
+        pendingResults.set(requestId, result);
+        if (safeSend(ws, result)) {
+          pendingResults.delete(requestId);
+        }
         return;
       }
 
@@ -189,23 +155,16 @@ async function connectGateway(config: AgentConfig): Promise<void> {
           connectorId: z.string().min(1),
           actionId: z.string().min(1),
           input: z.unknown().optional(),
-          env: z
-            .object({
-              githubApiBaseUrl: z.string().url(),
-            })
-            .optional(),
+          env: z.object({ githubApiBaseUrl: z.string().url() }).optional(),
         })
-        .safeParse(parsed.data.payload);
+        .safeParse(incoming.payload);
 
       if (!actionPayload.success) {
-        ws.send(
-          JSON.stringify({
-            type: "execute_result",
-            requestId,
-            status: "failed",
-            error: "INVALID_ACTION_PAYLOAD",
-          })
-        );
+        const result = { type: "execute_result", requestId, status: "failed", error: "INVALID_ACTION_PAYLOAD" };
+        pendingResults.set(requestId, result);
+        if (safeSend(ws, result)) {
+          pendingResults.delete(requestId);
+        }
         return;
       }
 
@@ -214,91 +173,144 @@ async function connectGateway(config: AgentConfig): Promise<void> {
         actionId: actionPayload.data.actionId,
       });
       if (!action) {
-        ws.send(
-          JSON.stringify({
-            type: "execute_result",
-            requestId,
-            status: "failed",
-            error: `ACTION_NOT_SUPPORTED:${actionPayload.data.connectorId}:${actionPayload.data.actionId}`,
-          })
-        );
+        const result = {
+          type: "execute_result",
+          requestId,
+          status: "failed",
+          error: `ACTION_NOT_SUPPORTED:${actionPayload.data.connectorId}:${actionPayload.data.actionId}`,
+        };
+        pendingResults.set(requestId, result);
+        if (safeSend(ws, result)) {
+          pendingResults.delete(requestId);
+        }
         return;
       }
 
       const actionInputParsed = action.inputSchema.safeParse(actionPayload.data.input);
       if (!actionInputParsed.success) {
-        ws.send(
-          JSON.stringify({
-            type: "execute_result",
-            requestId,
-            status: "failed",
-            error: "INVALID_ACTION_INPUT",
-          })
-        );
+        const result = { type: "execute_result", requestId, status: "failed", error: "INVALID_ACTION_INPUT" };
+        pendingResults.set(requestId, result);
+        if (safeSend(ws, result)) {
+          pendingResults.delete(requestId);
+        }
         return;
       }
 
-      const secret = action.requiresSecret ? parsed.data.secret ?? null : null;
+      const secret = action.requiresSecret ? incoming.secret ?? null : null;
       if (action.requiresSecret && !secret) {
-        ws.send(
-          JSON.stringify({
-            type: "execute_result",
-            requestId,
-            status: "failed",
-            error: "SECRET_REQUIRED",
-          })
-        );
+        const result = { type: "execute_result", requestId, status: "failed", error: "SECRET_REQUIRED" };
+        pendingResults.set(requestId, result);
+        if (safeSend(ws, result)) {
+          pendingResults.delete(requestId);
+        }
         return;
       }
 
-      const result = await action.execute({
-        organizationId: parsed.data.organizationId,
-        userId: parsed.data.userId,
+      const execResult = await action.execute({
+        organizationId: incoming.organizationId,
+        userId: incoming.userId,
         connectorId: actionPayload.data.connectorId as ConnectorId,
         actionId: actionPayload.data.actionId,
         input: actionInputParsed.data,
         secret,
-        env: {
-          githubApiBaseUrl: actionPayload.data.env?.githubApiBaseUrl ?? "https://api.github.com",
-        },
+        env: { githubApiBaseUrl: actionPayload.data.env?.githubApiBaseUrl ?? "https://api.github.com" },
         fetchImpl: fetch,
       });
 
-      ws.send(
-        JSON.stringify({
-          type: "execute_result",
-          requestId,
-          status: result.status,
-          ...(result.output !== undefined ? { output: result.output } : {}),
-          ...(result.status === "failed" ? { error: result.error } : {}),
-        })
-      );
+      const result = {
+        type: "execute_result",
+        requestId,
+        status: execResult.status,
+        ...(execResult.output !== undefined ? { output: execResult.output } : {}),
+        ...(execResult.status === "failed" ? { error: execResult.error } : {}),
+      };
+      pendingResults.set(requestId, result);
+      if (safeSend(ws, result)) {
+        pendingResults.delete(requestId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "EXECUTION_FAILED";
-      ws.send(JSON.stringify({ type: "execute_result", requestId, status: "failed", error: message }));
+      const result = { type: "execute_result", requestId, status: "failed", error: message };
+      pendingResults.set(requestId, result);
+      if (safeSend(ws, result)) {
+        pendingResults.delete(requestId);
+      }
     }
-  });
+  }
 
-  ws.on("close", () => {
+  function reconnectDelayMs(attempt: number): number {
+    const base = Math.min(30_000, 500 * 2 ** Math.min(10, attempt));
+    const jitter = Math.floor(Math.random() * 250);
+    return base + jitter;
+  }
+
+  let attempt = 0;
+  // Keep the agent alive and reconnect on gateway restarts.
+  // The gateway accepts orphan results and stores them, so re-sending is safe.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const ws = new WebSocket(config.gatewayWsUrl, {
+      headers: { authorization: `Bearer ${config.agentToken}` },
+    });
+
+    let pingTimer: NodeJS.Timeout | null = null;
+    const closed = new Promise<void>((resolve) => {
+      ws.on("close", () => resolve());
+      ws.on("error", () => resolve());
+    });
+
+    ws.on("open", () => {
+      attempt = 0;
+      safeSend(ws, hello);
+      for (const result of pendingResults.values()) {
+        safeSend(ws, result);
+      }
+      pingTimer = setInterval(() => {
+        const ping: GatewayAgentPingMessage = { type: "ping", ts: Date.now() };
+        safeSend(ws, ping);
+      }, pingIntervalMs);
+    });
+
+    ws.on("message", async (data) => {
+      const raw = typeof data === "string" ? data : data.toString("utf8");
+      const message = safeJsonParse(raw);
+      if (!message || typeof message !== "object") {
+        return;
+      }
+      const type = (message as { type?: unknown }).type;
+      if (type !== "execute") {
+        return;
+      }
+
+      const parsed = z
+        .object({
+          type: z.literal("execute"),
+          requestId: z.string().min(1),
+          organizationId: z.string().uuid(),
+          userId: z.string().uuid(),
+          kind: z.enum(["connector.action", "agent.execute"]),
+          payload: z.unknown(),
+          secret: z.string().min(1).optional(),
+        })
+        .safeParse(message) as { success: boolean; data?: GatewayServerExecuteMessage };
+
+      if (!parsed.success || !parsed.data) {
+        return;
+      }
+
+      await handleExecute(ws, parsed.data);
+    });
+
+    await closed;
+
     if (pingTimer) {
       clearInterval(pingTimer);
     }
-    process.exit(0);
-  });
 
-  ws.on("error", () => {
-    if (pingTimer) {
-      clearInterval(pingTimer);
-    }
-    process.exit(1);
-  });
-
-  await new Promise<void>((resolve) => {
-    ws.once("open", () => resolve());
-  });
-
-  // Keep process alive.
-  await new Promise<void>(() => {});
+    attempt += 1;
+    const delay = reconnectDelayMs(attempt);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 async function pairAgent(input: {
