@@ -9,6 +9,7 @@ dist
 out
 artifacts
 .community-mirror
+.playwright-cli
 *.tsbuildinfo
 *.log
 .DS_Store

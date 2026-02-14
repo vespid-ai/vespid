@@ -27,6 +27,17 @@
     "show": "展开",
     "hide": "收起"
   },
+  "settings": {
+    "theme": {
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统"
+    },
+    "density": {
+      "comfortable": "舒适",
+      "compact": "紧凑"
+    }
+  },
   "org": {
     "active": "当前组织",
     "noActive": "未选择组织",

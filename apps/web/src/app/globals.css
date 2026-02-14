@@ -2,16 +2,33 @@
 
 :root {
   /* RGB triples so Tailwind can do rgb(var(--token) / alpha). */
-  --bg: 246 247 251;
-  --panel: 255 255 255;
-  --panel-elev: 255 255 255;
+  --surface-0: 246 247 251;
+  --surface-1: 255 255 255;
+  --surface-2: 252 253 255;
+  --surface-3: 246 248 252;
+
   --border: 214 221 232;
-  --text: 17 24 39;
-  --muted: 100 116 139;
-  --accent: 20 184 166;
+  --text: 15 23 42;
+  --muted: 71 85 105;
+
+  /* Brand tokens (Fluent-ish). */
+  --brand: 37 99 235;
+  --brand-2: 56 189 248;
+  --focus: 59 130 246;
+
   --danger: 239 68 68;
   --warn: 245 158 11;
   --ok: 16 185 129;
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+
+  /* Compatibility aliases used by existing components. */
+  --bg: var(--surface-0);
+  --panel: var(--surface-1);
+  --panel-elev: var(--surface-2);
+  --accent: var(--brand);
 }
 
 html,
@@ -23,15 +40,35 @@ body {
   margin: 0;
   color: rgb(var(--text));
   background:
-    radial-gradient(1200px 700px at 85% -10%, rgb(94 234 212 / 0.35), transparent 55%),
-    radial-gradient(900px 700px at 10% 0%, rgb(56 189 248 / 0.18), transparent 55%),
-    radial-gradient(1000px 800px at 50% 115%, rgb(165 243 252 / 0.25), transparent 60%),
-    linear-gradient(rgb(var(--bg)), rgb(var(--bg)));
+    radial-gradient(1200px 700px at 88% -12%, rgb(var(--brand) / 0.18), transparent 58%),
+    radial-gradient(900px 700px at 8% 0%, rgb(var(--brand-2) / 0.16), transparent 56%),
+    radial-gradient(1100px 900px at 50% 115%, rgb(16 185 129 / 0.10), transparent 60%),
+    linear-gradient(rgb(var(--surface-0)), rgb(var(--surface-0)));
   background-attachment: fixed;
 }
 
 ::selection {
   background: rgb(var(--accent) / 0.25);
+}
+
+/* Dark theme (applied via next-themes: html.dark). */
+.dark {
+  --surface-0: 6 8 14;
+  --surface-1: 10 14 23;
+  --surface-2: 15 23 42;
+  --surface-3: 20 30 52;
+
+  --border: 51 65 85;
+  --text: 226 232 240;
+  --muted: 148 163 184;
+
+  --brand: 56 189 248;
+  --brand-2: 34 211 238;
+  --focus: 56 189 248;
+
+  --danger: 248 113 113;
+  --warn: 251 191 36;
+  --ok: 52 211 153;
 }
 
 /* Subtle grain without external assets. */
@@ -40,4 +77,15 @@ body {
     radial-gradient(circle at 1px 1px, rgb(2 6 23 / 0.06) 1px, transparent 0);
   background-size: 14px 14px;
   background-position: 0 0;
+}
+
+/* Better default text rendering in dense dashboards. */
+:where(a) {
+  color: inherit;
+  text-decoration-color: rgb(var(--border));
+  text-underline-offset: 3px;
+}
+
+:where(a:hover) {
+  text-decoration-color: rgb(var(--accent) / 0.55);
 }

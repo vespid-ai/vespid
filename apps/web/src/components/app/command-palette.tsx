@@ -12,21 +12,33 @@ export type CommandPaletteItem = {
   icon?: LucideIcon;
 };
 
-export function CommandPalette({ items, locale }: { items: CommandPaletteItem[]; locale: string }) {
+export function CommandPalette({
+  items,
+  locale,
+  open: controlledOpen,
+  onOpenChange,
+}: {
+  items: CommandPaletteItem[];
+  locale: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setOpen((prev) => !prev);
+        setOpen(!open);
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [open, setOpen]);
 
   const grouped = useMemo(() => {
     const app = items.filter((i) => i.href.startsWith(`/${locale}/`));

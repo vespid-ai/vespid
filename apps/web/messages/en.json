@@ -27,6 +27,17 @@
     "show": "Show",
     "hide": "Hide"
   },
+  "settings": {
+    "theme": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
+    "density": {
+      "comfortable": "Comfortable",
+      "compact": "Compact"
+    }
+  },
   "org": {
     "active": "Active organization",
     "noActive": "No active org",

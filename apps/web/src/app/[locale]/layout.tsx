@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { Space_Grotesk } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import { notFound } from "next/navigation";
 import { NextIntlClientProvider } from "next-intl";
 import { getMessages, setRequestLocale } from "next-intl/server";
@@ -14,17 +16,8 @@ const fontDisplay = Space_Grotesk({
   weight: ["400", "500", "600", "700"],
 });
 
-const fontSans = IBM_Plex_Sans({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  weight: ["400", "500", "600", "700"],
-});
-
-const fontMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
-  weight: ["400", "500", "600"],
-});
+const fontSans = GeistSans;
+const fontMono = GeistMono;
 
 export const metadata: Metadata = {
   title: {
@@ -54,8 +47,12 @@ export default async function LocaleLayout({
   const messages = await getMessages();
 
   return (
-    <html lang={locale ?? defaultLocale} className={`${fontDisplay.variable} ${fontSans.variable} ${fontMono.variable}`}>
-      <body className="min-h-dvh bg-grain text-text antialiased">
+    <html
+      lang={locale ?? defaultLocale}
+      suppressHydrationWarning
+      className={`${fontDisplay.variable} ${fontSans.variable} ${fontMono.variable}`}
+    >
+      <body className="min-h-dvh bg-grain text-text antialiased font-sans">
         <NextIntlClientProvider messages={messages}>
           <Providers>{children}</Providers>
         </NextIntlClientProvider>
