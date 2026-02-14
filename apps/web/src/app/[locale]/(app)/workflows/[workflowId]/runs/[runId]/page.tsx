@@ -20,8 +20,8 @@ import { Badge } from "../../../../../../../components/ui/badge";
 import { Button } from "../../../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../../../components/ui/card";
 import { Chip } from "../../../../../../../components/ui/chip";
-import { CodeBlock } from "../../../../../../../components/ui/code-block";
 import { Input } from "../../../../../../../components/ui/input";
+import { JsonExplorer } from "../../../../../../../components/ui/json-explorer";
 import { ScrollArea } from "../../../../../../../components/ui/scroll-area";
 import { Separator } from "../../../../../../../components/ui/separator";
 import { useActiveOrgId } from "../../../../../../../lib/hooks/use-active-org-id";
@@ -570,7 +570,11 @@ export default function RunReplayPage() {
                       <CardDescription>{t("runs.runHint")}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      {run ? <CodeBlock value={run} /> : <div className="text-sm text-muted">{t("runs.noRun")}</div>}
+                      {run ? (
+                        <JsonExplorer value={run} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                      ) : (
+                        <div className="text-sm text-muted">{t("runs.noRun")}</div>
+                      )}
                     </CardContent>
                   </Card>
 
@@ -582,7 +586,11 @@ export default function RunReplayPage() {
                       <CardDescription>{selectedEvent ? eventKind(selectedEvent as any) : t("runs.selectEvent")}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      {selectedEvent ? <CodeBlock value={selectedEvent} /> : <div className="text-sm text-muted">{t("runs.noEvent")}</div>}
+                      {selectedEvent ? (
+                        <JsonExplorer value={selectedEvent} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                      ) : (
+                        <div className="text-sm text-muted">{t("runs.noEvent")}</div>
+                      )}
                     </CardContent>
                   </Card>
                 </div>
@@ -632,7 +640,7 @@ export default function RunReplayPage() {
                               {sectionInputs === undefined ? (
                                 <div className="text-sm text-muted">-</div>
                               ) : (
-                                <CodeBlock value={sectionInputs} />
+                                <JsonExplorer value={sectionInputs} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
                               )}
                             </div>
                           </div>
@@ -642,7 +650,7 @@ export default function RunReplayPage() {
                               {sectionOutputs === undefined ? (
                                 <div className="text-sm text-muted">-</div>
                               ) : (
-                                <CodeBlock value={sectionOutputs} />
+                                <JsonExplorer value={sectionOutputs} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
                               )}
                             </div>
                           </div>
@@ -651,7 +659,11 @@ export default function RunReplayPage() {
                         <div>
                           <div className="text-xs font-medium text-muted">{t("runs.sectionErrors")}</div>
                           <div className="mt-2 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
-                            {sectionErrors === undefined ? <div className="text-sm text-muted">-</div> : <CodeBlock value={sectionErrors} />}
+                            {sectionErrors === undefined ? (
+                              <div className="text-sm text-muted">-</div>
+                            ) : (
+                              <JsonExplorer value={sectionErrors} pinnedPaths={pinnedPaths} onPinPath={addPinPath} />
+                            )}
                           </div>
                         </div>
                       </div>

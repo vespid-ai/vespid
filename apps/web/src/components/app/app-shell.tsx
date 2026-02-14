@@ -170,7 +170,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           sidebarCollapsed ? "grid-cols-[84px_1fr]" : "grid-cols-[288px_1fr]"
         )}
       >
-        <aside className="sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur">
+        <aside
+          className={cn(
+            "sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur",
+            "relative",
+            "before:content-[''] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/45 before:to-transparent",
+            "after:content-[''] after:absolute after:inset-x-10 after:top-0 after:h-10 after:bg-gradient-to-b after:from-brand/14 after:to-transparent after:blur-xl after:pointer-events-none"
+          )}
+        >
           <div className={cn("flex items-center gap-2 px-3 py-3", sidebarCollapsed ? "justify-center" : "px-4")}
           >
             <div className="grid h-9 w-9 place-items-center rounded-[var(--radius-sm)] border border-border bg-panelElev/70">
@@ -205,10 +212,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                   href={href}
                   className={cn(
                     "group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm",
-                    "transition-colors",
+                    "transition-[box-shadow,background-color,color,border-color] duration-200",
                     active
                       ? "bg-surface2/60 text-text shadow-elev1"
-                      : "text-muted hover:bg-panel/55 hover:text-text",
+                      : "text-muted hover:bg-panel/55 hover:text-text hover:shadow-elev1",
                     sidebarCollapsed ? "justify-center px-2" : ""
                   )}
                 >
@@ -249,7 +256,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         </aside>
 
         <section className="min-w-0">
-          <header className="sticky top-4 z-10 mb-4 overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur">
+          <header
+            className={cn(
+              "sticky top-4 z-10 mb-4 overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur",
+              "relative",
+              "before:content-[''] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/45 before:to-transparent",
+              "after:content-[''] after:absolute after:inset-x-12 after:top-0 after:h-10 after:bg-gradient-to-b after:from-brand/14 after:to-transparent after:blur-xl after:pointer-events-none"
+            )}
+          >
             <div className="flex items-center justify-between gap-4 px-4 py-3 group-data-[density=compact]:py-2">
               <div className="flex items-center gap-2">
                 <Button
