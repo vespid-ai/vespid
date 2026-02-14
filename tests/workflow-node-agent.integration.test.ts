@@ -7,6 +7,7 @@ import { buildServer } from "../apps/api/src/server.js";
 import { buildGatewayServer } from "../apps/gateway/src/server.js";
 import { migrateUp } from "../packages/db/src/migrate.js";
 import { startWorkflowWorker } from "../apps/worker/src/main.js";
+import { startNodeAgent } from "../apps/node-agent/src/runtime.js";
 import { getCommunityConnectorAction } from "@vespid/connectors";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -71,6 +72,70 @@ async function startGithubStub() {
     getLastBody() {
       return lastBody;
     },
+    getRequestCount() {
+      return requestCount;
+    },
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function startDelayedGithubStub(delayMs: number) {
+  let requestCount = 0;
+  const expectedToken = `ghp_${crypto.randomBytes(12).toString("hex")}`;
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (req.method !== "POST" || !url.pathname.match(/^\/repos\/[^/]+\/[^/]+\/issues$/)) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+
+    requestCount += 1;
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const body = raw.length > 0 ? JSON.parse(raw) : null;
+
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
+
+    if (req.headers.authorization !== `Bearer ${expectedToken}`) {
+      res.statusCode = 401;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "bad token" }));
+      return;
+    }
+
+    res.statusCode = 201;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ number: 9, html_url: "https://github.local/issues/9", echo: body }));
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to start github stub server");
+  }
+
+  return {
+    expectedToken,
+    baseUrl: `http://127.0.0.1:${address.port}`,
     getRequestCount() {
       return requestCount;
     },
@@ -499,6 +564,180 @@ describe("workflow node-agent integration", () => {
     const agentPayload = agentSuccess?.payload as { taskId?: unknown } | undefined;
     expect(typeof agentPayload?.taskId).toBe("string");
     expect(String(agentPayload?.taskId)).toContain("-remote-task");
+  });
+
+  it("completes remote execution across a gateway restart", async () => {
+    if (!available || !api || !gatewayWsUrl || !gatewayBaseUrl) {
+      return;
+    }
+
+    const delayedStub = await startDelayedGithubStub(1500);
+    const oldGithubBaseUrl = process.env.GITHUB_API_BASE_URL;
+    process.env.GITHUB_API_BASE_URL = delayedStub.baseUrl;
+
+    let nodeAgent: Awaited<ReturnType<typeof startNodeAgent>> | null = null;
+    try {
+      const signup = await api.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: {
+          email: `node-agent-restart-${Date.now()}@example.com`,
+          password: "Password123",
+        },
+      });
+      expect(signup.statusCode).toBe(201);
+      const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+      const orgRes = await api.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { name: "Gateway Restart Org", slug: randomSlug("gw-restart-org") },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+      const secretRes = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { connectorId: "github", name: "token", value: delayedStub.expectedToken },
+      });
+      expect(secretRes.statusCode).toBe(201);
+      const secretId = (secretRes.json() as { secret: { id: string } }).secret.id;
+
+      const pairing = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(pairing.statusCode).toBe(201);
+      const pairingToken = (pairing.json() as { token: string }).token;
+
+      const pairRes = await api.inject({
+        method: "POST",
+        url: "/v1/agents/pair",
+        payload: {
+          pairingToken,
+          name: "restart-agent",
+          agentVersion: "test-agent",
+          capabilities: { kinds: ["connector.action"] },
+        },
+      });
+      expect(pairRes.statusCode).toBe(201);
+      const agentToken = (pairRes.json() as { agentToken: string }).agentToken;
+      const agentId = (pairRes.json() as { agentId: string }).agentId;
+
+      nodeAgent = await startNodeAgent({
+        agentId,
+        agentToken,
+        organizationId: orgId,
+        gatewayWsUrl,
+        apiBaseUrl: "http://127.0.0.1:3001",
+        name: "restart-agent",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["connector.action"] },
+      });
+      await nodeAgent.ready;
+
+      const createWorkflow = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          name: "Gateway Restart Workflow",
+          dsl: {
+            version: "v2",
+            trigger: { type: "trigger.manual" },
+            nodes: [
+              {
+                id: "node-github",
+                type: "connector.action",
+                config: {
+                  connectorId: "github",
+                  actionId: "issue.create",
+                  input: { repo: "octo/test", title: "Restart Issue", body: "Gateway restart test" },
+                  auth: { secretId },
+                  execution: { mode: "node" },
+                },
+              },
+            ],
+          },
+        },
+      });
+      expect(createWorkflow.statusCode).toBe(201);
+      const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+      const publish = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(publish.statusCode).toBe(200);
+
+      const runCreate = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { input: { key: "value" } },
+      });
+      expect(runCreate.statusCode).toBe(201);
+      const runId = (runCreate.json() as { run: { id: string } }).run.id;
+
+      // Wait until the worker has dispatched the node, then restart the gateway while the node-agent is still executing.
+      for (let index = 0; index < 40; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const events = await api.inject({
+          method: "GET",
+          url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=200`,
+          headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        });
+        expect(events.statusCode).toBe(200);
+        const body = events.json() as { events: Array<{ eventType: string }> };
+        if (body.events.some((e) => e.eventType === "node_dispatched")) {
+          break;
+        }
+      }
+
+      await gateway?.close();
+      const parsed = new URL(gatewayBaseUrl);
+      gateway = await buildGatewayServer();
+      await gateway.listen({ port: Number(parsed.port), host: "127.0.0.1" });
+
+      let finalStatus: string | null = null;
+      for (let index = 0; index < 160; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const runGet = await api.inject({
+          method: "GET",
+          url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+          headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        });
+        expect(runGet.statusCode).toBe(200);
+        finalStatus = (runGet.json() as { run: { status: string } }).run.status;
+        if (finalStatus === "succeeded" || finalStatus === "failed") {
+          break;
+        }
+      }
+
+      expect(finalStatus).toBe("succeeded");
+      expect(delayedStub.getRequestCount()).toBeGreaterThanOrEqual(1);
+
+      const eventsRes = await api.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=200`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(eventsRes.statusCode).toBe(200);
+      const eventsBody = eventsRes.json() as { events: Array<{ payload?: unknown; message?: string | null }> };
+      const raw = JSON.stringify(eventsBody);
+      expect(raw).not.toContain(delayedStub.expectedToken);
+    } finally {
+      process.env.GITHUB_API_BASE_URL = oldGithubBaseUrl;
+      await delayedStub.close();
+      if (nodeAgent) {
+        await nodeAgent.close();
+      }
+    }
   });
 
   it("routes connector.action only to agents that declare support", async () => {

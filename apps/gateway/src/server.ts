@@ -11,6 +11,7 @@ import type {
   GatewayDispatchRequest,
   GatewayDispatchResponse,
 } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR } from "@vespid/shared";
 import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "./results-store.js";
 
 type ConnectedAgent = {
@@ -20,7 +21,6 @@ type ConnectedAgent = {
   tokenHash: string;
   lastSeenAtMs: number;
   lastUsedAtMs: number;
-  inFlightCount: number;
   capabilities: Record<string, unknown> | null;
   name: string | null;
   agentVersion: string | null;
@@ -124,14 +124,19 @@ export async function buildGatewayServer(input?: {
   wsPath?: string;
   resultsStore?: ResultsStore;
 }) {
+  if (process.env.NODE_ENV === "production" && !process.env.REDIS_URL && !input?.resultsStore) {
+    throw new Error("REDIS_URL_REQUIRED_IN_PRODUCTION");
+  }
+
   const server = Fastify({
+    disableRequestLogging: true,
     logger: {
       level: process.env.GATEWAY_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info"),
       redact: {
         paths: [
           "req.headers.authorization",
           "req.headers.cookie",
-          "req.headers.x-gateway-token",
+          "req.headers['x-gateway-token']",
           "secret",
           "*.secret",
         ],
@@ -151,7 +156,22 @@ export async function buildGatewayServer(input?: {
     (process.env.REDIS_URL ? createRedisResultsStore(process.env.REDIS_URL) : createInMemoryResultsStore());
 
   const agentsByOrg = new Map<string, ConnectedAgent[]>();
+  const inFlightByAgentId = new Map<string, number>();
   const pendingByRequestId = new Map<string, PendingRequest>();
+  const dispatchedByRequestId = new Map<string, string>();
+  const asyncTimeoutByRequestId = new Map<string, NodeJS.Timeout>();
+
+  function getInFlight(agentId: string): number {
+    return inFlightByAgentId.get(agentId) ?? 0;
+  }
+
+  function incInFlight(agentId: string) {
+    inFlightByAgentId.set(agentId, getInFlight(agentId) + 1);
+  }
+
+  function decInFlight(agentId: string) {
+    inFlightByAgentId.set(agentId, Math.max(0, getInFlight(agentId) - 1));
+  }
 
   function selectAgent(
     orgId: string,
@@ -180,7 +200,7 @@ export async function buildGatewayServer(input?: {
       if (!capabilities.kinds.has(required.kind)) {
         continue;
       }
-      if (agent.inFlightCount >= capabilities.maxInFlight) {
+      if (getInFlight(agent.agentId) >= capabilities.maxInFlight) {
         continue;
       }
       if (required.kind === "connector.action" && required.connectorId && capabilities.connectors) {
@@ -201,8 +221,8 @@ export async function buildGatewayServer(input?: {
     for (const agent of fresh) {
       if (
         !best ||
-        agent.inFlightCount < best.inFlightCount ||
-        (agent.inFlightCount === best.inFlightCount && agent.lastUsedAtMs < best.lastUsedAtMs)
+        getInFlight(agent.agentId) < getInFlight(best.agentId) ||
+        (getInFlight(agent.agentId) === getInFlight(best.agentId) && agent.lastUsedAtMs < best.lastUsedAtMs)
       ) {
         best = agent;
       }
@@ -342,11 +362,13 @@ export async function buildGatewayServer(input?: {
       ...(parsed.data.secret ? { secret: parsed.data.secret } : {}),
     };
 
-    agent.inFlightCount += 1;
+    incInFlight(agent.agentId);
+    dispatchedByRequestId.set(requestId, agent.agentId);
     const response = await new Promise<GatewayDispatchResponse>((resolve) => {
       const timeout = setTimeout(() => {
         pendingByRequestId.delete(requestId);
-        agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
+        dispatchedByRequestId.delete(requestId);
+        decInFlight(agent.agentId);
         server.log.warn({
           event: "gateway_dispatch_timeout",
           orgId: parsed.data.organizationId,
@@ -354,7 +376,7 @@ export async function buildGatewayServer(input?: {
           requestId,
           timeoutMs,
         });
-        const result: GatewayDispatchResponse = { status: "failed", error: "NODE_EXECUTION_TIMEOUT" };
+        const result: GatewayDispatchResponse = { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout };
         void resultsStore.set(requestId, result, resultsTtlSec);
         resolve(result);
       }, timeoutMs);
@@ -372,7 +394,8 @@ export async function buildGatewayServer(input?: {
       } catch (error) {
         clearTimeout(timeout);
         pendingByRequestId.delete(requestId);
-        agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
+        dispatchedByRequestId.delete(requestId);
+        decInFlight(agent.agentId);
         removeAgent(agent.organizationId, agent.agentId);
         server.log.warn(
           {
@@ -384,7 +407,7 @@ export async function buildGatewayServer(input?: {
           },
           "gateway dispatch ws send failed"
         );
-        const result: GatewayDispatchResponse = { status: "failed", error: "AGENT_DISCONNECTED" };
+        const result: GatewayDispatchResponse = { status: "failed", error: REMOTE_EXEC_ERROR.AgentDisconnected };
         void resultsStore.set(requestId, result, resultsTtlSec);
         resolve(result);
       }
@@ -405,6 +428,7 @@ export async function buildGatewayServer(input?: {
     }
 
     const requestId = `${parsed.data.runId}:${parsed.data.nodeId}:${parsed.data.attemptCount}`;
+    const timeoutMs = parsed.data.timeoutMs ?? 60_000;
     let connectorId: string | null = null;
     if (parsed.data.kind === "connector.action") {
       const payloadParsed = connectorActionDispatchPayloadSchema.safeParse(parsed.data.payload);
@@ -458,11 +482,13 @@ export async function buildGatewayServer(input?: {
     };
 
     agent.lastUsedAtMs = Date.now();
-    agent.inFlightCount += 1;
+    incInFlight(agent.agentId);
+    dispatchedByRequestId.set(requestId, agent.agentId);
     try {
       agent.ws.send(JSON.stringify(message));
     } catch (error) {
-      agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
+      dispatchedByRequestId.delete(requestId);
+      decInFlight(agent.agentId);
       removeAgent(agent.organizationId, agent.agentId);
       server.log.warn(
         {
@@ -476,6 +502,38 @@ export async function buildGatewayServer(input?: {
       );
       return reply.status(503).send({ code: "NO_AGENT_AVAILABLE", message: "No node-agent is connected for this org" });
     }
+
+    const timeout = setTimeout(() => {
+      const dispatchedAgentId = dispatchedByRequestId.get(requestId);
+      if (!dispatchedAgentId) {
+        return;
+      }
+      dispatchedByRequestId.delete(requestId);
+      asyncTimeoutByRequestId.delete(requestId);
+      decInFlight(dispatchedAgentId);
+
+      server.log.warn({
+        event: "gateway_dispatch_timeout",
+        orgId: parsed.data.organizationId,
+        agentId: dispatchedAgentId,
+        requestId,
+        timeoutMs,
+        async: true,
+      });
+
+      void (async () => {
+        const existing = await resultsStore.get(requestId);
+        if (existing) {
+          return;
+        }
+        await resultsStore.set(
+          requestId,
+          { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout },
+          resultsTtlSec
+        );
+      })();
+    }, timeoutMs);
+    asyncTimeoutByRequestId.set(requestId, timeout);
 
     return reply.status(201).send({ requestId, dispatched: true });
   });
@@ -568,6 +626,18 @@ export async function buildGatewayServer(input?: {
         };
         await resultsStore.set(parsed.data.requestId, result, resultsTtlSec);
 
+        const asyncTimeout = asyncTimeoutByRequestId.get(parsed.data.requestId);
+        if (asyncTimeout) {
+          clearTimeout(asyncTimeout);
+          asyncTimeoutByRequestId.delete(parsed.data.requestId);
+        }
+
+        const dispatchedAgentId = dispatchedByRequestId.get(parsed.data.requestId);
+        if (dispatchedAgentId) {
+          dispatchedByRequestId.delete(parsed.data.requestId);
+          decInFlight(dispatchedAgentId);
+        }
+
         if (!pending) {
           server.log.info({
             event: "gateway_orphan_result_stored",
@@ -578,7 +648,6 @@ export async function buildGatewayServer(input?: {
           return;
         }
 
-        agent.inFlightCount = Math.max(0, agent.inFlightCount - 1);
         clearTimeout(pending.timeout);
         pendingByRequestId.delete(parsed.data.requestId);
         pending.resolve(result);
@@ -629,7 +698,6 @@ export async function buildGatewayServer(input?: {
       tokenHash,
       lastSeenAtMs: Date.now(),
       lastUsedAtMs: 0,
-      inFlightCount: 0,
       capabilities:
         agentRow.capabilities && typeof agentRow.capabilities === "object"
           ? (agentRow.capabilities as Record<string, unknown>)
@@ -651,9 +719,13 @@ export async function buildGatewayServer(input?: {
 
   server.addHook("onClose", async () => {
     wss.close();
+    for (const timeout of asyncTimeoutByRequestId.values()) {
+      clearTimeout(timeout);
+    }
+    asyncTimeoutByRequestId.clear();
     for (const pending of pendingByRequestId.values()) {
       clearTimeout(pending.timeout);
-      pending.resolve({ status: "failed", error: "GATEWAY_SHUTDOWN" });
+      pending.resolve({ status: "failed", error: REMOTE_EXEC_ERROR.GatewayShutdown });
     }
     pendingByRequestId.clear();
     await resultsStore.close();

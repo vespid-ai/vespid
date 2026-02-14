@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import WebSocket from "ws";
 import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
-import type { GatewayAgentHelloMessage, GatewayAgentPingMessage, GatewayServerExecuteMessage } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR, isRemoteExecErrorCode, type GatewayAgentHelloMessage, type GatewayAgentPingMessage, type GatewayServerExecuteMessage } from "@vespid/shared";
 import { resolveSandboxBackend, type SandboxBackend } from "./sandbox/index.js";
 
 export type NodeAgentConfig = {
@@ -81,6 +82,21 @@ function jsonLog(level: "info" | "warn" | "error", payload: Record<string, unkno
   }
   // eslint-disable-next-line no-console
   console.info(line);
+}
+
+async function loadTlsCaFromEnv(gatewayWsUrl: string): Promise<Buffer | null> {
+  const caFile = process.env.VESPID_AGENT_TLS_CA_FILE;
+  if (!caFile || caFile.trim().length === 0) {
+    return null;
+  }
+  if (!gatewayWsUrl.startsWith("wss://")) {
+    return null;
+  }
+  try {
+    return await fs.readFile(caFile);
+  } catch {
+    throw new Error("VESPID_AGENT_TLS_CA_FILE_INVALID");
+  }
 }
 
 export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNodeAgent> {
@@ -257,8 +273,9 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
         pendingResults.delete(requestId);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "EXECUTION_FAILED";
-      const result = { type: "execute_result", requestId, status: "failed", error: message };
+      const message = error instanceof Error ? error.message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
+      const safeError = isRemoteExecErrorCode(message) ? message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
+      const result = { type: "execute_result", requestId, status: "failed", error: safeError };
       pendingResults.set(requestId, result);
       if (safeSend(ws, result)) {
         pendingResults.delete(requestId);
@@ -273,6 +290,7 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
   }
 
   const sandbox = resolveSandboxBackend();
+  const tlsCa = await loadTlsCaFromEnv(config.gatewayWsUrl);
 
   const loop = (async () => {
     let attempt = 0;
@@ -284,6 +302,7 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
 
       const ws = new WebSocket(config.gatewayWsUrl, {
         headers: { authorization: `Bearer ${config.agentToken}` },
+        ...(tlsCa ? { ca: tlsCa } : {}),
       });
 
       let pingTimer: NodeJS.Timeout | null = null;

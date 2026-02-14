@@ -1242,7 +1242,9 @@ export async function buildServer(input?: {
 
     const agents = await store.listOrganizationAgents({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
     const nowMs = Date.now();
-    const onlineWindowMs = 45_000;
+    const staleMsRaw = Number(process.env.GATEWAY_AGENT_STALE_MS ?? 60_000);
+    const staleMs = Number.isFinite(staleMsRaw) ? staleMsRaw : 60_000;
+    const onlineWindowMs = Math.min(5 * 60_000, Math.max(30_000, staleMs));
 
     return {
       agents: agents.map((agent) => {

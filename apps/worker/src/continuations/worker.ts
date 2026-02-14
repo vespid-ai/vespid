@@ -12,6 +12,7 @@ import {
 import type { WorkflowExecutionResult, WorkflowExecutionStep } from "@vespid/workflow";
 import { workflowDslSchema } from "@vespid/workflow";
 import type { WorkflowRunJobPayload } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR } from "@vespid/shared";
 import { fetchGatewayResult } from "../gateway/client.js";
 import type { WorkflowContinuationJobPayload } from "./types.js";
 import { getWorkflowRetryBackoffMs } from "../queue/config.js";
@@ -152,12 +153,12 @@ export function startContinuationWorker(input: {
       const timedOut = timeoutAtMs !== null && Date.now() >= timeoutAtMs;
 
       const result = timedOut
-        ? { ok: true as const, result: { status: "failed" as const, error: "NODE_EXECUTION_TIMEOUT" } }
+        ? { ok: true as const, result: { status: "failed" as const, error: REMOTE_EXEC_ERROR.NodeExecutionTimeout } }
         : await fetchGatewayResult(payload.requestId);
 
       if (!result.ok) {
-        if (result.error === "RESULT_NOT_READY") {
-          throw new Error("RESULT_NOT_READY");
+        if (result.error === "RESULT_NOT_READY" || result.error === "GATEWAY_UNAVAILABLE") {
+          throw new Error(result.error);
         }
 
         await applyRemoteFailure({
@@ -182,7 +183,7 @@ export function startContinuationWorker(input: {
           payload,
           node,
           cursorNodeIndex,
-          errorMessage: result.result.error ?? "NODE_EXECUTION_FAILED",
+          errorMessage: result.result.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
           output: result.result.output ?? null,
           maxAttempts: run.maxAttempts,
         });

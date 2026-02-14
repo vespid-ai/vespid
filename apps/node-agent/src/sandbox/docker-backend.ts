@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import type { ExecuteShellTaskContext, SandboxBackend, SandboxExecuteResult, SandboxNetworkMode } from "./types.js";
 import { assertSubpath, ensureDir, resolveHome, sha256Hex, truncateString } from "./util.js";
+import { REMOTE_EXEC_ERROR } from "@vespid/shared";
 
 type DockerLimits = {
   timeoutMs: number;
@@ -243,7 +244,7 @@ export function createDockerBackend(): SandboxBackend {
       };
 
       if (result.timedOut) {
-        return { status: "failed", error: "NODE_EXECUTION_TIMEOUT", output };
+        return { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout, output };
       }
 
       if (result.exitCode === 0) {
@@ -254,11 +255,10 @@ export function createDockerBackend(): SandboxBackend {
         return { status: "failed", error: `DOCKER_EXIT_CODE:${result.exitCode}`, output };
       }
 
-      return { status: "failed", error: "DOCKER_FAILED", output };
+      return { status: "failed", error: REMOTE_EXEC_ERROR.DockerFailed, output };
     },
     async close() {
       return;
     },
   };
 }
-

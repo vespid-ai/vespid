@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GatewayDispatchRequest, GatewayDispatchResponse } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR, type GatewayDispatchRequest, type GatewayDispatchResponse } from "@vespid/shared";
 
 const dispatchResponseSchema = z.object({
   status: z.enum(["succeeded", "failed"]),
@@ -41,7 +41,7 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
   const baseUrl = getGatewayHttpUrl();
   const serviceToken = getGatewayServiceToken();
   if (!baseUrl || !serviceToken) {
-    return { status: "failed", error: "GATEWAY_NOT_CONFIGURED" };
+    return { status: "failed", error: REMOTE_EXEC_ERROR.GatewayNotConfigured };
   }
 
   const requestId = buildRequestId(input);
@@ -62,21 +62,21 @@ export async function dispatchViaGateway(input: GatewayDispatchRequest): Promise
   }
 
   const body = await response.text();
-  if (!response.ok) {
-    if (response.status === 503) {
-      return { status: "failed", error: "NO_AGENT_AVAILABLE" };
+    if (!response.ok) {
+      if (response.status === 503) {
+        return { status: "failed", error: REMOTE_EXEC_ERROR.NoAgentAvailable };
+      }
+      if (response.status >= 500) {
+        return await pollResult({ baseUrl, serviceToken, requestId, timeoutMs: input.timeoutMs ?? 60_000 });
+      }
+      return { status: "failed", error: REMOTE_EXEC_ERROR.GatewayDispatchFailed };
     }
-    if (response.status >= 500) {
-      return await pollResult({ baseUrl, serviceToken, requestId, timeoutMs: input.timeoutMs ?? 60_000 });
-    }
-    return { status: "failed", error: "GATEWAY_DISPATCH_FAILED" };
-  }
 
   const payload = body.length > 0 ? (JSON.parse(body) as unknown) : null;
-  const parsed = dispatchResponseSchema.safeParse(payload);
-  if (!parsed.success) {
-    return { status: "failed", error: "GATEWAY_RESPONSE_INVALID" };
-  }
+    const parsed = dispatchResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      return { status: "failed", error: REMOTE_EXEC_ERROR.GatewayResponseInvalid };
+    }
 
   return {
     status: parsed.data.status,
@@ -92,7 +92,7 @@ export async function dispatchViaGatewayAsync(input: GatewayDispatchRequest): Pr
   const baseUrl = getGatewayHttpUrl();
   const serviceToken = getGatewayServiceToken();
   if (!baseUrl || !serviceToken) {
-    return { ok: false, error: "GATEWAY_NOT_CONFIGURED" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayNotConfigured };
   }
 
   const requestId = buildRequestId(input);
@@ -108,36 +108,36 @@ export async function dispatchViaGatewayAsync(input: GatewayDispatchRequest): Pr
       body: JSON.stringify(input),
     });
   } catch {
-    return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayUnavailable };
   }
 
   const raw = await response.text();
   if (!response.ok) {
     if (response.status === 503) {
-      return { ok: false, error: "NO_AGENT_AVAILABLE" };
+      return { ok: false, error: REMOTE_EXEC_ERROR.NoAgentAvailable };
     }
-    return { ok: false, error: "GATEWAY_DISPATCH_FAILED" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayDispatchFailed };
   }
 
   const payload = raw.length > 0 ? (JSON.parse(raw) as unknown) : null;
   const parsed = asyncDispatchResponseSchema.safeParse(payload);
   if (!parsed.success) {
-    return { ok: false, error: "GATEWAY_RESPONSE_INVALID" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayResponseInvalid };
   }
   if (parsed.data.requestId !== requestId) {
-    return { ok: false, error: "GATEWAY_RESPONSE_INVALID" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayResponseInvalid };
   }
   return { ok: true, requestId, dispatched: parsed.data.dispatched };
 }
 
 export async function fetchGatewayResult(requestId: string): Promise<
   | { ok: true; result: GatewayDispatchResponse }
-  | { ok: false; error: "RESULT_NOT_READY" | "GATEWAY_UNAVAILABLE" | "GATEWAY_RESPONSE_INVALID" }
+  | { ok: false; error: "RESULT_NOT_READY" | typeof REMOTE_EXEC_ERROR.GatewayUnavailable | typeof REMOTE_EXEC_ERROR.GatewayResponseInvalid }
 > {
   const baseUrl = getGatewayHttpUrl();
   const serviceToken = getGatewayServiceToken();
   if (!baseUrl || !serviceToken) {
-    return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayUnavailable };
   }
 
   try {
@@ -152,12 +152,12 @@ export async function fetchGatewayResult(requestId: string): Promise<
       return { ok: false, error: "RESULT_NOT_READY" };
     }
     if (!response.ok) {
-      return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+      return { ok: false, error: REMOTE_EXEC_ERROR.GatewayUnavailable };
     }
     const payload = await response.json();
     const parsed = dispatchResponseSchema.safeParse(payload);
     if (!parsed.success) {
-      return { ok: false, error: "GATEWAY_RESPONSE_INVALID" };
+      return { ok: false, error: REMOTE_EXEC_ERROR.GatewayResponseInvalid };
     }
     return {
       ok: true,
@@ -168,7 +168,7 @@ export async function fetchGatewayResult(requestId: string): Promise<
       },
     };
   } catch {
-    return { ok: false, error: "GATEWAY_UNAVAILABLE" };
+    return { ok: false, error: REMOTE_EXEC_ERROR.GatewayUnavailable };
   }
 }
 
@@ -197,7 +197,7 @@ async function pollResult(input: {
         const payload = await response.json();
         const parsed = dispatchResponseSchema.safeParse(payload);
         if (!parsed.success) {
-          return { status: "failed", error: "GATEWAY_RESPONSE_INVALID" };
+          return { status: "failed", error: REMOTE_EXEC_ERROR.GatewayResponseInvalid };
         }
         return {
           status: parsed.data.status,
@@ -211,5 +211,5 @@ async function pollResult(input: {
     await sleep(delay);
     delay = Math.min(2000, Math.floor(delay * 1.6));
   }
-  return { status: "failed", error: "NODE_EXECUTION_TIMEOUT" };
+  return { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout };
 }

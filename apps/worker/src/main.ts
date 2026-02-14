@@ -17,6 +17,7 @@ import {
   decryptSecret,
   loadEnterpriseProvider,
   parseKekFromEnv,
+  REMOTE_EXEC_ERROR,
   resolveWorkflowNodeExecutors,
   type EnterpriseProvider,
   type WorkflowNodeExecutor,
@@ -608,7 +609,7 @@ export async function processWorkflowRunJob(
       }
 
       if (nodeResult.status === "failed") {
-        const message = nodeResult.error ?? "NODE_EXECUTION_FAILED";
+        const message = nodeResult.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed;
         await appendEvent({
           eventType: "node_failed",
           level: "error",

@@ -263,5 +263,142 @@ describe("workflow node-agent docker integration", () => {
     const stdout = String(succeeded?.payload?.stdout ?? "");
     expect(stdout).toContain("hello");
   });
-});
 
+  it("maps docker timeouts to NODE_EXECUTION_TIMEOUT", async () => {
+    if (!available || !api || !gatewayWsUrl) {
+      return;
+    }
+
+    const workdirRoot = await fs.mkdtemp(path.join(os.tmpdir(), "vespid-agent-timeout-workdir-"));
+    process.env.VESPID_AGENT_EXEC_BACKEND = "docker";
+    process.env.VESPID_AGENT_WORKDIR_ROOT = workdirRoot;
+    process.env.VESPID_AGENT_DOCKER_IMAGE = process.env.VESPID_AGENT_DOCKER_IMAGE ?? "node:24-alpine";
+    process.env.VESPID_AGENT_DOCKER_NETWORK_DEFAULT = "none";
+
+    const signup = await api.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `docker-timeout-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+    const orgRes = await api.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Docker Timeout Org", slug: randomSlug("docker-timeout-org") },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const pairing = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(pairing.statusCode).toBe(201);
+    const pairingToken = (pairing.json() as { token: string }).token;
+
+    const pairRes = await api.inject({
+      method: "POST",
+      url: "/v1/agents/pair",
+      payload: {
+        pairingToken,
+        name: "docker-agent-timeout",
+        agentVersion: "test-agent",
+        capabilities: { kinds: ["agent.execute"] },
+      },
+    });
+    expect(pairRes.statusCode).toBe(201);
+    const agentToken = (pairRes.json() as { agentToken: string }).agentToken;
+
+    if (nodeAgent) {
+      await nodeAgent.close();
+      nodeAgent = null;
+    }
+
+    nodeAgent = await startNodeAgent({
+      agentId: (pairRes.json() as { agentId: string }).agentId,
+      agentToken,
+      organizationId: orgId,
+      gatewayWsUrl,
+      apiBaseUrl: "http://127.0.0.1:3001",
+      name: "docker-agent-timeout",
+      agentVersion: "test-agent",
+      capabilities: { kinds: ["agent.execute"] },
+    });
+    await nodeAgent.ready;
+
+    const createWorkflow = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        name: "Docker Timeout Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [
+            {
+              id: "node-timeout",
+              type: "agent.execute",
+              config: {
+                execution: { mode: "node" },
+                task: { type: "shell", script: "sleep 3; echo done", shell: "sh" },
+                sandbox: { backend: "docker", network: "none", timeoutMs: 1000 },
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publish = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(publish.statusCode).toBe(200);
+
+    const runCreate = await api.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { input: { key: "value" } },
+    });
+    expect(runCreate.statusCode).toBe(201);
+    const runId = (runCreate.json() as { run: { id: string } }).run.id;
+
+    let finalStatus: string | null = null;
+    for (let index = 0; index < 180; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const runGet = await api.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(runGet.statusCode).toBe(200);
+      finalStatus = (runGet.json() as { run: { status: string } }).run.status;
+      if (finalStatus === "succeeded" || finalStatus === "failed") {
+        break;
+      }
+    }
+    expect(finalStatus).toBe("failed");
+
+    const eventsRes = await api.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runId}/events?limit=200`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(eventsRes.statusCode).toBe(200);
+    const eventsBody = eventsRes.json() as { events: Array<{ eventType: string; message?: string | null }> };
+    const nodeFailed = eventsBody.events.find((e) => e.eventType === "node_failed");
+    expect(nodeFailed?.message).toBe("NODE_EXECUTION_TIMEOUT");
+  });
+});

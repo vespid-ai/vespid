@@ -42,6 +42,7 @@ pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-ba
 Notes:
 - Pairing tokens are short-lived (15 minutes) and single-use.
 - The agent token is returned once and stored locally in `~/.vespid/agent.json` by default.
+- The `/agents` API reports `online/offline` by comparing `last_seen_at` to `GATEWAY_AGENT_STALE_MS` (clamped).
 
 ## Verifying Remote Execution
 1. Create a workflow containing a `connector.action` node with:
@@ -99,5 +100,7 @@ LLM credential pass-through:
 - Never log `secret` values. Gateway and agent handlers must treat secrets as sensitive.
 - In production, run gateway behind a TLS terminator / reverse proxy (`wss://` externally).
   - `ws://` inside a trusted private network is acceptable.
+- For `wss://` with a private CA (dev/prod), configure the node-agent with a custom CA bundle:
+  - `VESPID_AGENT_TLS_CA_FILE=/absolute/path/to/ca.pem`
 - Never expose `POST /internal/v1/dispatch` publicly.
   - Restrict by network policy and require `GATEWAY_SERVICE_TOKEN`.

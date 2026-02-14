@@ -14,7 +14,7 @@
     "start": "node dist/cli.js",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --exclude 'dist/**' --passWithNoTests"
   },
   "dependencies": {
     "@vespid/connectors": "workspace:*",
