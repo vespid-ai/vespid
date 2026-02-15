@@ -42,6 +42,11 @@
 - Node-agent sandbox backends:
   - Community edition supports a Docker backend for `agent.execute` shell tasks (hardened container, strict limits).
   - A provider backend hook is reserved for enterprise to integrate fast-start sandboxes (e.g. e2b.dev-style), loaded dynamically at runtime.
+- Node host connectivity (sessions, MVP):
+  - Interactive sessions are stored in PostgreSQL (`agent_sessions`, `agent_session_events`) and are tenant-scoped under RLS.
+  - Control clients connect to the gateway (WS) to stream session events and send messages.
+  - Sessions are pinned to a node host for consistent context; routing may use control-plane tags.
+  - Sessions are BYOK on node hosts: the gateway does not deliver provider credentials.
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
@@ -80,6 +85,11 @@
   - `POST /v1/orgs/:orgId/agents/pairing-tokens` (`X-Org-Id` required, owner/admin only)
   - `POST /v1/orgs/:orgId/agents/:agentId/revoke` (`X-Org-Id` required, owner/admin only)
   - `POST /v1/agents/pair` (pairing token only)
+- Sessions:
+  - `POST /v1/orgs/:orgId/sessions` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/sessions` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/sessions/:sessionId` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/sessions/:sessionId/events` (`X-Org-Id` required)
 - Metadata:
   - `GET /v1/meta/capabilities`
   - `GET /v1/meta/connectors`
