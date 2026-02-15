@@ -1,5 +1,7 @@
 "use client";
 
+import "@xyflow/react/dist/style.css";
+
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -16,6 +18,7 @@ import { Label } from "../../../../../components/ui/label";
 import { Skeleton } from "../../../../../components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../components/ui/tabs";
 import { Textarea } from "../../../../../components/ui/textarea";
+import { WorkflowGraphEditor } from "../../../../../components/app/workflow-graph-editor";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import {
   type WorkflowRun,
@@ -264,7 +267,7 @@ export default function WorkflowDetailPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="runs">
+      <Tabs defaultValue="editor">
         <TabsList>
           <TabsTrigger value="runs">{t("workflows.runs")}</TabsTrigger>
           <TabsTrigger value="overview">{t("workflows.detail.tabOverview")}</TabsTrigger>
@@ -373,21 +376,8 @@ export default function WorkflowDetailPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="editor" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("workflows.detail.editorStubTitle")}</CardTitle>
-              <CardDescription>{t("workflows.detail.editorStubHint")}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-sm text-muted">Graph editor (v3) is available.</div>
-                <Button asChild size="sm" variant="accent">
-                  <Link href={`/${locale}/workflows/${workflowId}/graph`}>Open Graph Editor</Link>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+        <TabsContent value="editor" className="mt-4" forceMount>
+          <WorkflowGraphEditor variant="embedded" locale={locale} workflowId={workflowId} />
         </TabsContent>
 
         <TabsContent value="revisions" className="mt-4">
