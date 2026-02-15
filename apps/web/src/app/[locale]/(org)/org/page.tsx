@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { apiFetch } from "../../../../lib/api";
 import { getActiveOrgId, getKnownOrgIds, setActiveOrgId, subscribeActiveOrg } from "../../../../lib/org-context";
@@ -34,24 +34,33 @@ export default function OrganizationPage() {
   const t = useTranslations();
 
   const [orgName, setOrgName] = useState("Acme");
-  const [orgSlug, setOrgSlug] = useState(`acme-${Date.now()}`);
+  // Avoid hydration mismatches by not using Date.now() during initial render.
+  const [orgSlug, setOrgSlug] = useState("acme");
   const [orgId, setOrgId] = useState("");
   const [inviteEmail, setInviteEmail] = useState("member@example.com");
   const [result, setResult] = useState<unknown>(null);
   const [showDebug, setShowDebug] = useState(false);
 
-  const recentOrgs = useMemo(() => getKnownOrgIds(), [orgId]);
+  // Avoid reading localStorage during the server render / initial hydration pass.
+  const [recentOrgs, setRecentOrgs] = useState<string[]>([]);
 
   useEffect(() => {
+    // Generate a default slug after hydration. Keep user edits intact.
+    setOrgSlug((prev) => (prev === "acme" ? `acme-${Date.now()}` : prev));
+
     const current = getActiveOrgId();
     if (current) {
       setOrgId(current);
     }
 
+    // Local-only recent org list.
+    setRecentOrgs(getKnownOrgIds());
+
     return subscribeActiveOrg((value) => {
       if (value) {
         setOrgId(value);
       }
+      setRecentOrgs(getKnownOrgIds());
     });
   }, []);
 
