@@ -1,5 +1,6 @@
 import { relations, sql } from "drizzle-orm";
 import {
+  bigserial,
   customType,
   index,
   integer,
@@ -244,6 +245,31 @@ export const agentToolsets = pgTable("agent_toolsets", {
   agentToolsetsPublicSlugIdx: index("agent_toolsets_public_slug_idx").on(table.publicSlug),
 }));
 
+export const toolsetBuilderSessions = pgTable("toolset_builder_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  status: text("status").notNull(),
+  llm: jsonb("llm").notNull(),
+  latestIntent: text("latest_intent"),
+  selectedComponentKeys: jsonb("selected_component_keys").notNull().default(sql`'[]'::jsonb`),
+  finalDraft: jsonb("final_draft"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  toolsetBuilderSessionsOrgCreatedAtIdx: index("toolset_builder_sessions_org_created_at_idx").on(table.organizationId, table.createdAt),
+}));
+
+export const toolsetBuilderTurns = pgTable("toolset_builder_turns", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  sessionId: uuid("session_id").notNull().references(() => toolsetBuilderSessions.id, { onDelete: "cascade" }),
+  role: text("role").notNull(),
+  messageText: text("message_text").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  toolsetBuilderTurnsSessionCreatedAtIdx: index("toolset_builder_turns_session_created_at_idx").on(table.sessionId, table.createdAt),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
@@ -254,6 +280,7 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   agents: many(organizationAgents),
   agentPairingTokens: many(agentPairingTokens),
   toolsets: many(agentToolsets),
+  toolsetBuilderSessions: many(toolsetBuilderSessions),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -262,6 +289,25 @@ export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(authSessions),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
+}));
+
+export const toolsetBuilderSessionsRelations = relations(toolsetBuilderSessions, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [toolsetBuilderSessions.organizationId],
+    references: [organizations.id],
+  }),
+  createdByUser: one(users, {
+    fields: [toolsetBuilderSessions.createdByUserId],
+    references: [users.id],
+  }),
+  turns: many(toolsetBuilderTurns),
+}));
+
+export const toolsetBuilderTurnsRelations = relations(toolsetBuilderTurns, ({ one }) => ({
+  session: one(toolsetBuilderSessions, {
+    fields: [toolsetBuilderTurns.sessionId],
+    references: [toolsetBuilderSessions.id],
+  }),
 }));
 
 export const membershipsRelations = relations(memberships, ({ one }) => ({
@@ -357,3 +403,5 @@ export type DbConnectorSecret = typeof connectorSecrets.$inferSelect;
 export type DbOrganizationAgent = typeof organizationAgents.$inferSelect;
 export type DbAgentPairingToken = typeof agentPairingTokens.$inferSelect;
 export type DbAgentToolset = typeof agentToolsets.$inferSelect;
+export type DbToolsetBuilderSession = typeof toolsetBuilderSessions.$inferSelect;
+export type DbToolsetBuilderTurn = typeof toolsetBuilderTurns.$inferSelect;

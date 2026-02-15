@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
+import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type {
   AppStore,
   AgentToolsetRecord,
@@ -16,6 +16,8 @@ import type {
   WorkflowRecord,
   WorkflowRunEventRecord,
   WorkflowRunRecord,
+  ToolsetBuilderSessionRecord,
+  ToolsetBuilderTurnRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -51,6 +53,9 @@ export class MemoryAppStore implements AppStore {
   >();
   private organizationAgentIdByTokenHash = new Map<string, string>();
   private toolsets = new Map<string, AgentToolsetRecord>();
+  private toolsetBuilderSessions = new Map<string, ToolsetBuilderSessionRecord>();
+  private toolsetBuilderTurnsBySessionId = new Map<string, ToolsetBuilderTurnRecord[]>();
+  private toolsetBuilderTurnSeq = 0;
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -832,6 +837,29 @@ export class MemoryAppStore implements AppStore {
     };
   }
 
+  async loadConnectorSecretValue(input: { organizationId: string; actorUserId: string; secretId: string }): Promise<string> {
+    const secret = this.connectorSecrets.get(input.secretId);
+    if (!secret || secret.organizationId !== input.organizationId) {
+      throw new Error("SECRET_NOT_FOUND");
+    }
+
+    const kek = parseKekFromEnv();
+    return decryptSecret({
+      encrypted: {
+        kekId: secret.kekId,
+        dekCiphertext: secret.dekCiphertext,
+        dekIv: secret.dekIv,
+        dekTag: secret.dekTag,
+        secretCiphertext: secret.secretCiphertext,
+        secretIv: secret.secretIv,
+        secretTag: secret.secretTag,
+      },
+      resolveKek(kekId) {
+        return kekId === kek.kekId ? kek.kekKeyBytes : null;
+      },
+    });
+  }
+
   async rotateConnectorSecret(input: {
     organizationId: string;
     actorUserId: string;
@@ -1183,6 +1211,113 @@ export class MemoryAppStore implements AppStore {
     };
     this.toolsets.set(id, toolset);
     return toolset;
+  }
+
+  async createToolsetBuilderSession(input: { organizationId: string; actorUserId: string; llm: unknown; latestIntent?: string | null }) {
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const record: ToolsetBuilderSessionRecord = {
+      id,
+      organizationId: input.organizationId,
+      createdByUserId: input.actorUserId,
+      status: "ACTIVE",
+      llm: input.llm,
+      latestIntent: input.latestIntent ?? null,
+      selectedComponentKeys: [],
+      finalDraft: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.toolsetBuilderSessions.set(id, record);
+    this.toolsetBuilderTurnsBySessionId.set(id, []);
+    return record;
+  }
+
+  async appendToolsetBuilderTurn(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    role: "USER" | "ASSISTANT";
+    messageText: string;
+  }) {
+    const session = this.toolsetBuilderSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      throw new Error("TOOLSET_BUILDER_SESSION_NOT_FOUND");
+    }
+
+    this.toolsetBuilderTurnSeq += 1;
+    const turn: ToolsetBuilderTurnRecord = {
+      id: this.toolsetBuilderTurnSeq,
+      sessionId: input.sessionId,
+      role: input.role,
+      messageText: input.messageText,
+      createdAt: nowIso(),
+    };
+    const list = this.toolsetBuilderTurnsBySessionId.get(input.sessionId) ?? [];
+    list.push(turn);
+    this.toolsetBuilderTurnsBySessionId.set(input.sessionId, list);
+    return turn;
+  }
+
+  async listToolsetBuilderTurns(input: { organizationId: string; actorUserId: string; sessionId: string; limit?: number }) {
+    const session = this.toolsetBuilderSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      throw new Error("TOOLSET_BUILDER_SESSION_NOT_FOUND");
+    }
+    const list = this.toolsetBuilderTurnsBySessionId.get(input.sessionId) ?? [];
+    const limit = typeof input.limit === "number" && Number.isFinite(input.limit) ? Math.max(1, Math.floor(input.limit)) : 100;
+    return list.slice(Math.max(0, list.length - limit));
+  }
+
+  async getToolsetBuilderSessionById(input: { organizationId: string; actorUserId: string; sessionId: string }) {
+    const session = this.toolsetBuilderSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return null;
+    }
+    return session;
+  }
+
+  async updateToolsetBuilderSessionSelection(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    latestIntent?: string | null;
+    selectedComponentKeys: string[];
+  }) {
+    const existing = this.toolsetBuilderSessions.get(input.sessionId) ?? null;
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return null;
+    }
+    const next: ToolsetBuilderSessionRecord = {
+      ...existing,
+      ...(input.latestIntent !== undefined ? { latestIntent: input.latestIntent } : {}),
+      selectedComponentKeys: input.selectedComponentKeys,
+      updatedAt: nowIso(),
+    };
+    this.toolsetBuilderSessions.set(existing.id, next);
+    return next;
+  }
+
+  async finalizeToolsetBuilderSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    selectedComponentKeys: string[];
+    finalDraft: unknown;
+  }) {
+    const existing = this.toolsetBuilderSessions.get(input.sessionId) ?? null;
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return null;
+    }
+    const next: ToolsetBuilderSessionRecord = {
+      ...existing,
+      status: "FINALIZED",
+      selectedComponentKeys: input.selectedComponentKeys,
+      finalDraft: input.finalDraft,
+      updatedAt: nowIso(),
+    };
+    this.toolsetBuilderSessions.set(existing.id, next);
+    return next;
   }
 
   async attachMembership(input: {

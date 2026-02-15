@@ -18,6 +18,9 @@ import {
   type AppError as AppErrorType,
   validateAgentSkillBundles,
   validateMcpPlaceholderPolicy,
+  type ToolsetCatalogItem,
+  type ToolsetDraft,
+  type ToolsetBuilderLlmConfig,
 } from "@vespid/shared";
 import { createConnectorCatalog } from "@vespid/connectors";
 import { generateCodeVerifier, generateState } from "arctic";
@@ -27,6 +30,9 @@ import { createStore } from "./store/index.js";
 import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
 import { workflowDslAnySchema, validateV3GraphConstraints } from "@vespid/workflow";
+import { getToolsetCatalog } from "./toolsets/catalog.js";
+import { openAiChatCompletion, type OpenAiChatMessage } from "./llm/openai.js";
+import { anthropicChatCompletion } from "./llm/anthropic.js";
 import {
   createBullMqWorkflowRunQueueProducer,
   createInMemoryWorkflowRunQueueProducer,
@@ -241,6 +247,37 @@ const toolsetAdoptSchema = z.object({
   description: z.string().max(2000).optional(),
 });
 
+const toolsetBuilderLlmSchema = z
+  .object({
+    provider: z.enum(["anthropic", "openai"]),
+    model: z.string().min(1).max(120),
+    auth: z.object({ secretId: z.string().uuid() }).strict(),
+  })
+  .strict();
+
+const toolsetBuilderCreateSessionSchema = z
+  .object({
+    intent: z.string().max(20_000).optional(),
+    llm: toolsetBuilderLlmSchema,
+  })
+  .strict();
+
+const toolsetBuilderChatSchema = z
+  .object({
+    message: z.string().min(1).max(20_000),
+    selectedComponentKeys: z.array(z.string().min(1).max(80)).max(50).default([]),
+  })
+  .strict();
+
+const toolsetBuilderFinalizeSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    description: z.string().max(2000).optional(),
+    visibility: toolsetVisibilitySchema.optional(),
+    selectedComponentKeys: z.array(z.string().min(1).max(80)).max(50).default([]),
+  })
+  .strict();
+
 const listWorkflowRunsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().min(1).optional(),
@@ -330,6 +367,22 @@ function toolsetNotFound(message = "Toolset not found"): AppError {
   return new AppError(404, { code: "TOOLSET_NOT_FOUND", message });
 }
 
+function toolsetBuilderSessionNotFound(message = "Toolset builder session not found"): AppError {
+  return new AppError(404, { code: "TOOLSET_BUILDER_SESSION_NOT_FOUND", message });
+}
+
+function toolsetBuilderSessionFinalized(message = "Toolset builder session is finalized"): AppError {
+  return new AppError(409, { code: "TOOLSET_BUILDER_SESSION_FINALIZED", message });
+}
+
+function llmSecretRequired(message = "LLM secret is required for this provider"): AppError {
+  return new AppError(422, { code: "LLM_SECRET_REQUIRED", message });
+}
+
+function toolsetBuilderInvalidModelOutput(details?: unknown): AppError {
+  return new AppError(400, { code: "TOOLSET_BUILDER_INVALID_MODEL_OUTPUT", message: "Invalid toolset builder model output", details });
+}
+
 function publicSlugConflict(message = "Public slug already exists"): AppError {
   return new AppError(409, { code: "PUBLIC_SLUG_CONFLICT", message });
 }
@@ -360,6 +413,82 @@ function decodeCursor<T>(value: string): T | null {
   } catch {
     return null;
   }
+}
+
+function extractJsonObjectCandidate(raw: string): string | null {
+  const trimmed = raw.trim();
+  const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fence && typeof fence[1] === "string") {
+    return fence[1].trim();
+  }
+
+  const first = trimmed.indexOf("{");
+  const last = trimmed.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    return trimmed.slice(first, last + 1);
+  }
+  return null;
+}
+
+function parseJsonObject(raw: string): unknown | null {
+  const direct = raw.trim();
+  const candidates = [direct, extractJsonObjectCandidate(direct)].filter((v): v is string => Boolean(v));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
+function redactLikelySecrets(text: string): string {
+  // Best-effort only; do not assume perfect redaction.
+  return text
+    .replace(/\bBearer\s+[A-Za-z0-9._-]{12,}\b/g, "Bearer [REDACTED]")
+    .replace(/\bsk-ant-[A-Za-z0-9_-]{10,}\b/g, "sk-ant-[REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9]{10,}\b/g, "sk-[REDACTED]")
+    .replace(/\bghp_[A-Za-z0-9]{20,}\b/g, "ghp_[REDACTED]")
+    .replace(/\bxox(?:b|p|a|r|s)-[A-Za-z0-9-]{10,}\b/g, "xox?- [REDACTED]")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "AIza[REDACTED]");
+}
+
+function tokenizeQuery(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2)
+    .slice(0, 20);
+}
+
+function scoreText(queryTokens: string[], target: string): number {
+  if (queryTokens.length === 0) return 0;
+  const hay = target.toLowerCase();
+  let score = 0;
+  for (const token of queryTokens) {
+    if (hay.includes(token)) score += 1;
+  }
+  return score;
+}
+
+function rankCatalogItems(input: { query: string; items: ToolsetCatalogItem[]; limit: number }): ToolsetCatalogItem[] {
+  const tokens = tokenizeQuery(input.query);
+  if (tokens.length === 0) {
+    return input.items.slice(0, input.limit);
+  }
+  return [...input.items]
+    .map((item) => ({
+      item,
+      score: scoreText(tokens, `${item.name} ${item.description ?? ""}`),
+    }))
+    .sort((a, b) => b.score - a.score || a.item.key.localeCompare(b.item.key))
+    .slice(0, input.limit)
+    .map((x) => x.item);
 }
 
 function hmac(content: string, secret: string): string {
@@ -1787,6 +1916,482 @@ export async function buildServer(input?: {
       throw toolsetNotFound();
     }
     return { toolset };
+  });
+
+  const toolsetCatalog = getToolsetCatalog();
+  const toolsetCatalogByKey = new Map<string, ToolsetCatalogItem>(toolsetCatalog.map((it) => [it.key, it]));
+
+  function normalizeSelectedComponentKeys(keys: string[]): string[] {
+    const uniq = Array.from(new Set(keys.map((k) => String(k).trim()).filter(Boolean)));
+    const invalid = uniq.filter((k) => !toolsetCatalogByKey.has(k));
+    if (invalid.length > 0) {
+      throw badRequest("Invalid selectedComponentKeys", { invalid });
+    }
+    return uniq;
+  }
+
+  function expectedLlmConnectorId(provider: "anthropic" | "openai"): string {
+    return provider === "anthropic" ? "llm.anthropic" : "llm.openai";
+  }
+
+  async function callBuilderLlm(input: { llm: ToolsetBuilderLlmConfig; apiKey: string; messages: OpenAiChatMessage[] }) {
+    const timeoutMs = 25_000;
+    return input.llm.provider === "anthropic"
+      ? await anthropicChatCompletion({
+          apiKey: input.apiKey,
+          model: input.llm.model,
+          messages: input.messages,
+          timeoutMs,
+          maxOutputChars: 80_000,
+        })
+      : await openAiChatCompletion({
+          apiKey: input.apiKey,
+          model: input.llm.model,
+          messages: input.messages,
+          timeoutMs,
+          maxOutputChars: 80_000,
+        });
+  }
+
+  server.post("/v1/orgs/:orgId/toolsets/builder/sessions", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const parsed = toolsetBuilderCreateSessionSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid builder session payload", parsed.error.flatten());
+    }
+
+    const llm = parsed.data.llm as ToolsetBuilderLlmConfig;
+    const expectedConnectorId = expectedLlmConnectorId(llm.provider);
+    const secrets = await store.listConnectorSecrets({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      connectorId: expectedConnectorId,
+    });
+    const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
+    if (!secretMeta) {
+      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
+    }
+
+    const apiKey = await store.loadConnectorSecretValue({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      secretId: llm.auth.secretId,
+    });
+    if (!apiKey || apiKey.trim().length === 0) {
+      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
+    }
+
+    const intent = parsed.data.intent?.trim() ?? "";
+    const session = await store.createToolsetBuilderSession({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      llm: parsed.data.llm,
+      latestIntent: intent.length > 0 ? intent : null,
+    });
+
+    const ranked = rankCatalogItems({ query: intent, items: toolsetCatalog, limit: 20 });
+    const catalogPreview = ranked.map((it) => ({
+      key: it.key,
+      kind: it.kind,
+      name: it.name,
+      description: it.description ?? null,
+      ...(it.kind === "mcp" ? { requiredEnv: it.requiredEnv ?? [] } : {}),
+      ...(it.kind === "skill" ? { idHint: it.skillTemplate.idHint } : {}),
+    }));
+
+    let assistantMessage = "Select components, then tell me your environment and constraints (e.g. repo host, Slack workspace, DB access).";
+    let suggestedKeys: string[] = [];
+
+    if (intent.length > 0) {
+      await store.appendToolsetBuilderTurn({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        sessionId: session.id,
+        role: "USER",
+        messageText: redactLikelySecrets(intent),
+      });
+
+      const system = [
+        "You are Vespid Toolset Builder.",
+        "You help generate a Toolset draft (MCP servers + Agent Skills bundles).",
+        "MCP servers must be selected only by component key from the provided catalog; do not invent commands/URLs.",
+        "Never include secret literals. MCP env/headers values must be ${ENV:VAR} placeholders only.",
+        "Return JSON only.",
+      ].join("\n");
+
+      const user = JSON.stringify({
+        intent,
+        catalog: catalogPreview,
+        outputFormat: {
+          message: "string",
+          suggestedComponentKeys: ["string"],
+        },
+      });
+
+      const llmRes = await callBuilderLlm({
+        llm,
+        apiKey,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      });
+      if (!llmRes.ok) {
+        throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
+      }
+
+      const obj = parseJsonObject(llmRes.content);
+      const parsedAssistant = z
+        .object({
+          message: z.string().min(1).max(20_000),
+          suggestedComponentKeys: z.array(z.string().min(1).max(80)).max(50).optional(),
+        })
+        .safeParse(obj);
+      if (!parsedAssistant.success) {
+        throw toolsetBuilderInvalidModelOutput({ error: parsedAssistant.error.flatten() });
+      }
+
+      assistantMessage = parsedAssistant.data.message;
+      suggestedKeys = normalizeSelectedComponentKeys(parsedAssistant.data.suggestedComponentKeys ?? []);
+    }
+
+    await store.appendToolsetBuilderTurn({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      role: "ASSISTANT",
+      messageText: assistantMessage,
+    });
+
+    const updatedSession = await store.updateToolsetBuilderSessionSelection({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      selectedComponentKeys: suggestedKeys,
+    });
+
+    return {
+      sessionId: session.id,
+      status: updatedSession?.status ?? session.status,
+      assistant: { message: assistantMessage, suggestedComponentKeys: suggestedKeys },
+      components: ranked,
+      selectedComponentKeys: suggestedKeys,
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/toolsets/builder/sessions/:sessionId/chat", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const session = await store.getToolsetBuilderSessionById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+    });
+    if (!session) {
+      throw toolsetBuilderSessionNotFound();
+    }
+    if (session.status === "FINALIZED") {
+      throw toolsetBuilderSessionFinalized();
+    }
+
+    const parsed = toolsetBuilderChatSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid builder chat payload", parsed.error.flatten());
+    }
+
+    const selected = normalizeSelectedComponentKeys(parsed.data.selectedComponentKeys);
+    const message = parsed.data.message.trim();
+    await store.appendToolsetBuilderTurn({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      role: "USER",
+      messageText: redactLikelySecrets(message),
+    });
+
+    const llm = session.llm as ToolsetBuilderLlmConfig;
+    const expectedConnectorId = expectedLlmConnectorId(llm.provider);
+    const secrets = await store.listConnectorSecrets({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      connectorId: expectedConnectorId,
+    });
+    const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
+    if (!secretMeta) {
+      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
+    }
+    const apiKey = await store.loadConnectorSecretValue({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      secretId: llm.auth.secretId,
+    });
+
+    const ranked = rankCatalogItems({ query: message, items: toolsetCatalog, limit: 20 });
+    const catalogPreview = ranked.map((it) => ({
+      key: it.key,
+      kind: it.kind,
+      name: it.name,
+      description: it.description ?? null,
+      ...(it.kind === "mcp" ? { requiredEnv: it.requiredEnv ?? [] } : {}),
+      ...(it.kind === "skill" ? { idHint: it.skillTemplate.idHint } : {}),
+    }));
+
+    const turns = await store.listToolsetBuilderTurns({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      limit: 24,
+    });
+
+    const system = [
+      "You are Vespid Toolset Builder.",
+      "You help the user pick catalog components and refine constraints.",
+      "MCP servers must be selected only by component key from the catalog; do not invent commands/URLs.",
+      "Never include secret literals. Use ${ENV:VAR} placeholders only.",
+      "Return JSON only.",
+    ].join("\n");
+
+    const user = JSON.stringify({
+      latestIntent: session.latestIntent ?? null,
+      selectedComponentKeys: selected,
+      catalog: catalogPreview,
+      turns: turns.map((t) => ({ role: t.role, message: t.messageText })).slice(-12),
+      newMessage: message,
+      outputFormat: {
+        message: "string",
+        suggestedComponentKeys: ["string"],
+      },
+    });
+
+    const llmRes = await callBuilderLlm({
+      llm,
+      apiKey,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    if (!llmRes.ok) {
+      throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
+    }
+
+    const obj = parseJsonObject(llmRes.content);
+    const parsedAssistant = z
+      .object({
+        message: z.string().min(1).max(20_000),
+        suggestedComponentKeys: z.array(z.string().min(1).max(80)).max(50).optional(),
+      })
+      .safeParse(obj);
+    if (!parsedAssistant.success) {
+      throw toolsetBuilderInvalidModelOutput({ error: parsedAssistant.error.flatten() });
+    }
+
+    const assistantMessage = parsedAssistant.data.message;
+    const suggestedKeys = normalizeSelectedComponentKeys(parsedAssistant.data.suggestedComponentKeys ?? []);
+    const mergedSelected = Array.from(new Set([...selected, ...suggestedKeys]));
+
+    await store.appendToolsetBuilderTurn({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      role: "ASSISTANT",
+      messageText: assistantMessage,
+    });
+
+    await store.updateToolsetBuilderSessionSelection({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      latestIntent: message,
+      selectedComponentKeys: mergedSelected,
+    });
+
+    return {
+      sessionId: session.id,
+      status: "ACTIVE",
+      assistant: { message: assistantMessage, suggestedComponentKeys: suggestedKeys },
+      components: ranked,
+      selectedComponentKeys: mergedSelected,
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/toolsets/builder/sessions/:sessionId/finalize", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const session = await store.getToolsetBuilderSessionById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+    });
+    if (!session) {
+      throw toolsetBuilderSessionNotFound();
+    }
+    if (session.status === "FINALIZED") {
+      throw toolsetBuilderSessionFinalized();
+    }
+
+    const parsed = toolsetBuilderFinalizeSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid finalize payload", parsed.error.flatten());
+    }
+
+    const selectedComponentKeys = normalizeSelectedComponentKeys(parsed.data.selectedComponentKeys);
+    const selectedComponents = selectedComponentKeys.map((k) => toolsetCatalogByKey.get(k)!).filter(Boolean);
+    const selectedMcp = selectedComponents.filter((c) => c.kind === "mcp") as Array<Extract<ToolsetCatalogItem, { kind: "mcp" }>>;
+    const selectedSkillTemplates = selectedComponents.filter((c) => c.kind === "skill") as Array<Extract<ToolsetCatalogItem, { kind: "skill" }>>;
+
+    const llm = session.llm as ToolsetBuilderLlmConfig;
+    const expectedConnectorId = expectedLlmConnectorId(llm.provider);
+    const secrets = await store.listConnectorSecrets({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      connectorId: expectedConnectorId,
+    });
+    const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
+    if (!secretMeta) {
+      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
+    }
+    const apiKey = await store.loadConnectorSecretValue({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      secretId: llm.auth.secretId,
+    });
+
+    const turns = await store.listToolsetBuilderTurns({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      limit: 24,
+    });
+
+    const system = [
+      "You are Vespid Toolset Builder.",
+      "Generate Agent Skills bundles only. MCP servers are selected from catalog and will be injected by the server.",
+      "Never include secret literals. MCP env/headers values must use ${ENV:VAR} placeholders only.",
+      "Return JSON only.",
+    ].join("\n");
+
+    const user = JSON.stringify({
+      latestIntent: session.latestIntent ?? null,
+      selectedMcpServers: selectedMcp.map((m) => ({ name: m.mcp.name, transport: m.mcp.transport, requiredEnv: m.requiredEnv ?? [] })),
+      selectedSkillTemplates: selectedSkillTemplates.map((s) => ({
+        idHint: s.skillTemplate.idHint,
+        name: s.name,
+        description: s.description ?? null,
+        optionalDirs: s.skillTemplate.optionalDirs ?? null,
+      })),
+      turns: turns.map((t) => ({ role: t.role, message: t.messageText })).slice(-12),
+      outputFormat: {
+        name: "string",
+        description: "string",
+        agentSkills: "AgentSkillBundle[] (format=agentskills-v1; must include files with SKILL.md)",
+      },
+    });
+
+    const llmRes = await callBuilderLlm({
+      llm,
+      apiKey,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    });
+    if (!llmRes.ok) {
+      throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
+    }
+
+    const obj = parseJsonObject(llmRes.content);
+    const parsedDraft = z
+      .object({
+        name: z.string().min(1).max(120),
+        description: z.string().max(2000).optional(),
+        agentSkills: z.array(agentSkillBundleSchema).default([]),
+      })
+      .safeParse(obj);
+    if (!parsedDraft.success) {
+      throw toolsetBuilderInvalidModelOutput({ error: parsedDraft.error.flatten() });
+    }
+
+    const draftName = parsed.data.name?.trim() || parsedDraft.data.name.trim();
+    const draftDescription = parsed.data.description?.trim() ?? parsedDraft.data.description?.trim() ?? "";
+    const visibility = parsed.data.visibility ?? "private";
+
+    const mcpServers = selectedMcp.map((m) => m.mcp);
+    const names = new Set<string>();
+    for (const s of mcpServers) {
+      if (s.name === "vespid-tools") {
+        throw badRequest("MCP server name is reserved: vespid-tools");
+      }
+      if (names.has(s.name)) {
+        throw badRequest("Duplicate MCP server name", { name: s.name });
+      }
+      names.add(s.name);
+    }
+
+    const draft: ToolsetDraft = {
+      name: draftName,
+      description: draftDescription,
+      visibility,
+      mcpServers,
+      // Drop optional undefined fields at the boundary; placeholder policy and bundle validation are enforced separately.
+      agentSkills: parsedDraft.data.agentSkills as any,
+    };
+
+    const mcpCheck = validateMcpPlaceholderPolicy(draft.mcpServers);
+    if (!mcpCheck.ok) {
+      throw invalidMcpPlaceholder(mcpCheck);
+    }
+    const skillCheck = validateAgentSkillBundles(draft.agentSkills);
+    if (!skillCheck.ok) {
+      throw invalidSkillBundle(skillCheck);
+    }
+
+    const finalized = await store.finalizeToolsetBuilderSession({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      selectedComponentKeys,
+      finalDraft: draft,
+    });
+    if (!finalized) {
+      throw toolsetBuilderSessionNotFound();
+    }
+
+    const warnings: string[] = [];
+    const requiredEnv = new Set<string>();
+    for (const m of selectedMcp) {
+      for (const e of m.requiredEnv ?? []) requiredEnv.add(e);
+    }
+    if (requiredEnv.size > 0) {
+      warnings.push(`This toolset requires environment variables: ${Array.from(requiredEnv).sort().join(", ")}`);
+    }
+
+    return { draft, ...(warnings.length > 0 ? { warnings } : {}) };
   });
 
   server.get("/v1/toolset-gallery", async (request) => {

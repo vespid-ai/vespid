@@ -183,6 +183,9 @@ importers:
       '@tanstack/react-table':
         specifier: ^8.21.3
         version: 8.21.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@vespid/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@vespid/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow

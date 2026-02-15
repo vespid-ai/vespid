@@ -16,6 +16,7 @@ import {
   getUserById,
   getUserByEmail,
   listConnectorSecrets as dbListConnectorSecrets,
+  getConnectorSecretById as dbGetConnectorSecretById,
   markInvitationAccepted,
   revokeAllUserAuthSessions,
   revokeAuthSession,
@@ -40,6 +41,12 @@ import {
   listPublicAgentToolsets as dbListPublicAgentToolsets,
   getPublicAgentToolsetBySlug as dbGetPublicAgentToolsetBySlug,
   adoptPublicAgentToolset as dbAdoptPublicAgentToolset,
+  createToolsetBuilderSession as dbCreateToolsetBuilderSession,
+  appendToolsetBuilderTurn as dbAppendToolsetBuilderTurn,
+  getToolsetBuilderSessionById as dbGetToolsetBuilderSessionById,
+  updateToolsetBuilderSessionSelection as dbUpdateToolsetBuilderSessionSelection,
+  finalizeToolsetBuilderSession as dbFinalizeToolsetBuilderSession,
+  listToolsetBuilderTurnsBySession as dbListToolsetBuilderTurnsBySession,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
   createWorkflowDraftFromWorkflow as dbCreateWorkflowDraftFromWorkflow,
@@ -60,8 +67,8 @@ import {
   updateOrganizationSettings as dbUpdateOrganizationSettings,
 } from "@vespid/db";
 import crypto from "node:crypto";
-import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
-import type { AgentToolsetRecord, AppStore, OrganizationSettings } from "../types.js";
+import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
+import type { AgentToolsetRecord, AppStore, OrganizationSettings, ToolsetBuilderSessionRecord, ToolsetBuilderTurnRecord } from "../types.js";
 
 function toIso(value: Date): string {
   return value.toISOString();
@@ -113,6 +120,31 @@ export class PgAppStore implements AppStore {
       updatedByUserId: row.updatedByUserId,
       createdAt: toIso(row.createdAt),
       updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toToolsetBuilderSessionRecord(row: any): ToolsetBuilderSessionRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      createdByUserId: row.createdByUserId,
+      status: row.status,
+      llm: row.llm,
+      latestIntent: row.latestIntent ?? null,
+      selectedComponentKeys: Array.isArray(row.selectedComponentKeys) ? row.selectedComponentKeys : (row.selectedComponentKeys ?? []),
+      finalDraft: row.finalDraft ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toToolsetBuilderTurnRecord(row: any): ToolsetBuilderTurnRecord {
+    return {
+      id: row.id,
+      sessionId: row.sessionId,
+      role: row.role,
+      messageText: row.messageText,
+      createdAt: toIso(row.createdAt),
     };
   }
 
@@ -1045,6 +1077,36 @@ export class PgAppStore implements AppStore {
     };
   }
 
+  async loadConnectorSecretValue(input: { organizationId: string; actorUserId: string; secretId: string }): Promise<string> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbGetConnectorSecretById(db, {
+          organizationId: input.organizationId,
+          secretId: input.secretId,
+        })
+    );
+    if (!row) {
+      throw new Error("SECRET_NOT_FOUND");
+    }
+
+    const kek = parseKekFromEnv();
+    return decryptSecret({
+      encrypted: {
+        kekId: row.kekId,
+        dekCiphertext: row.dekCiphertext,
+        dekIv: row.dekIv,
+        dekTag: row.dekTag,
+        secretCiphertext: row.secretCiphertext,
+        secretIv: row.secretIv,
+        secretTag: row.secretTag,
+      },
+      resolveKek(kekId) {
+        return kekId === kek.kekId ? kek.kekKeyBytes : null;
+      },
+    });
+  }
+
   async rotateConnectorSecret(input: { organizationId: string; actorUserId: string; secretId: string; value: string }) {
     const kek = parseKekFromEnv();
     const encrypted = encryptSecret({ plaintext: input.value, kek });
@@ -1392,5 +1454,101 @@ export class PgAppStore implements AppStore {
         })
     );
     return row ? this.toToolsetRecord(row) : null;
+  }
+
+  async createToolsetBuilderSession(input: { organizationId: string; actorUserId: string; llm: unknown; latestIntent?: string | null }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateToolsetBuilderSession(db, {
+          organizationId: input.organizationId,
+          createdByUserId: input.actorUserId,
+          status: "ACTIVE",
+          llm: input.llm,
+          latestIntent: input.latestIntent ?? null,
+          selectedComponentKeys: [],
+          finalDraft: null,
+        })
+    );
+    return this.toToolsetBuilderSessionRecord(row);
+  }
+
+  async appendToolsetBuilderTurn(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    role: "USER" | "ASSISTANT";
+    messageText: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbAppendToolsetBuilderTurn(db, {
+          sessionId: input.sessionId,
+          role: input.role,
+          messageText: input.messageText,
+        })
+    );
+    return this.toToolsetBuilderTurnRecord(row);
+  }
+
+  async listToolsetBuilderTurns(input: { organizationId: string; actorUserId: string; sessionId: string; limit?: number }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListToolsetBuilderTurnsBySession(db, {
+          sessionId: input.sessionId,
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((r) => this.toToolsetBuilderTurnRecord(r));
+  }
+
+  async getToolsetBuilderSessionById(input: { organizationId: string; actorUserId: string; sessionId: string }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbGetToolsetBuilderSessionById(db, { organizationId: input.organizationId, sessionId: input.sessionId })
+    );
+    return row ? this.toToolsetBuilderSessionRecord(row) : null;
+  }
+
+  async updateToolsetBuilderSessionSelection(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    latestIntent?: string | null;
+    selectedComponentKeys: string[];
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpdateToolsetBuilderSessionSelection(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+          ...(input.latestIntent !== undefined ? { latestIntent: input.latestIntent } : {}),
+          selectedComponentKeys: input.selectedComponentKeys,
+        })
+    );
+    return row ? this.toToolsetBuilderSessionRecord(row) : null;
+  }
+
+  async finalizeToolsetBuilderSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    selectedComponentKeys: string[];
+    finalDraft: unknown;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbFinalizeToolsetBuilderSession(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+          selectedComponentKeys: input.selectedComponentKeys,
+          finalDraft: input.finalDraft,
+        })
+    );
+    return row ? this.toToolsetBuilderSessionRecord(row) : null;
   }
 }

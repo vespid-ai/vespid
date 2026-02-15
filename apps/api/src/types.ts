@@ -163,6 +163,27 @@ export type AgentToolsetRecord = {
   updatedAt: string;
 };
 
+export type ToolsetBuilderSessionRecord = {
+  id: string;
+  organizationId: string;
+  createdByUserId: string;
+  status: "ACTIVE" | "FINALIZED" | "ARCHIVED";
+  llm: unknown;
+  latestIntent: string | null;
+  selectedComponentKeys: string[];
+  finalDraft: unknown | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ToolsetBuilderTurnRecord = {
+  id: number;
+  sessionId: string;
+  role: "USER" | "ASSISTANT";
+  messageText: string;
+  createdAt: string;
+};
+
 export interface AppStore {
   ensureDefaultRoles(): Promise<void>;
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
@@ -341,6 +362,11 @@ export interface AppStore {
     name: string;
     value: string;
   }): Promise<ConnectorSecretRecord>;
+  loadConnectorSecretValue(input: {
+    organizationId: string;
+    actorUserId: string;
+    secretId: string;
+  }): Promise<string>;
   rotateConnectorSecret(input: {
     organizationId: string;
     actorUserId: string;
@@ -435,4 +461,43 @@ export interface AppStore {
     nameOverride?: string | null;
     descriptionOverride?: string | null;
   }): Promise<AgentToolsetRecord | null>;
+
+  createToolsetBuilderSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    llm: unknown;
+    latestIntent?: string | null;
+  }): Promise<ToolsetBuilderSessionRecord>;
+  appendToolsetBuilderTurn(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    role: "USER" | "ASSISTANT";
+    messageText: string;
+  }): Promise<ToolsetBuilderTurnRecord>;
+  listToolsetBuilderTurns(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    limit?: number;
+  }): Promise<ToolsetBuilderTurnRecord[]>;
+  getToolsetBuilderSessionById(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<ToolsetBuilderSessionRecord | null>;
+  updateToolsetBuilderSessionSelection(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    latestIntent?: string | null;
+    selectedComponentKeys: string[];
+  }): Promise<ToolsetBuilderSessionRecord | null>;
+  finalizeToolsetBuilderSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    selectedComponentKeys: string[];
+    finalDraft: unknown;
+  }): Promise<ToolsetBuilderSessionRecord | null>;
 }

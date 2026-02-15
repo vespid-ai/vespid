@@ -18,6 +18,8 @@ import { CodeBlock } from "../../../../components/ui/code-block";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
+import { useSecrets } from "../../../../lib/hooks/use-secrets";
+import { useChatToolsetBuilderSession, useCreateToolsetBuilderSession, useFinalizeToolsetBuilderSession } from "../../../../lib/hooks/use-toolset-builder";
 import {
   type AgentSkillBundle,
   type AgentSkillFile,
@@ -33,6 +35,7 @@ import {
   useUnpublishToolset,
   useUpdateToolset,
 } from "../../../../lib/hooks/use-toolsets";
+import type { ToolsetCatalogItem } from "@vespid/shared";
 
 const ENV_PLACEHOLDER_RE = /^\$\{ENV:[A-Z0-9_]{1,128}\}$/;
 const MCP_NAME_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/;
@@ -735,9 +738,43 @@ export default function ToolsetsPage() {
   const unpublishToolset = useUnpublishToolset(orgId);
   const settingsQuery = useOrgSettings(orgId);
   const updateSettings = useUpdateOrgSettings(orgId);
+  const secretsQuery = useSecrets(orgId);
+
+  const createBuilderSession = useCreateToolsetBuilderSession(orgId);
+  const chatBuilderSession = useChatToolsetBuilderSession(orgId);
+  const finalizeBuilderSession = useFinalizeToolsetBuilderSession(orgId);
 
   const galleryQuery = usePublicToolsetGallery();
   const adoptToolset = useAdoptPublicToolset(orgId);
+
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiStep, setAiStep] = useState<"start" | "chat" | "preview">("start");
+  const [aiIntent, setAiIntent] = useState("");
+  const [aiProvider, setAiProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [aiModel, setAiModel] = useState("claude-3-5-sonnet-latest");
+  const [aiSecretId, setAiSecretId] = useState("");
+  const [aiSessionId, setAiSessionId] = useState<string | null>(null);
+  const [aiAssistant, setAiAssistant] = useState("");
+  const [aiComponents, setAiComponents] = useState<ToolsetCatalogItem[]>([]);
+  const [aiSelectedKeys, setAiSelectedKeys] = useState<string[]>([]);
+  const [aiChatMessage, setAiChatMessage] = useState("");
+  const [aiDraft, setAiDraft] = useState<any | null>(null);
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
+
+  function resetAiBuilder() {
+    setAiStep("start");
+    setAiIntent("");
+    setAiProvider("anthropic");
+    setAiModel("claude-3-5-sonnet-latest");
+    setAiSecretId("");
+    setAiSessionId(null);
+    setAiAssistant("");
+    setAiComponents([]);
+    setAiSelectedKeys([]);
+    setAiChatMessage("");
+    setAiDraft(null);
+    setAiWarnings([]);
+  }
 
   const toolsets = toolsetsQuery.data?.toolsets ?? [];
   const defaultToolsetId = settingsQuery.data?.settings?.toolsets?.defaultToolsetId ?? null;
@@ -936,6 +973,17 @@ export default function ToolsetsPage() {
                   }}
                 />
 
+                <Button
+                  variant="outline"
+                  disabled={!orgId || toolsetsQuery.isError}
+                  onClick={() => {
+                    resetAiBuilder();
+                    setAiOpen(true);
+                  }}
+                >
+                  {t("toolsets.ai.generate")}
+                </Button>
+
                 {defaultToolsetId ? (
                   <Button
                     variant="outline"
@@ -1047,6 +1095,294 @@ export default function ToolsetsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        open={aiOpen}
+        onOpenChange={(next) => {
+          setAiOpen(next);
+          if (!next) {
+            resetAiBuilder();
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{t("toolsets.ai.title")}</DialogTitle>
+            <DialogDescription>{t("toolsets.ai.subtitle")}</DialogDescription>
+          </DialogHeader>
+
+          {(() => {
+            const allSecrets = (secretsQuery.data?.secrets ?? []) as Array<{ id: string; connectorId: string; name: string }>;
+            const expectedConnectorId = aiProvider === "anthropic" ? "llm.anthropic" : "llm.openai";
+            const providerSecrets = allSecrets.filter((s) => s.connectorId === expectedConnectorId);
+            const loading = createBuilderSession.isPending || chatBuilderSession.isPending || finalizeBuilderSession.isPending;
+
+            if (aiStep === "start") {
+              return (
+                <div className="mt-3 grid gap-4">
+                  <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">
+                    {t("toolsets.ai.guardrail")}
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-1.5">
+                      <Label>{t("toolsets.ai.providerLabel")}</Label>
+                      <select
+                        className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                        value={aiProvider}
+                        onChange={(e) => {
+                          const nextProvider = e.target.value === "openai" ? "openai" : "anthropic";
+                          setAiProvider(nextProvider);
+                          setAiSecretId("");
+                          setAiModel(nextProvider === "anthropic" ? "claude-3-5-sonnet-latest" : "gpt-4.1-mini");
+                        }}
+                      >
+                        <option value="anthropic">anthropic</option>
+                        <option value="openai">openai</option>
+                      </select>
+                    </div>
+
+                    <div className="grid gap-1.5">
+                      <Label>{t("toolsets.ai.modelLabel")}</Label>
+                      <Input value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-1.5">
+                    <Label>{t("toolsets.ai.secretLabel")}</Label>
+                    <select
+                      className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                      value={aiSecretId}
+                      onChange={(e) => setAiSecretId(e.target.value)}
+                    >
+                      <option value="">{t("toolsets.ai.secretPlaceholder")}</option>
+                      {providerSecrets.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    {providerSecrets.length === 0 ? (
+                      <div className="text-xs text-muted">{t("toolsets.ai.noSecretsHint")}</div>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-1.5">
+                    <Label>{t("toolsets.ai.intentLabel")}</Label>
+                    <Textarea value={aiIntent} onChange={(e) => setAiIntent(e.target.value)} className="min-h-[140px]" />
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setAiOpen(false)} disabled={loading}>
+                      {t("common.cancel")}
+                    </Button>
+                    <Button
+                      variant="accent"
+                      disabled={loading || !aiSecretId || aiModel.trim().length === 0}
+                      onClick={async () => {
+                        try {
+                          const intent = aiIntent.trim();
+                          const res = await createBuilderSession.mutateAsync({
+                            ...(intent.length > 0 ? { intent } : {}),
+                            llm: { provider: aiProvider, model: aiModel.trim(), auth: { secretId: aiSecretId } },
+                          });
+                          setAiSessionId(res.sessionId);
+                          setAiAssistant(res.assistant.message);
+                          setAiComponents(res.components);
+                          setAiSelectedKeys(res.selectedComponentKeys);
+                          setAiStep("chat");
+                        } catch (err: any) {
+                          toast.error(err?.message ?? t("common.error"));
+                        }
+                      }}
+                    >
+                      {t("toolsets.ai.start")}
+                    </Button>
+                  </div>
+                </div>
+              );
+            }
+
+            if (aiStep === "chat") {
+              return (
+                <div className="mt-3 grid gap-4">
+                  <div className="grid gap-2 rounded-md border border-borderSubtle bg-panel/40 p-3">
+                    <div className="text-sm font-medium text-text">{t("toolsets.ai.assistantLabel")}</div>
+                    <div className="whitespace-pre-wrap text-sm text-muted">{aiAssistant || "-"}</div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <div className="text-sm font-medium text-text">{t("toolsets.ai.componentsLabel")}</div>
+                    <div className="grid gap-2">
+                      {aiComponents.map((c) => {
+                        const checked = aiSelectedKeys.includes(c.key);
+                        const secondary =
+                          c.kind === "mcp"
+                            ? `${t("toolsets.ai.kindMcp")} • ${c.mcp.name} (${c.mcp.transport})`
+                            : `${t("toolsets.ai.kindSkill")} • ${c.skillTemplate.idHint}`;
+                        return (
+                          <label
+                            key={c.key}
+                            className="flex cursor-pointer items-start gap-3 rounded-md border border-borderSubtle bg-panel/30 p-3"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                setAiSelectedKeys((prev) => (next ? Array.from(new Set([...prev, c.key])) : prev.filter((k) => k !== c.key)));
+                              }}
+                              className="mt-0.5 h-4 w-4 accent-[color:var(--color-accent)]"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="truncate text-sm font-semibold text-text">{c.name}</div>
+                                <div className="truncate text-xs text-muted">{secondary}</div>
+                              </div>
+                              {c.description ? <div className="mt-1 text-sm text-muted">{c.description}</div> : null}
+                              {c.kind === "mcp" && (c.requiredEnv ?? []).length > 0 ? (
+                                <div className="mt-2 text-xs text-muted">
+                                  {t("toolsets.ai.requiredEnvLabel")}: <span className="font-mono">{(c.requiredEnv ?? []).join(", ")}</span>
+                                </div>
+                              ) : null}
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label>{t("toolsets.ai.chatLabel")}</Label>
+                    <Textarea value={aiChatMessage} onChange={(e) => setAiChatMessage(e.target.value)} className="min-h-[120px]" />
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        disabled={loading || !aiSessionId || aiChatMessage.trim().length === 0}
+                        onClick={async () => {
+                          if (!aiSessionId) return;
+                          const msg = aiChatMessage.trim();
+                          try {
+                            const res = await chatBuilderSession.mutateAsync({
+                              sessionId: aiSessionId,
+                              message: msg,
+                              selectedComponentKeys: aiSelectedKeys,
+                            });
+                            setAiAssistant(res.assistant.message);
+                            setAiComponents(res.components);
+                            setAiSelectedKeys(res.selectedComponentKeys);
+                            setAiChatMessage("");
+                          } catch (err: any) {
+                            toast.error(err?.message ?? t("common.error"));
+                          }
+                        }}
+                      >
+                        {t("toolsets.ai.send")}
+                      </Button>
+                      <Button
+                        variant="accent"
+                        disabled={loading || !aiSessionId}
+                        onClick={async () => {
+                          if (!aiSessionId) return;
+                          try {
+                            const res = await finalizeBuilderSession.mutateAsync({
+                              sessionId: aiSessionId,
+                              selectedComponentKeys: aiSelectedKeys,
+                            });
+                            setAiDraft(res.draft as any);
+                            setAiWarnings(Array.isArray(res.warnings) ? res.warnings : []);
+                            setAiStep("preview");
+                          } catch (err: any) {
+                            toast.error(err?.message ?? t("common.error"));
+                          }
+                        }}
+                      >
+                        {t("toolsets.ai.finalize")}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            const draft = aiDraft as ToolsetDraft | null;
+            if (!draft) {
+              return (
+                <div className="mt-3">
+                  <EmptyState title={t("common.error")} description={t("toolsets.ai.noDraft")} />
+                </div>
+              );
+            }
+
+            return (
+              <div className="mt-3 grid gap-4">
+                {aiWarnings.length > 0 ? (
+                  <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">
+                    <div className="text-sm font-medium text-text">{t("toolsets.ai.warningsTitle")}</div>
+                    <div className="mt-2 grid gap-1">
+                      {aiWarnings.map((w, i) => (
+                        <div key={i}>{w}</div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-medium text-text">{t("toolsets.ai.previewTitle")}</div>
+                  <CodeBlock value={draft} />
+                </div>
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button variant="outline" onClick={() => setAiStep("chat")} disabled={loading}>
+                    {t("common.back")}
+                  </Button>
+
+                  <ToolsetEditorDialog
+                    title={t("toolsets.ai.openInEditor")}
+                    initial={{
+                      name: String((draft as any).name ?? ""),
+                      description: String((draft as any).description ?? ""),
+                      visibility: (draft as any).visibility === "org" ? "org" : "private",
+                      mcpServers: Array.isArray((draft as any).mcpServers) ? ((draft as any).mcpServers as any) : [],
+                      agentSkills: Array.isArray((draft as any).agentSkills) ? ((draft as any).agentSkills as any) : [],
+                    }}
+                    trigger={<Button variant="outline">{t("toolsets.ai.openInEditor")}</Button>}
+                    onSave={async (d) => {
+                      await createToolset.mutateAsync({
+                        name: d.name,
+                        description: d.description,
+                        visibility: d.visibility,
+                        mcpServers: d.mcpServers,
+                        agentSkills: d.agentSkills,
+                      });
+                      toast.success(t("common.created"));
+                      setAiOpen(false);
+                    }}
+                  />
+
+                  <Button
+                    variant="accent"
+                    disabled={loading}
+                    onClick={async () => {
+                      await createToolset.mutateAsync({
+                        name: draft.name,
+                        description: draft.description,
+                        visibility: draft.visibility,
+                        mcpServers: draft.mcpServers,
+                        agentSkills: draft.agentSkills,
+                      });
+                      toast.success(t("common.created"));
+                      setAiOpen(false);
+                    }}
+                  >
+                    {t("toolsets.ai.createToolset")}
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent className="max-w-lg">

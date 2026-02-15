@@ -80,6 +80,7 @@ describeIf("RLS integration", () => {
     const secretBId = crypto.randomUUID();
     const toolsetAId = crypto.randomUUID();
     const toolsetPublicSlug = `public-toolset-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const builderSessionAId = crypto.randomUUID();
 
     const setup = await appPool.connect();
     try {
@@ -124,6 +125,14 @@ describeIf("RLS integration", () => {
       await setup.query(
         "insert into agent_toolsets(id, organization_id, name, description, visibility, public_slug, published_at, mcp_servers, agent_skills, created_by_user_id, updated_by_user_id) values ($1, $2, 'Toolset A', 'Public', 'public', $3, now(), '[]'::jsonb, '[]'::jsonb, $4, $4)",
         [toolsetAId, orgAId, toolsetPublicSlug, adminId]
+      );
+      await setup.query(
+        "insert into toolset_builder_sessions(id, organization_id, created_by_user_id, status, llm, latest_intent, selected_component_keys, final_draft) values ($1, $2, $3, 'ACTIVE', $4::jsonb, 'Intent', '[]'::jsonb, null)",
+        [builderSessionAId, orgAId, adminId, JSON.stringify({ provider: "anthropic", model: "claude", auth: { secretId: crypto.randomUUID() } })]
+      );
+      await setup.query(
+        "insert into toolset_builder_turns(session_id, role, message_text) values ($1, 'USER', 'hello')",
+        [builderSessionAId]
       );
 
       await setup.query(
@@ -206,6 +215,24 @@ describeIf("RLS integration", () => {
       );
       expect(cannotUpdateOtherOrgToolset.rowCount).toBe(0);
 
+      const otherOrgBuilderSessionVisible = await client.query(
+        "select id from toolset_builder_sessions where id = $1",
+        [builderSessionAId]
+      );
+      expect(otherOrgBuilderSessionVisible.rowCount).toBe(0);
+      const otherOrgBuilderTurnVisible = await client.query(
+        "select id from toolset_builder_turns where session_id = $1",
+        [builderSessionAId]
+      );
+      expect(otherOrgBuilderTurnVisible.rowCount).toBe(0);
+
+      await expect(
+        client.query(
+          "insert into toolset_builder_turns(session_id, role, message_text) values ($1, 'USER', 'hacked')",
+          [builderSessionAId]
+        )
+      ).rejects.toThrow();
+
       await client.query("select set_config('app.current_org_id', $1, true)", [orgAId]);
       const rightContext = await client.query("select id from organizations where id = $1", [orgAId]);
       expect(rightContext.rowCount).toBe(1);
@@ -227,6 +254,12 @@ describeIf("RLS integration", () => {
         [toolsetPublicSlug]
       );
       expect(canUpdateOwnToolset.rowCount).toBe(1);
+
+      const canUpdateOwnBuilderSession = await client.query(
+        "update toolset_builder_sessions set latest_intent = 'Updated' where id = $1 returning id",
+        [builderSessionAId]
+      );
+      expect(canUpdateOwnBuilderSession.rowCount).toBe(1);
 
       await client.query("rollback");
     } finally {

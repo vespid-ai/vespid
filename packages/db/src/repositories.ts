@@ -11,6 +11,8 @@ import {
   organizationInvitations,
   organizations,
   roles,
+  toolsetBuilderSessions,
+  toolsetBuilderTurns,
   users,
   workflowRunEvents,
   workflowRuns,
@@ -1421,4 +1423,109 @@ export async function adoptPublicAgentToolset(
     })
     .returning();
   return row ?? null;
+}
+
+export async function createToolsetBuilderSession(
+  db: Db,
+  input: {
+    organizationId: string;
+    createdByUserId: string;
+    status: "ACTIVE" | "FINALIZED" | "ARCHIVED";
+    llm: unknown;
+    latestIntent?: string | null;
+    selectedComponentKeys?: unknown;
+    finalDraft?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(toolsetBuilderSessions)
+    .values({
+      organizationId: input.organizationId,
+      createdByUserId: input.createdByUserId,
+      status: input.status,
+      llm: input.llm as any,
+      latestIntent: input.latestIntent ?? null,
+      selectedComponentKeys: (input.selectedComponentKeys ?? []) as any,
+      finalDraft: (input.finalDraft ?? null) as any,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create toolset builder session");
+  }
+  return row;
+}
+
+export async function getToolsetBuilderSessionById(db: Db, input: { organizationId: string; sessionId: string }) {
+  const [row] = await db
+    .select()
+    .from(toolsetBuilderSessions)
+    .where(and(eq(toolsetBuilderSessions.organizationId, input.organizationId), eq(toolsetBuilderSessions.id, input.sessionId)));
+  return row ?? null;
+}
+
+export async function updateToolsetBuilderSessionSelection(
+  db: Db,
+  input: { organizationId: string; sessionId: string; latestIntent?: string | null; selectedComponentKeys: unknown }
+) {
+  const [row] = await db
+    .update(toolsetBuilderSessions)
+    .set({
+      ...(input.latestIntent !== undefined ? { latestIntent: input.latestIntent } : {}),
+      selectedComponentKeys: input.selectedComponentKeys as any,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(toolsetBuilderSessions.organizationId, input.organizationId), eq(toolsetBuilderSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function finalizeToolsetBuilderSession(
+  db: Db,
+  input: { organizationId: string; sessionId: string; selectedComponentKeys: unknown; finalDraft: unknown }
+) {
+  const [row] = await db
+    .update(toolsetBuilderSessions)
+    .set({
+      status: "FINALIZED",
+      selectedComponentKeys: input.selectedComponentKeys as any,
+      finalDraft: input.finalDraft as any,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(toolsetBuilderSessions.organizationId, input.organizationId), eq(toolsetBuilderSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function appendToolsetBuilderTurn(
+  db: Db,
+  input: { sessionId: string; role: "USER" | "ASSISTANT"; messageText: string }
+) {
+  const [row] = await db
+    .insert(toolsetBuilderTurns)
+    .values({
+      sessionId: input.sessionId,
+      role: input.role,
+      messageText: input.messageText,
+      createdAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to append toolset builder turn");
+  }
+  return row;
+}
+
+export async function listToolsetBuilderTurnsBySession(
+  db: Db,
+  input: { sessionId: string; limit?: number }
+) {
+  const limit = typeof input.limit === "number" && Number.isFinite(input.limit) ? Math.max(1, Math.floor(input.limit)) : 100;
+  return await db
+    .select()
+    .from(toolsetBuilderTurns)
+    .where(eq(toolsetBuilderTurns.sessionId, input.sessionId))
+    .orderBy(asc(toolsetBuilderTurns.createdAt), asc(toolsetBuilderTurns.id))
+    .limit(limit);
 }

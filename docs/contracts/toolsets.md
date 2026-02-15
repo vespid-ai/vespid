@@ -43,6 +43,23 @@ Resolution order:
 - Any authenticated user can browse public toolsets via the gallery API.
 - Org owners/admins can adopt a public toolset into their org, creating a new toolset copy with `adoptedFrom` metadata.
 
+## AI Builder (Generate Toolsets)
+
+Toolsets can optionally be generated via a multi-turn AI Builder flow.
+
+Key properties:
+- The AI Builder runs server-side in `apps/api` using org-scoped LLM secrets (`llm.anthropic` or `llm.openai`).
+- MCP server `command`/`url` are selected from a curated catalog. The model does not invent MCP transport details.
+- The placeholder policy still applies: MCP `env`/`headers` values are `${ENV:VAR}` placeholders only.
+- Users should not paste secrets into chat. The service redacts common token patterns, but redaction is best-effort only.
+
+Endpoints (org-scoped, `owner|admin`):
+- `POST /v1/orgs/:orgId/toolsets/builder/sessions`
+- `POST /v1/orgs/:orgId/toolsets/builder/sessions/:sessionId/chat`
+- `POST /v1/orgs/:orgId/toolsets/builder/sessions/:sessionId/finalize`
+
+The finalize endpoint returns a `draft` toolset payload (`mcpServers` + `agentSkills`) which can be reviewed and then saved via the normal toolset create API.
+
 ## Manual Validation (Optional)
 
 This MVP is validated primarily via unit/integration tests. If you want to verify end-to-end behavior with a real node-agent and Claude Code:

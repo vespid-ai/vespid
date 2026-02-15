@@ -26,6 +26,7 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-table": "^8.21.3",
+    "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",
     "@xyflow/react": "^12.10.0",
     "class-variance-authority": "^0.7.1",
