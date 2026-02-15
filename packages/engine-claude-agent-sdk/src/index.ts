@@ -364,6 +364,106 @@ function safeTruncate(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : value.slice(0, maxChars);
 }
 
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function createCoalescedDeltaEmitter(input: {
+  flushChars: number;
+  flushMs: number;
+  maxEvents: number;
+  maxChars: number;
+  onFlush: (deltaChunk: string) => void;
+}) {
+  let buffer = "";
+  let scheduled: NodeJS.Timeout | null = null;
+  let emittedEvents = 0;
+  let emittedChars = 0;
+
+  const flush = () => {
+    if (scheduled) {
+      clearTimeout(scheduled);
+      scheduled = null;
+    }
+    if (!buffer) {
+      return;
+    }
+    if (emittedEvents >= input.maxEvents || emittedChars >= input.maxChars) {
+      buffer = "";
+      return;
+    }
+    const remainingChars = Math.max(0, input.maxChars - emittedChars);
+    const chunk = buffer.length <= remainingChars ? buffer : buffer.slice(0, remainingChars);
+    buffer = buffer.length <= remainingChars ? "" : buffer.slice(remainingChars);
+
+    if (chunk) {
+      emittedEvents += 1;
+      emittedChars += chunk.length;
+      input.onFlush(chunk);
+    }
+  };
+
+  const schedule = () => {
+    if (scheduled) {
+      return;
+    }
+    scheduled = setTimeout(flush, input.flushMs);
+  };
+
+  return {
+    write(delta: string) {
+      if (!delta) {
+        return;
+      }
+      if (emittedChars >= input.maxChars || emittedEvents >= input.maxEvents) {
+        return;
+      }
+      buffer += delta;
+      if (buffer.length >= input.flushChars) {
+        flush();
+      } else {
+        schedule();
+      }
+    },
+    finish() {
+      flush();
+    },
+  };
+}
+
+function extractClaudeAssistantDeltaFromStreamEvent(msg: any): string | null {
+  const ev = msg?.event;
+  if (!ev || typeof ev !== "object") {
+    return null;
+  }
+  const type = typeof ev.type === "string" ? ev.type : "";
+
+  // Anthropic streaming events commonly include:
+  // { type: "content_block_delta", delta: { type: "text_delta", text: "..." } }
+  if (type === "content_block_delta") {
+    const delta = ev.delta;
+    if (delta && typeof delta === "object" && delta.type === "text_delta" && typeof delta.text === "string") {
+      return delta.text;
+    }
+  }
+
+  if (/delta/i.test(type)) {
+    if (typeof ev.delta === "string") {
+      return ev.delta;
+    }
+    if (ev.delta && typeof ev.delta === "object" && typeof ev.delta.text === "string") {
+      return ev.delta.text;
+    }
+  }
+
+  return null;
+}
+
 function extractAssistantText(message: any): string {
   const content = message?.content;
   if (!Array.isArray(content)) {
@@ -511,6 +611,23 @@ export function createEngineRunner() {
       // Tool call budget is enforced in the MCP tool handlers.
       let toolCalls = 0;
       const maxToolCalls = Math.max(0, node.config.limits?.maxToolCalls ?? 0);
+      const streamEnabled = typeof input.emitEvent === "function";
+      let deltaIndex = 0;
+      const deltaEmitter = streamEnabled
+        ? createCoalescedDeltaEmitter({
+            flushChars: Math.max(32, Math.min(2048, envNumber("VESPID_AGENT_STREAM_FLUSH_CHARS", 128))),
+            flushMs: Math.max(10, Math.min(1000, envNumber("VESPID_AGENT_STREAM_FLUSH_MS", 80))),
+            maxEvents: Math.max(10, Math.min(10_000, envNumber("VESPID_AGENT_STREAM_MAX_EVENTS", 800))),
+            maxChars: Math.max(256, Math.min(2_000_000, envNumber("VESPID_AGENT_STREAM_MAX_CHARS", 200_000))),
+            onFlush: (chunk) => {
+              deltaIndex += 1;
+              emit({
+                kind: "agent.assistant_delta",
+                payload: { deltaIndex, delta: safeTruncate(chunk, 4000) },
+              });
+            },
+          })
+        : null;
 
       const connectorSecretsByConnectorId: Record<string, string> = input?.secrets?.connectorSecretsByConnectorId ?? {};
       const githubApiBaseUrl: string = input?.githubApiBaseUrl ?? "https://api.github.com";
@@ -914,6 +1031,12 @@ export function createEngineRunner() {
       let finalText: string | null = null;
       const consume = async () => {
         for await (const msg of queryIterator as any) {
+          if (msg && msg.type === "stream_event") {
+            const delta = deltaEmitter ? extractClaudeAssistantDeltaFromStreamEvent(msg) : null;
+            if (deltaEmitter && delta) {
+              deltaEmitter.write(delta);
+            }
+          }
           if (msg && msg.type === "assistant") {
             const text = extractAssistantText(msg.message);
             if (text && text.trim().length > 0) {
@@ -942,8 +1065,15 @@ export function createEngineRunner() {
           }),
         ]);
       } catch (err) {
+        if (deltaEmitter) {
+          deltaEmitter.finish();
+        }
         const error = err instanceof Error && err.message ? err.message : "ENGINE_FAILED";
         return { ok: false as const, error };
+      }
+
+      if (deltaEmitter) {
+        deltaEmitter.finish();
       }
 
       if (!finalText) {
