@@ -218,6 +218,18 @@
     },
     "openByIdDescription": "Open an existing workflow by ID, or jump to a recent one (stored locally).",
     "noRecent": "No recent workflows.",
+    "list": {
+      "title": "Workflows",
+      "hint": "Latest revision per workflow family (org-scoped).",
+      "empty": "No workflows yet.",
+      "open": "Open",
+      "columns": {
+        "name": "Name",
+        "status": "Status",
+        "revision": "Revision",
+        "open": "Open"
+      }
+    },
     "tips": {
       "title": "Tips",
       "subtitle": "Make the cockpit feel fast.",
@@ -256,6 +268,13 @@
       "recentRunsLocal": "Recent runs (local)",
       "publish": "Publish",
       "published": "Workflow published",
+      "createDraft": "Create draft",
+      "draftCreated": "Draft created",
+      "draftCreateFailed": "Failed to create draft",
+      "mustPublishToRun": "Publish the workflow before running.",
+      "familyId": "Family ID",
+      "revision": "Revision",
+      "sourceWorkflowId": "Source workflow ID",
       "queueRunTitle": "Queue run",
       "queueRunHint": "POST /runs must succeed only when enqueue succeeds.",
       "runInputLabel": "Run input (JSON)",

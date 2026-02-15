@@ -4,7 +4,10 @@ import { apiFetchJson } from "../api";
 export type Workflow = {
   id: string;
   name: string;
-  status?: string;
+  status?: "draft" | "published" | string;
+  familyId?: string;
+  revision?: number;
+  sourceWorkflowId?: string | null;
   createdAt?: string;
   updatedAt?: string;
   dsl?: unknown;
@@ -39,6 +42,21 @@ export function useWorkflow(orgId: string | null, workflowId: string | null) {
         { orgScoped: true }
       );
     },
+  });
+}
+
+export function useWorkflows(orgId: string | null) {
+  return useQuery({
+    queryKey: ["workflows", orgId],
+    enabled: Boolean(orgId),
+    queryFn: async () => {
+      return apiFetchJson<{ workflows: Workflow[]; nextCursor: string | null }>(
+        `/v1/orgs/${orgId}/workflows?limit=100`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+    },
+    refetchInterval: 10_000,
   });
 }
 
@@ -118,6 +136,27 @@ export function useUpdateWorkflowDraft(orgId: string | null, workflowId: string 
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["workflow", orgId, workflowId] });
       await queryClient.invalidateQueries({ queryKey: ["workflows", orgId] });
+    },
+  });
+}
+
+export function useCreateWorkflowDraftFromWorkflow(orgId: string | null, workflowId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      return apiFetchJson<{ workflow: Workflow }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/drafts`,
+        { method: "POST" },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async (data) => {
+      const newId = data.workflow?.id ?? null;
+      await queryClient.invalidateQueries({ queryKey: ["workflows", orgId] });
+      if (newId) {
+        await queryClient.invalidateQueries({ queryKey: ["workflow", orgId, newId] });
+      }
     },
   });
 }

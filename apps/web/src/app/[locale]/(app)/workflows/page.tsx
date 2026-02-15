@@ -5,14 +5,16 @@ import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
+import { Badge } from "../../../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
 import { CodeBlock } from "../../../../components/ui/code-block";
+import { DataTable } from "../../../../components/ui/data-table";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Textarea } from "../../../../components/ui/textarea";
 import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
-import { useCreateWorkflow } from "../../../../lib/hooks/use-workflows";
+import { type Workflow, useCreateWorkflow, useWorkflows } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
 
 type TeammateForm = {
@@ -307,6 +309,7 @@ export default function WorkflowsPage() {
 
   const orgId = useActiveOrgId();
   const createWorkflow = useCreateWorkflow(orgId);
+  const workflowsQuery = useWorkflows(orgId);
 
   const [workflowName, setWorkflowName] = useState("Issue triage");
   const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);
@@ -329,6 +332,71 @@ export default function WorkflowsPage() {
     });
 
   const dslPreview = useMemo(() => buildDsl({ nodes: agentNodes }), [agentNodes]);
+
+  const workflowsLatestByFamily = useMemo(() => {
+    const rows = workflowsQuery.data?.workflows ?? [];
+    const byFamily = new Map<string, Workflow>();
+    for (const wf of rows) {
+      const familyId = wf.familyId ?? wf.id;
+      const prev = byFamily.get(familyId);
+      if (!prev) {
+        byFamily.set(familyId, wf);
+        continue;
+      }
+      const a = typeof prev.revision === "number" ? prev.revision : 0;
+      const b = typeof wf.revision === "number" ? wf.revision : 0;
+      if (b > a) {
+        byFamily.set(familyId, wf);
+        continue;
+      }
+      if (b === a) {
+        const prevUpdated = prev.updatedAt ?? "";
+        const nextUpdated = wf.updatedAt ?? "";
+        if (nextUpdated.localeCompare(prevUpdated) > 0) {
+          byFamily.set(familyId, wf);
+        }
+      }
+    }
+    return [...byFamily.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  }, [workflowsQuery.data]);
+
+  const workflowTableColumns = useMemo(() => {
+    return [
+      {
+        header: t("workflows.list.columns.name"),
+        accessorKey: "name",
+        cell: ({ row }: any) => (
+          <div className="min-w-0">
+            <div className="truncate font-medium">{row.original.name}</div>
+            <div className="truncate font-mono text-xs text-muted">{row.original.id}</div>
+          </div>
+        ),
+      },
+      {
+        header: t("workflows.list.columns.status"),
+        accessorKey: "status",
+        cell: ({ row }: any) => {
+          const status = String(row.original.status ?? "");
+          const variant = status === "published" ? "ok" : "neutral";
+          return <Badge variant={variant as any}>{status}</Badge>;
+        },
+      },
+      {
+        header: t("workflows.list.columns.revision"),
+        accessorKey: "revision",
+        cell: ({ row }: any) => <span className="font-mono text-xs">{String(row.original.revision ?? "-")}</span>,
+      },
+      {
+        header: t("workflows.list.columns.open"),
+        id: "open",
+        cell: ({ row }: any) => (
+          <Button variant="outline" size="sm" onClick={() => openById(row.original.id)}>
+            {t("workflows.list.open")}
+          </Button>
+        ),
+      },
+    ] as const;
+  }, [openById, t]);
 
   async function submitCreate() {
     if (!orgId) {
@@ -1084,6 +1152,26 @@ export default function WorkflowsPage() {
                 ))}
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("workflows.list.title")}</CardTitle>
+            <CardDescription>
+              {orgId ? t("workflows.list.hint") : t("workflows.createWizardHint")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {!orgId ? (
+              <div className="text-sm text-muted">{t("workflows.errors.orgRequired")}</div>
+            ) : workflowsQuery.isLoading ? (
+              <div className="text-sm text-muted">{t("common.loading")}</div>
+            ) : workflowsLatestByFamily.length === 0 ? (
+              <div className="text-sm text-muted">{t("workflows.list.empty")}</div>
+            ) : (
+              <DataTable<any> data={workflowsLatestByFamily} columns={workflowTableColumns as any} />
+            )}
           </CardContent>
         </Card>
       </div>

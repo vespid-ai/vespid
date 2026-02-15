@@ -218,6 +218,18 @@
     },
     "openByIdDescription": "按工作流 ID 打开, 或跳转到最近使用的工作流 (本地保存)。",
     "noRecent": "暂无最近工作流。",
+    "list": {
+      "title": "工作流列表",
+      "hint": "按 workflow family 展示最新 revision (组织范围)。",
+      "empty": "暂无工作流。",
+      "open": "打开",
+      "columns": {
+        "name": "名称",
+        "status": "状态",
+        "revision": "版本",
+        "open": "打开"
+      }
+    },
     "tips": {
       "title": "提示",
       "subtitle": "让驾驶舱更顺滑。",
@@ -256,6 +268,13 @@
       "recentRunsLocal": "最近运行 (本地)",
       "publish": "发布",
       "published": "已发布工作流",
+      "createDraft": "创建草稿",
+      "draftCreated": "已创建草稿",
+      "draftCreateFailed": "创建草稿失败",
+      "mustPublishToRun": "运行前请先发布工作流。",
+      "familyId": "Family ID",
+      "revision": "Revision",
+      "sourceWorkflowId": "来源工作流 ID",
       "queueRunTitle": "排队运行",
       "queueRunHint": "只有成功入队时 /runs 才应返回成功。",
       "runInputLabel": "运行输入 (JSON)",

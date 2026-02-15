@@ -17,7 +17,14 @@ import { Skeleton } from "../../../../../components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../components/ui/tabs";
 import { Textarea } from "../../../../../components/ui/textarea";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
-import { type WorkflowRun, usePublishWorkflow, useRunWorkflow, useRuns, useWorkflow } from "../../../../../lib/hooks/use-workflows";
+import {
+  type WorkflowRun,
+  useCreateWorkflowDraftFromWorkflow,
+  usePublishWorkflow,
+  useRunWorkflow,
+  useRuns,
+  useWorkflow,
+} from "../../../../../lib/hooks/use-workflows";
 import { addRecentRunId, addRecentWorkflowId, getRecentRunIds } from "../../../../../lib/recents";
 
 function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
@@ -45,6 +52,7 @@ export default function WorkflowDetailPage() {
   const runsQuery = useRuns(orgId, workflowId);
 
   const publish = usePublishWorkflow(orgId, workflowId);
+  const createDraft = useCreateWorkflowDraftFromWorkflow(orgId, workflowId);
   const run = useRunWorkflow(orgId, workflowId);
 
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
@@ -102,6 +110,21 @@ export default function WorkflowDetailPage() {
     toast.success(t("workflows.detail.published"));
   }
 
+  async function doCreateDraft() {
+    if (!orgId) {
+      toast.error(t("workflows.errors.orgRequired"));
+      return;
+    }
+    try {
+      const payload = await createDraft.mutateAsync();
+      const newId = payload.workflow.id;
+      toast.success(t("workflows.detail.draftCreated"));
+      router.push(`/${locale}/workflows/${newId}`);
+    } catch {
+      toast.error(t("workflows.detail.draftCreateFailed"));
+    }
+  }
+
   async function doRun() {
     if (!orgId) {
       toast.error(t("workflows.errors.orgRequired"));
@@ -109,6 +132,12 @@ export default function WorkflowDetailPage() {
     }
     if (!workflowId) {
       toast.error(t("workflows.errors.workflowIdRequired"));
+      return;
+    }
+
+    const status = workflowQuery.data?.workflow?.status ?? "unknown";
+    if (status !== "published") {
+      toast.error(t("workflows.detail.mustPublishToRun"));
       return;
     }
 
@@ -142,14 +171,32 @@ export default function WorkflowDetailPage() {
             {workflowQuery.data?.workflow?.name ?? workflowId.slice(0, 8) ?? "Workflow"}
           </div>
           <div className="mt-1 text-sm text-muted break-all">{workflowId}</div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {workflowQuery.data?.workflow?.status ? (
+              <Badge variant={workflowQuery.data.workflow.status === "published" ? "ok" : "neutral"}>
+                {workflowQuery.data.workflow.status}
+              </Badge>
+            ) : null}
+            {workflowQuery.data?.workflow?.revision ? (
+              <Badge variant="neutral" className="border-dashed">
+                rev {workflowQuery.data.workflow.revision}
+              </Badge>
+            ) : null}
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
             {t("common.back")}
           </Button>
-          <Button variant="accent" onClick={doPublish} disabled={publish.isPending}>
-            {publish.isPending ? t("common.loading") : t("workflows.detail.publish")}
-          </Button>
+          {workflowQuery.data?.workflow?.status === "published" ? (
+            <Button variant="accent" onClick={doCreateDraft} disabled={createDraft.isPending}>
+              {createDraft.isPending ? t("common.loading") : t("workflows.detail.createDraft")}
+            </Button>
+          ) : (
+            <Button variant="accent" onClick={doPublish} disabled={publish.isPending}>
+              {publish.isPending ? t("common.loading") : t("workflows.detail.publish")}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -235,7 +282,25 @@ export default function WorkflowDetailPage() {
               {workflowQuery.isLoading ? (
                 <div className="text-sm text-muted">{t("common.loading")}</div>
               ) : workflowQuery.data?.workflow ? (
-                <CodeBlock value={workflowQuery.data.workflow} />
+                <div className="grid gap-3">
+                  <div className="grid gap-1 text-sm">
+                    <div className="flex flex-wrap gap-2">
+                      <span className="text-muted">{t("workflows.detail.familyId")}:</span>
+                      <span className="font-mono text-xs break-all">{workflowQuery.data.workflow.familyId ?? "-"}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="text-muted">{t("workflows.detail.revision")}:</span>
+                      <span className="font-mono text-xs">{String(workflowQuery.data.workflow.revision ?? "-")}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="text-muted">{t("workflows.detail.sourceWorkflowId")}:</span>
+                      <span className="font-mono text-xs break-all">
+                        {workflowQuery.data.workflow.sourceWorkflowId ?? "-"}
+                      </span>
+                    </div>
+                  </div>
+                  <CodeBlock value={workflowQuery.data.workflow} />
+                </div>
               ) : (
                 <div className="text-sm text-muted">{t("workflows.detail.noWorkflow")}</div>
               )}
