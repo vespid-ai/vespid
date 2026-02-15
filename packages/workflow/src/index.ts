@@ -302,8 +302,7 @@ function isRemoteExecutionMode(node: z.infer<typeof workflowNodeSchema>): boolea
   return false;
 }
 
-export type WorkflowDslV3ValidationError = {
-  ok: false;
+export type WorkflowDslV3ValidationIssue = {
   code:
     | "GRAPH_NODE_MISSING"
     | "GRAPH_EDGE_INVALID"
@@ -311,6 +310,17 @@ export type WorkflowDslV3ValidationError = {
     | "CONDITION_EDGE_CONSTRAINTS"
     | "PARALLEL_REMOTE_NOT_SUPPORTED";
   message: string;
+  nodeId?: string;
+  edgeId?: string;
+};
+
+export type WorkflowDslV3ValidationError = {
+  ok: false;
+  code: WorkflowDslV3ValidationIssue["code"];
+  message: string;
+  // Optional structured issues for UI error mapping. The first issue should
+  // correspond to code/message.
+  issues?: WorkflowDslV3ValidationIssue[];
 };
 
 export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | WorkflowDslV3ValidationError {
@@ -319,7 +329,11 @@ export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | W
 
   const nodeIds = new Set(Object.keys(nodes));
   if (nodeIds.size === 0) {
-    return { ok: false, code: "GRAPH_NODE_MISSING", message: "Graph must include at least one node" };
+    const issue: WorkflowDslV3ValidationIssue = {
+      code: "GRAPH_NODE_MISSING",
+      message: "Graph must include at least one node",
+    };
+    return { ok: false, ...issue, issues: [issue] };
   }
 
   const edgeIds = new Set<string>();
@@ -328,11 +342,21 @@ export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | W
 
   for (const edge of edges) {
     if (edgeIds.has(edge.id)) {
-      return { ok: false, code: "GRAPH_EDGE_INVALID", message: `Duplicate edge id: ${edge.id}` };
+      const issue: WorkflowDslV3ValidationIssue = {
+        code: "GRAPH_EDGE_INVALID",
+        message: `Duplicate edge id: ${edge.id}`,
+        edgeId: edge.id,
+      };
+      return { ok: false, ...issue, issues: [issue] };
     }
     edgeIds.add(edge.id);
     if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
-      return { ok: false, code: "GRAPH_EDGE_INVALID", message: `Edge must connect existing nodes: ${edge.id}` };
+      const issue: WorkflowDslV3ValidationIssue = {
+        code: "GRAPH_EDGE_INVALID",
+        message: `Edge must connect existing nodes: ${edge.id}`,
+        edgeId: edge.id,
+      };
+      return { ok: false, ...issue, issues: [issue] };
     }
     outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
     incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
@@ -348,11 +372,12 @@ export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | W
     const falseCount = kinds.filter((k) => k === "cond_false").length;
     const other = kinds.filter((k) => k !== "cond_true" && k !== "cond_false").length;
     if (trueCount !== 1 || falseCount !== 1 || other !== 0 || out.length !== 2) {
-      return {
-        ok: false,
+      const issue: WorkflowDslV3ValidationIssue = {
         code: "CONDITION_EDGE_CONSTRAINTS",
         message: `Condition node ${id} must have exactly one cond_true and one cond_false outgoing edge`,
+        nodeId: id,
       };
+      return { ok: false, ...issue, issues: [issue] };
     }
   }
 
@@ -386,11 +411,11 @@ export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | W
     }
   }
   if (visited !== nodeIds.size) {
-    return {
-      ok: false,
+    const issue: WorkflowDslV3ValidationIssue = {
       code: "GRAPH_CYCLE_DETECTED",
       message: "Graph must be a DAG (cycles are not supported in v3 MVP)",
     };
+    return { ok: false, ...issue, issues: [issue] };
   }
 
   const joinNodeIds = Object.entries(nodes)
@@ -452,11 +477,12 @@ export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | W
           }
           const node = nodes[nodeId];
           if (node && isRemoteExecutionMode(node)) {
-            return {
-              ok: false,
+            const issue: WorkflowDslV3ValidationIssue = {
               code: "PARALLEL_REMOTE_NOT_SUPPORTED",
               message: `Remote execution is not supported inside parallel regions in v3 MVP (node ${nodeId})`,
+              nodeId,
             };
+            return { ok: false, ...issue, issues: [issue] };
           }
         }
       }

@@ -220,6 +220,7 @@ describe("workflow dsl", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("CONDITION_EDGE_CONSTRAINTS");
+      expect(result.issues?.[0]?.nodeId).toBe("c1");
     }
   });
 
@@ -246,6 +247,7 @@ describe("workflow dsl", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe("PARALLEL_REMOTE_NOT_SUPPORTED");
+      expect(result.issues?.[0]?.nodeId).toBe("a");
     }
   });
 
