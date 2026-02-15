@@ -145,6 +145,7 @@ export default function WorkflowDetailPage() {
               <Button
                 size="sm"
                 variant="accent"
+                disabled={clonePublished.isPending}
                 onClick={async () => {
                   try {
                     const payload = await clonePublished.mutateAsync({ workflowId: row.original.id });
@@ -155,7 +156,7 @@ export default function WorkflowDetailPage() {
                   }
                 }}
               >
-                {t("workflows.detail.createDraft")}
+                {clonePublished.isPending ? t("common.loading") : t("workflows.detail.createDraft")}
               </Button>
             ) : null}
           </div>
