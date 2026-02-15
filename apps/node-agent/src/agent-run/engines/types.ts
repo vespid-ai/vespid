@@ -19,6 +19,7 @@ export type AgentRunEngineRunInput = {
   node: any; // workflowNodeSchema validated upstream
   policyToolsAllow: string[] | null;
   effectiveToolsAllow: string[] | null;
+  toolset?: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null;
   runInput?: unknown;
   steps?: unknown;
   organizationSettings?: unknown;

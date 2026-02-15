@@ -216,6 +216,26 @@ export const agentPairingTokens = pgTable("agent_pairing_tokens", {
   agentPairingTokensOrgCreatedAtIdx: index("agent_pairing_tokens_org_created_at_idx").on(table.organizationId, table.createdAt),
 }));
 
+export const agentToolsets = pgTable("agent_toolsets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  visibility: text("visibility").notNull().default("private"),
+  publicSlug: text("public_slug"),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  mcpServers: jsonb("mcp_servers").notNull().default(sql`'[]'::jsonb`),
+  agentSkills: jsonb("agent_skills").notNull().default(sql`'[]'::jsonb`),
+  adoptedFrom: jsonb("adopted_from"),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  updatedByUserId: uuid("updated_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentToolsetsOrgCreatedAtIdx: index("agent_toolsets_org_created_at_idx").on(table.organizationId, table.createdAt),
+  agentToolsetsPublicSlugIdx: index("agent_toolsets_public_slug_idx").on(table.publicSlug),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
@@ -225,6 +245,7 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   connectorSecrets: many(connectorSecrets),
   agents: many(organizationAgents),
   agentPairingTokens: many(agentPairingTokens),
+  toolsets: many(agentToolsets),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -327,3 +348,4 @@ export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;
 export type DbConnectorSecret = typeof connectorSecrets.$inferSelect;
 export type DbOrganizationAgent = typeof organizationAgents.$inferSelect;
 export type DbAgentPairingToken = typeof agentPairingTokens.$inferSelect;
+export type DbAgentToolset = typeof agentToolsets.$inferSelect;

@@ -16,6 +16,8 @@ import {
   resolveEditionCapabilities,
   resolveEnterpriseConnectors,
   type AppError as AppErrorType,
+  validateAgentSkillBundles,
+  validateMcpPlaceholderPolicy,
 } from "@vespid/shared";
 import { createConnectorCatalog } from "@vespid/connectors";
 import { generateCodeVerifier, generateState } from "arctic";
@@ -135,12 +137,24 @@ const orgSettingsSchema = z
       })
       .strict()
       .optional(),
+    toolsets: z
+      .object({
+        defaultToolsetId: z.string().uuid().nullable().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
-function normalizeOrgSettings(input: unknown): { tools: { shellRunEnabled: boolean } } {
+function normalizeOrgSettings(input: unknown): { tools: { shellRunEnabled: boolean }; toolsets: { defaultToolsetId: string | null } } {
   const parsed = orgSettingsSchema.safeParse(input);
-  return { tools: { shellRunEnabled: parsed.success ? Boolean(parsed.data.tools?.shellRunEnabled) : false } };
+  return {
+    tools: { shellRunEnabled: parsed.success ? Boolean(parsed.data.tools?.shellRunEnabled) : false },
+    toolsets: {
+      defaultToolsetId:
+        parsed.success && typeof parsed.data.toolsets?.defaultToolsetId === "string" ? parsed.data.toolsets.defaultToolsetId : null,
+    },
+  };
 }
 
 const agentPairSchema = z.object({
@@ -148,6 +162,75 @@ const agentPairSchema = z.object({
   name: z.string().min(1).max(120),
   agentVersion: z.string().min(1).max(60),
   capabilities: z.record(z.string(), z.unknown()).optional(),
+});
+
+const mcpNameSchema = z.string().regex(/^[a-z0-9][a-z0-9-_]{0,63}$/);
+const toolsetVisibilitySchema = z.enum(["private", "org"]);
+const toolsetPublicSlugSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{2,80}$/);
+
+const mcpServerSchema = z
+  .object({
+    name: mcpNameSchema,
+    transport: z.enum(["stdio", "http"]),
+    command: z.string().min(1).max(200).optional(),
+    args: z.array(z.string().min(1).max(200)).max(50).optional(),
+    env: z.record(z.string().min(1).max(200), z.string().min(1).max(400)).optional(),
+    url: z.string().url().max(2000).optional(),
+    headers: z.record(z.string().min(1).max(120), z.string().min(1).max(400)).optional(),
+    enabled: z.boolean().optional(),
+    description: z.string().max(2000).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.transport === "stdio" && (!value.command || value.command.trim().length === 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "command is required for stdio transport", path: ["command"] });
+    }
+    if (value.transport === "http" && (!value.url || value.url.trim().length === 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "url is required for http transport", path: ["url"] });
+    }
+  });
+
+const agentSkillIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-_]{0,63}$/);
+const agentSkillFileSchema = z.object({
+  path: z.string().min(1).max(200),
+  content: z.string().min(1).max(2_000_000),
+  encoding: z.enum(["utf8", "base64"]).optional(),
+});
+const agentSkillBundleSchema = z.object({
+  format: z.literal("agentskills-v1"),
+  id: agentSkillIdSchema,
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  entry: z.literal("SKILL.md"),
+  files: z.array(agentSkillFileSchema).min(1).max(200),
+  enabled: z.boolean().optional(),
+  optionalDirs: z
+    .object({
+      scripts: z.boolean().optional(),
+      references: z.boolean().optional(),
+      assets: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+const toolsetUpsertSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  visibility: toolsetVisibilitySchema.default("private"),
+  mcpServers: z.array(mcpServerSchema).default([]),
+  agentSkills: z.array(agentSkillBundleSchema).default([]),
+});
+
+const toolsetPublishSchema = z.object({
+  publicSlug: toolsetPublicSlugSchema,
+});
+
+const toolsetUnpublishSchema = z.object({
+  visibility: toolsetVisibilitySchema.optional(),
+});
+
+const toolsetAdoptSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  description: z.string().max(2000).optional(),
 });
 
 const listWorkflowRunsQuerySchema = z.object({
@@ -228,6 +311,22 @@ function pairingTokenExpired(message = "Pairing token is expired"): AppError {
 
 function agentNotFound(message = "Agent not found"): AppError {
   return new AppError(404, { code: "AGENT_NOT_FOUND", message });
+}
+
+function toolsetNotFound(message = "Toolset not found"): AppError {
+  return new AppError(404, { code: "TOOLSET_NOT_FOUND", message });
+}
+
+function publicSlugConflict(message = "Public slug already exists"): AppError {
+  return new AppError(409, { code: "PUBLIC_SLUG_CONFLICT", message });
+}
+
+function invalidMcpPlaceholder(details?: unknown): AppError {
+  return new AppError(400, { code: "INVALID_MCP_PLACEHOLDER", message: "Invalid MCP placeholder policy", details });
+}
+
+function invalidSkillBundle(details?: unknown): AppError {
+  return new AppError(400, { code: "INVALID_SKILL_BUNDLE", message: "Invalid skill bundle", details });
 }
 
 function base64UrlEncode(input: string): string {
@@ -1164,6 +1263,12 @@ export async function buildServer(input?: {
             ? parsed.data.tools.shellRunEnabled
             : normalizedExisting.tools.shellRunEnabled,
       },
+      toolsets: {
+        defaultToolsetId:
+          parsed.data.toolsets && "defaultToolsetId" in parsed.data.toolsets
+            ? (parsed.data.toolsets.defaultToolsetId ?? null)
+            : normalizedExisting.toolsets.defaultToolsetId,
+      },
     };
 
     const updated = await store.updateOrganizationSettings({
@@ -1443,6 +1548,289 @@ export async function buildServer(input?: {
     }
 
     return { ok: true };
+  });
+
+  server.get("/v1/orgs/:orgId/toolsets", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const toolsets = await store.listAgentToolsetsByOrg({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
+    return { toolsets };
+  });
+
+  server.post("/v1/orgs/:orgId/toolsets", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const parsed = toolsetUpsertSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid toolset payload", parsed.error.flatten());
+    }
+
+    const mcpCheck = validateMcpPlaceholderPolicy(parsed.data.mcpServers);
+    if (!mcpCheck.ok) {
+      throw invalidMcpPlaceholder(mcpCheck);
+    }
+    const skillCheck = validateAgentSkillBundles(parsed.data.agentSkills);
+    if (!skillCheck.ok) {
+      throw invalidSkillBundle(skillCheck);
+    }
+
+    const toolset = await store.createAgentToolset({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      visibility: parsed.data.visibility,
+      mcpServers: parsed.data.mcpServers,
+      agentSkills: parsed.data.agentSkills,
+    });
+
+    return reply.status(201).send({ toolset });
+  });
+
+  server.get("/v1/orgs/:orgId/toolsets/:toolsetId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; toolsetId?: string };
+    if (!params.orgId || !params.toolsetId) {
+      throw badRequest("Missing orgId or toolsetId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const toolset = await store.getAgentToolsetById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      toolsetId: params.toolsetId,
+    });
+    if (!toolset) {
+      throw toolsetNotFound();
+    }
+    return { toolset };
+  });
+
+  server.put("/v1/orgs/:orgId/toolsets/:toolsetId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; toolsetId?: string };
+    if (!params.orgId || !params.toolsetId) {
+      throw badRequest("Missing orgId or toolsetId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const parsed = toolsetUpsertSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid toolset payload", parsed.error.flatten());
+    }
+
+    const current = await store.getAgentToolsetById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      toolsetId: params.toolsetId,
+    });
+    if (!current) {
+      throw toolsetNotFound();
+    }
+    if (current.visibility === "public") {
+      throw new AppError(400, { code: "BAD_REQUEST", message: "Published toolsets must be unpublished before editing." });
+    }
+    const mcpCheck = validateMcpPlaceholderPolicy(parsed.data.mcpServers);
+    if (!mcpCheck.ok) {
+      throw invalidMcpPlaceholder(mcpCheck);
+    }
+    const skillCheck = validateAgentSkillBundles(parsed.data.agentSkills);
+    if (!skillCheck.ok) {
+      throw invalidSkillBundle(skillCheck);
+    }
+
+    const toolset = await store.updateAgentToolset({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      toolsetId: params.toolsetId,
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      visibility: parsed.data.visibility,
+      mcpServers: parsed.data.mcpServers,
+      agentSkills: parsed.data.agentSkills,
+    });
+    if (!toolset) {
+      throw toolsetNotFound();
+    }
+    return { toolset };
+  });
+
+  server.delete("/v1/orgs/:orgId/toolsets/:toolsetId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; toolsetId?: string };
+    if (!params.orgId || !params.toolsetId) {
+      throw badRequest("Missing orgId or toolsetId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const ok = await store.deleteAgentToolset({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      toolsetId: params.toolsetId,
+    });
+    if (!ok) {
+      throw toolsetNotFound();
+    }
+    return { ok: true };
+  });
+
+  server.post("/v1/orgs/:orgId/toolsets/:toolsetId/publish", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; toolsetId?: string };
+    if (!params.orgId || !params.toolsetId) {
+      throw badRequest("Missing orgId or toolsetId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const parsed = toolsetPublishSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid publish payload", parsed.error.flatten());
+    }
+
+    // Re-validate placeholder policy for public distribution.
+    const current = await store.getAgentToolsetById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      toolsetId: params.toolsetId,
+    });
+    if (!current) {
+      throw toolsetNotFound();
+    }
+    const mcpCheck = validateMcpPlaceholderPolicy(current.mcpServers);
+    if (!mcpCheck.ok) {
+      throw invalidMcpPlaceholder(mcpCheck);
+    }
+    const skillCheck = validateAgentSkillBundles(current.agentSkills);
+    if (!skillCheck.ok) {
+      throw invalidSkillBundle(skillCheck);
+    }
+
+    try {
+      const toolset = await store.publishAgentToolset({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        toolsetId: params.toolsetId,
+        publicSlug: parsed.data.publicSlug,
+      });
+      if (!toolset) {
+        throw toolsetNotFound();
+      }
+      return { toolset };
+    } catch (error) {
+      if (error instanceof Error && error.message === "PUBLIC_SLUG_CONFLICT") {
+        throw publicSlugConflict();
+      }
+      throw error;
+    }
+  });
+
+  server.post("/v1/orgs/:orgId/toolsets/:toolsetId/unpublish", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; toolsetId?: string };
+    if (!params.orgId || !params.toolsetId) {
+      throw badRequest("Missing orgId or toolsetId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const parsed = toolsetUnpublishSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid unpublish payload", parsed.error.flatten());
+    }
+    const visibility = parsed.data.visibility ?? "org";
+
+    const toolset = await store.unpublishAgentToolset({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      toolsetId: params.toolsetId,
+      visibility,
+    });
+    if (!toolset) {
+      throw toolsetNotFound();
+    }
+    return { toolset };
+  });
+
+  server.get("/v1/toolset-gallery", async (request) => {
+    const auth = requireAuth(request);
+    const rows = await store.listPublicToolsetGallery({ actorUserId: auth.userId });
+    const items = rows
+      .filter((t) => t.visibility === "public" && typeof t.publicSlug === "string" && t.publicSlug.length > 0)
+      .map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description ?? null,
+        publicSlug: t.publicSlug!,
+        publishedAt: t.publishedAt ?? t.updatedAt,
+        mcpServerCount: Array.isArray(t.mcpServers) ? t.mcpServers.length : 0,
+        agentSkillCount: Array.isArray(t.agentSkills) ? t.agentSkills.length : 0,
+      }));
+    return { items };
+  });
+
+  server.get("/v1/toolset-gallery/:publicSlug", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { publicSlug?: string };
+    if (!params.publicSlug) {
+      throw badRequest("Missing publicSlug");
+    }
+    const toolset = await store.getPublicToolsetBySlug({ actorUserId: auth.userId, publicSlug: params.publicSlug });
+    if (!toolset) {
+      throw toolsetNotFound();
+    }
+    return { toolset };
+  });
+
+  server.post("/v1/orgs/:orgId/toolset-gallery/:publicSlug/adopt", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; publicSlug?: string };
+    if (!params.orgId || !params.publicSlug) {
+      throw badRequest("Missing orgId or publicSlug");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
+
+    const parsed = toolsetAdoptSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid adopt payload", parsed.error.flatten());
+    }
+
+    const adopted = await store.adoptPublicToolset({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      publicSlug: params.publicSlug,
+      nameOverride: parsed.data.name ?? null,
+      descriptionOverride: parsed.data.description ?? null,
+    });
+    if (!adopted) {
+      throw toolsetNotFound("Public toolset not found");
+    }
+
+    return reply.status(201).send({ toolset: adopted });
   });
 
   server.post("/v1/agents/pair", async (request, reply) => {

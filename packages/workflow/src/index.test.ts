@@ -21,6 +21,7 @@ describe("workflow dsl", () => {
           id: "n1",
           type: "agent.run",
           config: {
+            toolsetId: "00000000-0000-0000-0000-000000000000",
             llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
             execution: { mode: "cloud" },
             prompt: { instructions: "Say hello." },

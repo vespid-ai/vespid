@@ -78,6 +78,8 @@ describeIf("RLS integration", () => {
     const runBId = crypto.randomUUID();
     const secretAId = crypto.randomUUID();
     const secretBId = crypto.randomUUID();
+    const toolsetAId = crypto.randomUUID();
+    const toolsetPublicSlug = `public-toolset-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     const setup = await appPool.connect();
     try {
@@ -118,6 +120,10 @@ describeIf("RLS integration", () => {
       await setup.query(
         "insert into connector_secrets(id, organization_id, connector_id, name, kek_id, dek_ciphertext, dek_iv, dek_tag, secret_ciphertext, secret_iv, secret_tag, created_by_user_id, updated_by_user_id) values ($1, $2, 'github', 'token', 'test', decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), $3, $3)",
         [secretAId, orgAId, adminId]
+      );
+      await setup.query(
+        "insert into agent_toolsets(id, organization_id, name, description, visibility, public_slug, published_at, mcp_servers, agent_skills, created_by_user_id, updated_by_user_id) values ($1, $2, 'Toolset A', 'Public', 'public', $3, now(), '[]'::jsonb, '[]'::jsonb, $4, $4)",
+        [toolsetAId, orgAId, toolsetPublicSlug, adminId]
       );
 
       await setup.query(
@@ -189,6 +195,17 @@ describeIf("RLS integration", () => {
       );
       expect(wrongSecretContext.rowCount).toBe(0);
 
+      const publicToolsetVisibleFromOtherOrg = await client.query(
+        "select id from agent_toolsets where public_slug = $1",
+        [toolsetPublicSlug]
+      );
+      expect(publicToolsetVisibleFromOtherOrg.rowCount).toBe(1);
+      const cannotUpdateOtherOrgToolset = await client.query(
+        "update agent_toolsets set name = 'Hacked' where public_slug = $1 returning id",
+        [toolsetPublicSlug]
+      );
+      expect(cannotUpdateOtherOrgToolset.rowCount).toBe(0);
+
       await client.query("select set_config('app.current_org_id', $1, true)", [orgAId]);
       const rightContext = await client.query("select id from organizations where id = $1", [orgAId]);
       expect(rightContext.rowCount).toBe(1);
@@ -204,6 +221,12 @@ describeIf("RLS integration", () => {
         [orgAId, secretAId]
       );
       expect(rightSecretContext.rowCount).toBe(1);
+
+      const canUpdateOwnToolset = await client.query(
+        "update agent_toolsets set name = 'Toolset A Updated' where public_slug = $1 returning id",
+        [toolsetPublicSlug]
+      );
+      expect(canUpdateOwnToolset.rowCount).toBe(1);
 
       await client.query("rollback");
     } finally {

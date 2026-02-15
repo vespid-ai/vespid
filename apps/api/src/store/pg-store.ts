@@ -30,6 +30,16 @@ import {
   listOrganizationAgents as dbListOrganizationAgents,
   setOrganizationAgentTags as dbSetOrganizationAgentTags,
   revokeOrganizationAgent as dbRevokeOrganizationAgent,
+  createAgentToolset as dbCreateAgentToolset,
+  listAgentToolsetsByOrg as dbListAgentToolsetsByOrg,
+  getAgentToolsetById as dbGetAgentToolsetById,
+  updateAgentToolset as dbUpdateAgentToolset,
+  deleteAgentToolset as dbDeleteAgentToolset,
+  publishAgentToolset as dbPublishAgentToolset,
+  unpublishAgentToolset as dbUnpublishAgentToolset,
+  listPublicAgentToolsets as dbListPublicAgentToolsets,
+  getPublicAgentToolsetBySlug as dbGetPublicAgentToolsetBySlug,
+  adoptPublicAgentToolset as dbAdoptPublicAgentToolset,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
   getWorkflowById as dbGetWorkflowById,
@@ -48,7 +58,7 @@ import {
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
-import type { AppStore, OrganizationSettings } from "../types.js";
+import type { AgentToolsetRecord, AppStore, OrganizationSettings } from "../types.js";
 
 function toIso(value: Date): string {
   return value.toISOString();
@@ -77,6 +87,30 @@ export class PgAppStore implements AppStore {
     fn: (db: ReturnType<typeof createDb>) => Promise<T>
   ): Promise<T> {
     return withTenantContext(this.pool, { userId: input.userId }, async (db) => fn(db));
+  }
+
+  private async withPublicContext<T>(input: { userId: string }, fn: (db: ReturnType<typeof createDb>) => Promise<T>): Promise<T> {
+    // No org context; RLS policies must explicitly allow any needed SELECTs (e.g. public toolsets).
+    return withTenantContext(this.pool, { userId: input.userId }, async (db) => fn(db));
+  }
+
+  private toToolsetRecord(row: any): AgentToolsetRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      description: row.description ?? null,
+      visibility: row.visibility,
+      publicSlug: row.publicSlug ?? null,
+      publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
+      mcpServers: Array.isArray(row.mcpServers) ? row.mcpServers : (row.mcpServers ?? []),
+      agentSkills: Array.isArray(row.agentSkills) ? row.agentSkills : (row.agentSkills ?? []),
+      adoptedFrom: (row.adoptedFrom ?? null) as any,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
   }
 
   async ensureDefaultRoles(): Promise<void> {
@@ -1070,5 +1104,158 @@ export class PgAppStore implements AppStore {
       async (db) => dbRevokeOrganizationAgent(db, { organizationId: input.organizationId, agentId: input.agentId })
     );
     return Boolean(row);
+  }
+
+  async listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbListAgentToolsetsByOrg(db, { organizationId: input.organizationId })
+    );
+    return rows.map((r) => this.toToolsetRecord(r));
+  }
+
+  async createAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org";
+    mcpServers: unknown;
+    agentSkills: unknown;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateAgentToolset(db, {
+          organizationId: input.organizationId,
+          name: input.name,
+          description: input.description ?? null,
+          visibility: input.visibility,
+          publicSlug: null,
+          publishedAt: null,
+          mcpServers: input.mcpServers,
+          agentSkills: input.agentSkills,
+          adoptedFrom: null,
+          createdByUserId: input.actorUserId,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+    return this.toToolsetRecord(row);
+  }
+
+  async getAgentToolsetById(input: { organizationId: string; actorUserId: string; toolsetId: string }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbGetAgentToolsetById(db, { organizationId: input.organizationId, toolsetId: input.toolsetId })
+    );
+    return row ? this.toToolsetRecord(row) : null;
+  }
+
+  async updateAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org";
+    mcpServers: unknown;
+    agentSkills: unknown;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => {
+        const existing = await dbGetAgentToolsetById(db, { organizationId: input.organizationId, toolsetId: input.toolsetId });
+        if (!existing) return null;
+        return await dbUpdateAgentToolset(db, {
+          organizationId: input.organizationId,
+          toolsetId: input.toolsetId,
+          name: input.name,
+          description: input.description ?? null,
+          visibility: input.visibility,
+          publicSlug: existing.publicSlug ?? null,
+          publishedAt: existing.publishedAt ?? null,
+          mcpServers: input.mcpServers,
+          agentSkills: input.agentSkills,
+          adoptedFrom: existing.adoptedFrom ?? null,
+          updatedByUserId: input.actorUserId,
+        });
+      }
+    );
+    return row ? this.toToolsetRecord(row) : null;
+  }
+
+  async deleteAgentToolset(input: { organizationId: string; actorUserId: string; toolsetId: string }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbDeleteAgentToolset(db, { organizationId: input.organizationId, toolsetId: input.toolsetId })
+    );
+    return Boolean(row);
+  }
+
+  async publishAgentToolset(input: { organizationId: string; actorUserId: string; toolsetId: string; publicSlug: string }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbPublishAgentToolset(db, {
+          organizationId: input.organizationId,
+          toolsetId: input.toolsetId,
+          publicSlug: input.publicSlug,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+    return row ? this.toToolsetRecord(row) : null;
+  }
+
+  async unpublishAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    visibility: "private" | "org";
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUnpublishAgentToolset(db, {
+          organizationId: input.organizationId,
+          toolsetId: input.toolsetId,
+          visibility: input.visibility,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+    return row ? this.toToolsetRecord(row) : null;
+  }
+
+  async listPublicToolsetGallery(input: { actorUserId: string }) {
+    const rows = await this.withPublicContext({ userId: input.actorUserId }, async (db) => dbListPublicAgentToolsets(db));
+    return rows.map((r) => this.toToolsetRecord(r));
+  }
+
+  async getPublicToolsetBySlug(input: { actorUserId: string; publicSlug: string }) {
+    const row = await this.withPublicContext(
+      { userId: input.actorUserId },
+      async (db) => dbGetPublicAgentToolsetBySlug(db, { publicSlug: input.publicSlug })
+    );
+    return row ? this.toToolsetRecord(row) : null;
+  }
+
+  async adoptPublicToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    publicSlug: string;
+    nameOverride?: string | null;
+    descriptionOverride?: string | null;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbAdoptPublicAgentToolset(db, {
+          organizationId: input.organizationId,
+          publicSlug: input.publicSlug,
+          nameOverride: input.nameOverride ?? null,
+          descriptionOverride: input.descriptionOverride ?? null,
+          actorUserId: input.actorUserId,
+        })
+    );
+    return row ? this.toToolsetRecord(row) : null;
   }
 }

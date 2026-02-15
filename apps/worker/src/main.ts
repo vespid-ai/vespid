@@ -3,6 +3,7 @@ import {
   createPool,
   appendWorkflowRunEvent,
   getConnectorSecretById,
+  getAgentToolsetById,
   getOrganizationById,
   getWorkflowById,
   getWorkflowRunById,
@@ -224,6 +225,28 @@ export async function processWorkflowRunJob(
     });
   };
 
+  const loadToolsetById = async (toolsetInput: {
+    organizationId: string;
+    toolsetId: string;
+  }): Promise<{ id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null> => {
+    const row = await withTenantContext(
+      pool,
+      { userId: job.data.requestedByUserId, organizationId: toolsetInput.organizationId },
+      async (tenantDb) =>
+        getAgentToolsetById(tenantDb, {
+          organizationId: toolsetInput.organizationId,
+          toolsetId: toolsetInput.toolsetId,
+        })
+    );
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name,
+      mcpServers: (row.mcpServers ?? []) as any,
+      agentSkills: (row.agentSkills ?? []) as any,
+    };
+  };
+
   const executorRegistry =
     input?.executorRegistry ??
     (() => {
@@ -234,6 +257,7 @@ export async function processWorkflowRunJob(
       const communityExecutors = getCommunityWorkflowNodeExecutors({
         githubApiBaseUrl: getGithubApiBaseUrl(),
         loadConnectorSecretValue,
+        loadToolsetById,
       });
 
       return buildExecutorRegistry({
@@ -793,9 +817,32 @@ export async function startWorkflowWorker(input?: {
     });
   };
 
+  const loadToolsetById = async (toolsetInput: {
+    organizationId: string;
+    toolsetId: string;
+  }): Promise<{ id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null> => {
+    const row = await withTenantContext(
+      pool,
+      { organizationId: toolsetInput.organizationId },
+      async (tenantDb) =>
+        getAgentToolsetById(tenantDb, {
+          organizationId: toolsetInput.organizationId,
+          toolsetId: toolsetInput.toolsetId,
+        })
+    );
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name,
+      mcpServers: (row.mcpServers ?? []) as any,
+      agentSkills: (row.agentSkills ?? []) as any,
+    };
+  };
+
   const communityExecutors = getCommunityWorkflowNodeExecutors({
     githubApiBaseUrl: getGithubApiBaseUrl(),
     loadConnectorSecretValue,
+    loadToolsetById,
   });
 
   const executorRegistry = buildExecutorRegistry({ communityExecutors, enterpriseExecutors });
