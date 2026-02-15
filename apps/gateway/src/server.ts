@@ -5,7 +5,21 @@ import { z } from "zod";
 import { WebSocketServer, WebSocket } from "ws";
 import { Queue, type ConnectionOptions } from "bullmq";
 import { Redis } from "ioredis";
-import { createPool, withTenantContext, getOrganizationAgentByTokenHash, touchOrganizationAgentLastSeen } from "@vespid/db";
+import {
+  createPool,
+  withTenantContext,
+  getOrganizationAgentByTokenHash,
+  touchOrganizationAgentLastSeen,
+  getMembership,
+  getAuthSessionByRefreshTokenHash,
+  isAuthSessionActive,
+  getAgentSessionById,
+  listAgentSessionEventsTail,
+  appendAgentSessionEvent,
+  setAgentSessionPinnedAgent,
+  getAgentToolsetById,
+  getOrganizationById,
+} from "@vespid/db";
 import type {
   GatewayAgentHelloMessage,
   GatewayAgentPingMessage,
@@ -17,7 +31,7 @@ import type {
   GatewayDispatchRequest,
   GatewayDispatchResponse,
 } from "@vespid/shared";
-import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR, verifyAuthToken } from "@vespid/shared";
 import type { WorkflowContinuationJobPayload } from "@vespid/shared";
 import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "./results-store.js";
 
@@ -134,6 +148,10 @@ function metaKey(requestId: string): string {
   return `gateway:meta:${requestId}`;
 }
 
+function sessionMetaKey(requestId: string): string {
+  return `gateway:session-meta:${requestId}`;
+}
+
 function sha256Hex(value: string): string {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -178,10 +196,78 @@ function safeJsonParse(input: string): unknown {
   }
 }
 
+function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header || header.trim().length === 0) {
+    return {};
+  }
+  const out: Record<string, string> = {};
+  for (const part of header.split(";")) {
+    const [kRaw, ...rest] = part.trim().split("=");
+    if (!kRaw) continue;
+    const k = kRaw.trim();
+    const v = rest.join("=").trim();
+    if (!k) continue;
+    out[k] = decodeURIComponent(v);
+  }
+  return out;
+}
+
+function b64UrlDecode(input: string): string {
+  return Buffer.from(input, "base64url").toString("utf8");
+}
+
+function hmac(content: string, secret: string): string {
+  return crypto.createHmac("sha256", secret).update(content).digest("base64url");
+}
+
+function timingSafeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+type RefreshTokenPayload = {
+  sessionId: string;
+  userId: string;
+  tokenNonce: string;
+  expiresAt: number;
+};
+
+function verifyRefreshToken(
+  token: string,
+  secret: string,
+  nowSec = Math.floor(Date.now() / 1000)
+): RefreshTokenPayload | null {
+  const [encodedPayload, signature] = token.split(".");
+  if (!encodedPayload || !signature) {
+    return null;
+  }
+  const expected = hmac(encodedPayload, secret);
+  if (!timingSafeEqual(signature, expected)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(b64UrlDecode(encodedPayload)) as Partial<RefreshTokenPayload>;
+    if (!payload.sessionId || !payload.userId || !payload.tokenNonce || typeof payload.expiresAt !== "number") {
+      return null;
+    }
+    if (payload.expiresAt <= nowSec) {
+      return null;
+    }
+    return payload as RefreshTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
 export async function buildGatewayServer(input?: {
   pool?: ReturnType<typeof createPool>;
   serviceToken?: string;
   wsPath?: string;
+  clientWsPath?: string;
   resultsStore?: ResultsStore;
 }) {
   if (process.env.NODE_ENV === "production" && !process.env.REDIS_URL && !input?.resultsStore) {
@@ -211,12 +297,18 @@ export async function buildGatewayServer(input?: {
   const ownsPool = !input?.pool;
   const serviceToken = input?.serviceToken ?? process.env.GATEWAY_SERVICE_TOKEN ?? "dev-gateway-token";
   const wsPath = input?.wsPath ?? "/ws";
+  const clientWsPath = input?.clientWsPath ?? "/ws/client";
   const staleAgentMs = Math.max(5_000, envNumber("GATEWAY_AGENT_STALE_MS", 60_000));
   const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
   const agentSelection = process.env.GATEWAY_AGENT_SELECTION ?? "least_in_flight_lru";
   const resultsStore =
     input?.resultsStore ??
     (process.env.REDIS_URL ? createRedisResultsStore(process.env.REDIS_URL) : createInMemoryResultsStore());
+
+  const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
+  const refreshSecret = process.env.REFRESH_TOKEN_SECRET ?? "dev-refresh-secret";
+  const sessionCookieName = process.env.SESSION_COOKIE_NAME ?? "vespid_session";
+  const githubApiBaseUrl = process.env.GITHUB_API_BASE_URL ?? "https://api.github.com";
 
   const redisUrl = process.env.REDIS_URL ?? null;
   const continuationQueueName = process.env.WORKFLOW_CONTINUATION_QUEUE_NAME ?? "workflow-continuations";
@@ -240,6 +332,10 @@ export async function buildGatewayServer(input?: {
   const asyncTimeoutByRequestId = new Map<string, NodeJS.Timeout>();
   const metaByRequestId = new Map<string, z.infer<typeof gatewayDispatchMetaSchema>>();
 
+  const sessionClientsBySessionId = new Map<string, Set<WebSocket>>();
+  const sessionMetaByRequestId = new Map<string, { organizationId: string; sessionId: string; userId: string }>();
+  const clientStateByWs = new Map<WebSocket, { organizationId: string; userId: string; joinedSessionId: string | null }>();
+
   const httpSockets = new Set<Socket>();
   server.server.on("connection", (socket) => {
     httpSockets.add(socket);
@@ -261,6 +357,16 @@ export async function buildGatewayServer(input?: {
     agentsByOrg.clear();
     rrCursorByOrg.clear();
     inFlightByAgentId.clear();
+
+    for (const ws of clientStateByWs.keys()) {
+      try {
+        ws.terminate();
+      } catch {
+        // ignore
+      }
+    }
+    clientStateByWs.clear();
+    sessionClientsBySessionId.clear();
 
     for (const socket of httpSockets) {
       try {
@@ -774,7 +880,97 @@ export async function buildGatewayServer(input?: {
 
   server.get("/healthz", async () => ({ ok: true }));
 
+  function mapAgentEventKindToSessionEventType(kind: string): string {
+    if (kind === "agent.assistant_delta") return "agent_delta";
+    if (kind === "agent.assistant_message") return "agent_message";
+    if (kind === "agent.tool_call") return "tool_call";
+    if (kind === "agent.tool_result") return "tool_result";
+    if (kind === "agent.final") return "agent_final";
+    if (kind === "toolset_skills_applied") return "agent_message";
+    return "agent_message";
+  }
+
+  function summarizeJson(value: unknown, maxChars: number): unknown {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    try {
+      const json = JSON.stringify(value);
+      if (json.length <= maxChars) {
+        return value;
+      }
+      return { truncated: true, preview: json.slice(0, maxChars), originalLength: json.length };
+    } catch {
+      return { truncated: true, preview: String(value).slice(0, maxChars), originalLength: null };
+    }
+  }
+
+  function broadcastSessionEvent(sessionId: string, message: unknown) {
+    const set = sessionClientsBySessionId.get(sessionId);
+    if (!set || set.size === 0) {
+      return;
+    }
+    for (const ws of set) {
+      safeWsSend(ws, message);
+    }
+  }
+
+  async function resolveSessionMeta(requestId: string): Promise<{ organizationId: string; sessionId: string; userId: string } | null> {
+    const cached = sessionMetaByRequestId.get(requestId) ?? null;
+    if (cached) {
+      return cached;
+    }
+    if (!metaRedis) {
+      return null;
+    }
+    try {
+      const raw = await metaRedis.get(sessionMetaKey(requestId));
+      if (!raw) {
+        return null;
+      }
+      const parsed = z
+        .object({ organizationId: z.string().uuid(), sessionId: z.string().uuid(), userId: z.string().uuid() })
+        .safeParse(JSON.parse(raw) as unknown);
+      if (!parsed.success) {
+        return null;
+      }
+      sessionMetaByRequestId.set(requestId, parsed.data);
+      setTimeout(() => sessionMetaByRequestId.delete(requestId), resultsTtlSec * 1000).unref?.();
+      return parsed.data;
+    } catch {
+      return null;
+    }
+  }
+
+  async function appendAndBroadcastSessionEvent(input: {
+    organizationId: string;
+    sessionId: string;
+    eventType: string;
+    level: "info" | "warn" | "error";
+    payload?: unknown;
+  }) {
+    const row = await withTenantContext(pool, { organizationId: input.organizationId }, async (db) =>
+      appendAgentSessionEvent(db, {
+        organizationId: input.organizationId,
+        sessionId: input.sessionId,
+        eventType: input.eventType,
+        level: input.level,
+        payload: input.payload ?? null,
+      })
+    );
+    broadcastSessionEvent(input.sessionId, {
+      type: "session_event",
+      sessionId: input.sessionId,
+      seq: row.seq,
+      eventType: row.eventType,
+      level: row.level,
+      payload: row.payload ?? null,
+      createdAt: row.createdAt.toISOString(),
+    });
+  }
+
   const wss = new WebSocketServer({ noServer: true });
+  const wssClient = new WebSocketServer({ noServer: true });
   function wireAgentSocket(ws: WebSocket, agent: ConnectedAgent) {
     ws.on("message", async (data) => {
       const raw = typeof data === "string" ? data : data.toString("utf8");
@@ -871,6 +1067,31 @@ export async function buildGatewayServer(input?: {
           requestId: parsed.data.requestId,
           status: parsed.data.status,
         });
+
+        // If this requestId belongs to an interactive session, persist and broadcast a terminal event.
+        try {
+          const sessionMeta = await resolveSessionMeta(parsed.data.requestId);
+          if (sessionMeta) {
+            await appendAndBroadcastSessionEvent({
+              organizationId: sessionMeta.organizationId,
+              sessionId: sessionMeta.sessionId,
+              eventType: parsed.data.status === "succeeded" ? "agent_final" : "error",
+              level: parsed.data.status === "succeeded" ? "info" : "error",
+              payload: {
+                requestId: parsed.data.requestId,
+                status: parsed.data.status,
+                ...(parsed.data.output !== undefined ? { output: summarizeJson(parsed.data.output, 20_000) } : {}),
+                ...(parsed.data.error ? { error: parsed.data.error } : {}),
+              },
+            });
+            if (metaRedis) {
+              await metaRedis.del(sessionMetaKey(parsed.data.requestId));
+            }
+            sessionMetaByRequestId.delete(parsed.data.requestId);
+          }
+        } catch {
+          // Best-effort: session event persistence should not break gateway result handling.
+        }
 
         // Ack so agents can safely garbage-collect buffered results across reconnects.
         const ack: GatewayServerExecuteAckMessage = { type: "execute_ack", requestId: parsed.data.requestId };
@@ -1006,6 +1227,27 @@ export async function buildGatewayServer(input?: {
         agent.lastSeenAtMs = Date.now();
         await touchAgent(agent.organizationId, agent.agentId);
 
+        // Session streaming: persist/broadcast agent execution events when the requestId belongs to a session.
+        try {
+          const sessionMeta = await resolveSessionMeta(parsed.data.requestId);
+          if (sessionMeta) {
+            await appendAndBroadcastSessionEvent({
+              organizationId: sessionMeta.organizationId,
+              sessionId: sessionMeta.sessionId,
+              eventType: mapAgentEventKindToSessionEventType(parsed.data.event.kind),
+              level: parsed.data.event.level,
+              payload: {
+                requestId: parsed.data.requestId,
+                kind: parsed.data.event.kind,
+                ...(parsed.data.event.message ? { message: parsed.data.event.message } : {}),
+                ...(parsed.data.event.payload !== undefined ? { payload: summarizeJson(parsed.data.event.payload, 20_000) } : {}),
+              },
+            });
+          }
+        } catch {
+          // ignore
+        }
+
         if (!continuationQueue) {
           return;
         }
@@ -1084,67 +1326,540 @@ export async function buildGatewayServer(input?: {
     });
   }
 
+  function safeJsonStringify(value: unknown): string {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "null";
+    }
+  }
+
+  function parseUuid(value: unknown): string | null {
+    const raw = Array.isArray(value) ? value[0] : value;
+    const parsed = z.string().uuid().safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  }
+
+  async function resolveClientAuth(input: { headers: Record<string, unknown> }) {
+    const bearer = parseBearerToken(input.headers["authorization"]);
+    if (bearer) {
+      const claims = verifyAuthToken(bearer, authSecret);
+      if (!claims) {
+        return null;
+      }
+      return { userId: claims.userId, email: claims.email, sessionId: claims.sessionId };
+    }
+
+    const cookies = parseCookies(typeof input.headers["cookie"] === "string" ? input.headers["cookie"] : undefined);
+    const refreshToken = cookies[sessionCookieName];
+    if (!refreshToken) {
+      return null;
+    }
+    const payload = verifyRefreshToken(refreshToken, refreshSecret);
+    if (!payload) {
+      return null;
+    }
+
+    // Validate that the refresh token corresponds to an active DB session.
+    const refreshHash = sha256Hex(refreshToken);
+    try {
+      const sessionRow = await withTenantContext(pool, { userId: payload.userId }, async (db) =>
+        getAuthSessionByRefreshTokenHash(db, refreshHash)
+      );
+      if (!sessionRow) {
+        return null;
+      }
+      if (sessionRow.id !== payload.sessionId) {
+        return null;
+      }
+      if (sessionRow.userId !== payload.userId) {
+        return null;
+      }
+      if (!isAuthSessionActive({ expiresAt: sessionRow.expiresAt, revokedAt: sessionRow.revokedAt })) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    return { userId: payload.userId, email: "", sessionId: payload.sessionId };
+  }
+
+  function addClientToSession(sessionId: string, ws: WebSocket) {
+    const set = sessionClientsBySessionId.get(sessionId) ?? new Set<WebSocket>();
+    set.add(ws);
+    sessionClientsBySessionId.set(sessionId, set);
+  }
+
+  function removeClientFromSession(sessionId: string, ws: WebSocket) {
+    const set = sessionClientsBySessionId.get(sessionId);
+    if (!set) return;
+    set.delete(ws);
+    if (set.size === 0) {
+      sessionClientsBySessionId.delete(sessionId);
+    }
+  }
+
+  async function joinSessionForClient(input: { ws: WebSocket; organizationId: string; userId: string; sessionId: string }) {
+    const existing = await withTenantContext(pool, { organizationId: input.organizationId }, async (db) =>
+      getAgentSessionById(db, { organizationId: input.organizationId, sessionId: input.sessionId })
+    );
+    if (!existing) {
+      safeWsSend(input.ws, { type: "session_error", sessionId: input.sessionId, code: "SESSION_NOT_FOUND", message: "Session not found" });
+      return;
+    }
+
+    const state = clientStateByWs.get(input.ws);
+    if (state?.joinedSessionId) {
+      removeClientFromSession(state.joinedSessionId, input.ws);
+    }
+    clientStateByWs.set(input.ws, { organizationId: input.organizationId, userId: input.userId, joinedSessionId: input.sessionId });
+    addClientToSession(input.sessionId, input.ws);
+
+    // Send tail events for quick hydration.
+    const tail = await withTenantContext(pool, { organizationId: input.organizationId }, async (db) =>
+      listAgentSessionEventsTail(db, { organizationId: input.organizationId, sessionId: input.sessionId, limit: 200 })
+    );
+    for (const row of tail) {
+      safeWsSend(input.ws, {
+        type: "session_event",
+        sessionId: input.sessionId,
+        seq: row.seq,
+        eventType: row.eventType,
+        level: row.level,
+        payload: row.payload ?? null,
+        createdAt: row.createdAt.toISOString(),
+      });
+    }
+  }
+
+  function normalizeLimits(raw: unknown): {
+    maxTurns: number;
+    maxToolCalls: number;
+    timeoutMs: number;
+    maxOutputChars: number;
+    maxRuntimeChars: number;
+  } {
+    const base = { maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 };
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return base;
+    }
+    const r: any = raw;
+    const out = { ...base };
+    if (typeof r.maxTurns === "number" && Number.isFinite(r.maxTurns)) out.maxTurns = Math.max(1, Math.min(64, Math.floor(r.maxTurns)));
+    if (typeof r.maxToolCalls === "number" && Number.isFinite(r.maxToolCalls)) out.maxToolCalls = Math.max(0, Math.min(200, Math.floor(r.maxToolCalls)));
+    if (typeof r.timeoutMs === "number" && Number.isFinite(r.timeoutMs)) out.timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, Math.floor(r.timeoutMs)));
+    if (typeof r.maxOutputChars === "number" && Number.isFinite(r.maxOutputChars)) out.maxOutputChars = Math.max(256, Math.min(1_000_000, Math.floor(r.maxOutputChars)));
+    if (typeof r.maxRuntimeChars === "number" && Number.isFinite(r.maxRuntimeChars)) out.maxRuntimeChars = Math.max(1024, Math.min(2_000_000, Math.floor(r.maxRuntimeChars)));
+    return out;
+  }
+
+  function buildSessionTranscript(events: Array<{ eventType: string; payload: any; level: string }>) {
+    const steps: any[] = [];
+    for (const e of events) {
+      if (e.eventType === "user_message") {
+        steps.push({ role: "user", content: typeof e.payload?.message === "string" ? e.payload.message : safeJsonStringify(e.payload ?? null) });
+        continue;
+      }
+      if (e.eventType === "agent_message" || e.eventType === "agent_delta") {
+        const content =
+          typeof e.payload?.message === "string"
+            ? e.payload.message
+            : typeof e.payload?.content === "string"
+              ? e.payload.content
+              : safeJsonStringify(e.payload ?? null);
+        steps.push({ role: "assistant", content });
+        continue;
+      }
+      // Keep other events as structured steps so the node can reason about them if needed.
+      steps.push({ type: e.eventType, level: e.level, payload: e.payload ?? null });
+    }
+    return steps;
+  }
+
+  function wireClientSocket(ws: WebSocket, context: { organizationId: string; userId: string }) {
+    clientStateByWs.set(ws, { organizationId: context.organizationId, userId: context.userId, joinedSessionId: null });
+
+    ws.on("message", async (data) => {
+      const raw = typeof data === "string" ? data : data.toString("utf8");
+      const message = safeJsonParse(raw);
+      if (!message || typeof message !== "object") {
+        return;
+      }
+      const type = (message as any).type;
+      if (type === "client_hello") {
+        server.log.info({ event: "gateway_client_connected", orgId: context.organizationId, userId: context.userId });
+        return;
+      }
+
+      if (type === "session_join") {
+        const parsed = z.object({ type: z.literal("session_join"), sessionId: z.string().uuid() }).safeParse(message);
+        if (!parsed.success) {
+          safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_join payload" });
+          return;
+        }
+        await joinSessionForClient({ ws, organizationId: context.organizationId, userId: context.userId, sessionId: parsed.data.sessionId });
+        return;
+      }
+
+      if (type === "session_reset_agent") {
+        const parsed = z.object({ type: z.literal("session_reset_agent"), sessionId: z.string().uuid() }).safeParse(message);
+        if (!parsed.success) {
+          safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_reset_agent payload" });
+          return;
+        }
+        await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+          setAgentSessionPinnedAgent(db, { organizationId: context.organizationId, sessionId: parsed.data.sessionId, pinnedAgentId: null })
+        );
+        await appendAndBroadcastSessionEvent({
+          organizationId: context.organizationId,
+          sessionId: parsed.data.sessionId,
+          eventType: "agent_selected",
+          level: "info",
+          payload: { pinnedAgentId: null },
+        });
+        return;
+      }
+
+      if (type === "session_send") {
+        const parsed = z
+          .object({
+            type: z.literal("session_send"),
+            sessionId: z.string().uuid(),
+            message: z.string().min(1).max(50_000),
+            idempotencyKey: z.string().min(1).max(80).optional(),
+          })
+          .safeParse(message);
+        if (!parsed.success) {
+          safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_send payload" });
+          return;
+        }
+
+        const session = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+          getAgentSessionById(db, { organizationId: context.organizationId, sessionId: parsed.data.sessionId })
+        );
+        if (!session) {
+          safeWsSend(ws, { type: "session_error", sessionId: parsed.data.sessionId, code: "SESSION_NOT_FOUND", message: "Session not found" });
+          return;
+        }
+
+        // Persist and broadcast the user message.
+        const userEvent = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+          appendAgentSessionEvent(db, {
+            organizationId: context.organizationId,
+            sessionId: parsed.data.sessionId,
+            eventType: "user_message",
+            level: "info",
+            payload: { message: parsed.data.message },
+          })
+        );
+        broadcastSessionEvent(parsed.data.sessionId, {
+          type: "session_event",
+          sessionId: parsed.data.sessionId,
+          seq: userEvent.seq,
+          eventType: userEvent.eventType,
+          level: userEvent.level,
+          payload: userEvent.payload ?? null,
+          createdAt: userEvent.createdAt.toISOString(),
+        });
+
+        const attemptCount = userEvent.seq + 1;
+        const requestId = `${parsed.data.sessionId}:agent:${attemptCount}`;
+
+        // Ensure we have a pinned agent for deterministic routing.
+        let pinnedAgentId = session.pinnedAgentId ?? null;
+        let selectedAgent: ConnectedAgent | null = null;
+        if (pinnedAgentId) {
+          const list = agentsByOrg.get(context.organizationId) ?? [];
+          selectedAgent = list.find((a) => a.agentId === pinnedAgentId) ?? null;
+        }
+        if (!selectedAgent) {
+          selectedAgent = await selectDispatchAgent({
+            organizationId: context.organizationId,
+            kind: "agent.run",
+            requestId,
+            ...(session.selectorTag ? { selectorTag: session.selectorTag } : {}),
+            ...(session.selectorGroup ? { selectorGroup: session.selectorGroup } : {}),
+          });
+          if (!selectedAgent) {
+            await appendAndBroadcastSessionEvent({
+              organizationId: context.organizationId,
+              sessionId: parsed.data.sessionId,
+              eventType: "error",
+              level: "error",
+              payload: { code: "NO_AGENT_AVAILABLE", message: "No node-agent is connected for this org" },
+            });
+            safeWsSend(ws, { type: "session_error", sessionId: parsed.data.sessionId, code: "NO_AGENT_AVAILABLE", message: "No node-agent is connected for this org" });
+            return;
+          }
+          pinnedAgentId = selectedAgent.agentId;
+          await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+            setAgentSessionPinnedAgent(db, { organizationId: context.organizationId, sessionId: parsed.data.sessionId, pinnedAgentId })
+          );
+          await appendAndBroadcastSessionEvent({
+            organizationId: context.organizationId,
+            sessionId: parsed.data.sessionId,
+            eventType: "agent_selected",
+            level: "info",
+            payload: { pinnedAgentId, name: selectedAgent.name ?? null },
+          });
+        }
+
+        // Prepare toolset payload (skills-only context; execution engines may ignore).
+        let toolset: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null = null;
+        if (session.toolsetId) {
+          const loaded = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+            getAgentToolsetById(db, { organizationId: context.organizationId, toolsetId: session.toolsetId! })
+          );
+          if (loaded) {
+            toolset = {
+              id: loaded.id,
+              name: loaded.name,
+              mcpServers: loaded.mcpServers ?? [],
+              agentSkills: loaded.agentSkills ?? [],
+            };
+          }
+        }
+
+        const orgRow = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+          getOrganizationById(db, { organizationId: context.organizationId })
+        );
+        const organizationSettings = orgRow ? orgRow.settings : null;
+
+        const tail = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+          listAgentSessionEventsTail(db, { organizationId: context.organizationId, sessionId: parsed.data.sessionId, limit: 30 })
+        );
+        const steps = buildSessionTranscript(tail.map((e) => ({ eventType: e.eventType, payload: e.payload, level: e.level })));
+
+        const toolsAllow = Array.isArray(session.toolsAllow) ? session.toolsAllow.filter((t) => typeof t === "string") : [];
+        const limits = normalizeLimits(session.limits);
+
+        const node = {
+          id: "agent",
+          type: "agent.run",
+          config: {
+            ...(session.toolsetId ? { toolsetId: session.toolsetId } : {}),
+            llm: {
+              provider: session.llmProvider,
+              model: session.llmModel,
+              auth: { fallbackToEnv: true },
+            },
+            execution: { mode: "node" },
+            engine: { id: session.engineId },
+            prompt: {
+              ...(session.promptSystem ? { system: session.promptSystem } : {}),
+              instructions: session.promptInstructions,
+            },
+            tools: { allow: toolsAllow, execution: "node" },
+            limits,
+            output: { mode: "text" },
+          },
+        };
+
+        const payload = {
+          nodeId: "agent",
+          node,
+          policyToolsAllow: toolsAllow,
+          effectiveToolsAllow: toolsAllow,
+          ...(toolset ? { toolset } : {}),
+          runId: parsed.data.sessionId,
+          workflowId: parsed.data.sessionId,
+          attemptCount,
+          runInput: { message: parsed.data.message },
+          steps,
+          organizationSettings,
+          env: { githubApiBaseUrl },
+          secrets: {},
+        };
+
+        // Track session meta so agent execute_event/execute_result can be persisted to agent_session_events.
+        const meta = { organizationId: context.organizationId, sessionId: parsed.data.sessionId, userId: context.userId };
+        sessionMetaByRequestId.set(requestId, meta);
+        setTimeout(() => sessionMetaByRequestId.delete(requestId), resultsTtlSec * 1000).unref?.();
+        if (metaRedis) {
+          try {
+            await metaRedis.set(sessionMetaKey(requestId), safeJsonStringify(meta), "EX", resultsTtlSec);
+          } catch {
+            // ignore
+          }
+        }
+
+        const exec: GatewayServerExecuteMessage = {
+          type: "execute",
+          requestId,
+          organizationId: context.organizationId,
+          userId: context.userId,
+          kind: "agent.run",
+          payload,
+        };
+
+        // Best-effort: keep consistent in-flight tracking and timeouts (like internal dispatch).
+        incInFlight(selectedAgent.agentId);
+        dispatchedByRequestId.set(requestId, selectedAgent.agentId);
+
+        const timeoutMs = limits.timeoutMs;
+        const timeout = setTimeout(() => {
+          pendingByRequestId.delete(requestId);
+          dispatchedByRequestId.delete(requestId);
+          decInFlight(selectedAgent!.agentId);
+          void resultsStore.set(requestId, { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout }, resultsTtlSec);
+          void appendAndBroadcastSessionEvent({
+            organizationId: context.organizationId,
+            sessionId: parsed.data.sessionId,
+            eventType: "error",
+            level: "error",
+            payload: { requestId, code: REMOTE_EXEC_ERROR.NodeExecutionTimeout },
+          });
+          safeWsSend(ws, {
+            type: "session_error",
+            sessionId: parsed.data.sessionId,
+            code: REMOTE_EXEC_ERROR.NodeExecutionTimeout,
+            message: "Node execution timed out",
+          });
+        }, timeoutMs);
+
+        pendingByRequestId.set(requestId, {
+          resolve: () => {
+            clearTimeout(timeout);
+          },
+          timeout,
+          organizationId: context.organizationId,
+          agentId: selectedAgent.agentId,
+        });
+
+        selectedAgent.lastUsedAtMs = Date.now();
+        if (!safeWsSend(selectedAgent.ws, exec)) {
+          clearTimeout(timeout);
+          pendingByRequestId.delete(requestId);
+          dispatchedByRequestId.delete(requestId);
+          decInFlight(selectedAgent.agentId);
+          removeAgent(selectedAgent.organizationId, selectedAgent.agentId);
+          await appendAndBroadcastSessionEvent({
+            organizationId: context.organizationId,
+            sessionId: parsed.data.sessionId,
+            eventType: "error",
+            level: "error",
+            payload: { requestId, code: REMOTE_EXEC_ERROR.AgentDisconnected },
+          });
+          safeWsSend(ws, { type: "session_error", sessionId: parsed.data.sessionId, code: "PINNED_AGENT_OFFLINE", message: "Pinned agent is offline" });
+          return;
+        }
+
+        server.log.info({
+          event: "gateway_session_send_received",
+          orgId: context.organizationId,
+          userId: context.userId,
+          sessionId: parsed.data.sessionId,
+          requestId,
+          agentId: selectedAgent.agentId,
+        });
+        return;
+      }
+    });
+
+    ws.on("close", () => {
+      const state = clientStateByWs.get(ws);
+      if (state?.joinedSessionId) {
+        removeClientFromSession(state.joinedSessionId, ws);
+      }
+      clientStateByWs.delete(ws);
+      server.log.info({ event: "gateway_client_disconnected", orgId: context.organizationId, userId: context.userId });
+    });
+  }
+
   server.server.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (url.pathname !== wsPath) {
-      socket.destroy();
+    if (url.pathname === wsPath) {
+      const token = parseBearerToken(req.headers.authorization);
+      if (!token) {
+        socket.destroy();
+        return;
+      }
+
+      const orgId = parseOrgIdPrefix(token);
+      if (!orgId) {
+        socket.destroy();
+        return;
+      }
+
+      const tokenHash = sha256Hex(token);
+
+      const agentRow = await withTenantContext(pool, { organizationId: orgId }, async (db) =>
+        getOrganizationAgentByTokenHash(db, { organizationId: orgId, tokenHash })
+      );
+
+      if (!agentRow || agentRow.revokedAt) {
+        socket.destroy();
+        return;
+      }
+
+      const agent: ConnectedAgent = {
+        ws: null as unknown as WebSocket,
+        organizationId: orgId,
+        agentId: agentRow.id,
+        tokenHash,
+        lastSeenAtMs: Date.now(),
+        lastUsedAtMs: 0,
+        capabilities:
+          agentRow.capabilities && typeof agentRow.capabilities === "object"
+            ? (agentRow.capabilities as Record<string, unknown>)
+            : null,
+        authoritativeTags: new Set((agentRow.tags ?? []).filter((tag): tag is string => typeof tag === "string")),
+        name: agentRow.name ?? null,
+        agentVersion: null,
+      };
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        agent.ws = ws;
+        const list = agentsByOrg.get(orgId) ?? [];
+        list.push(agent);
+        agentsByOrg.set(orgId, list);
+        void touchAgent(orgId, agent.agentId);
+        server.log.info({ event: "gateway_agent_connected", orgId, agentId: agent.agentId });
+        wireAgentSocket(ws, agent);
+      });
       return;
     }
 
-    const token = parseBearerToken(req.headers.authorization);
-    if (!token) {
-      socket.destroy();
+    if (url.pathname === clientWsPath) {
+      const auth = await resolveClientAuth({ headers: req.headers as any });
+      if (!auth) {
+        socket.destroy();
+        return;
+      }
+
+      const orgId =
+        parseUuid(req.headers["x-org-id"]) ??
+        parseUuid(url.searchParams.get("orgId")) ??
+        null;
+
+      if (!orgId) {
+        socket.destroy();
+        return;
+      }
+
+      const membership = await withTenantContext(pool, { organizationId: orgId }, async (db) =>
+        getMembership(db, { organizationId: orgId, userId: auth.userId })
+      );
+      if (!membership) {
+        socket.destroy();
+        return;
+      }
+
+      wssClient.handleUpgrade(req, socket, head, (ws) => {
+        wireClientSocket(ws, { organizationId: orgId, userId: auth.userId });
+      });
       return;
     }
 
-    const orgId = parseOrgIdPrefix(token);
-    if (!orgId) {
-      socket.destroy();
-      return;
-    }
-
-    const tokenHash = sha256Hex(token);
-
-    const agentRow = await withTenantContext(pool, { organizationId: orgId }, async (db) =>
-      getOrganizationAgentByTokenHash(db, { organizationId: orgId, tokenHash })
-    );
-
-    if (!agentRow || agentRow.revokedAt) {
-      socket.destroy();
-      return;
-    }
-
-    const agent: ConnectedAgent = {
-      ws: null as unknown as WebSocket,
-      organizationId: orgId,
-      agentId: agentRow.id,
-      tokenHash,
-      lastSeenAtMs: Date.now(),
-      lastUsedAtMs: 0,
-      capabilities:
-        agentRow.capabilities && typeof agentRow.capabilities === "object"
-          ? (agentRow.capabilities as Record<string, unknown>)
-          : null,
-      authoritativeTags: new Set((agentRow.tags ?? []).filter((tag): tag is string => typeof tag === "string")),
-      name: agentRow.name ?? null,
-      agentVersion: null,
-    };
-
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      agent.ws = ws;
-      const list = agentsByOrg.get(orgId) ?? [];
-      list.push(agent);
-      agentsByOrg.set(orgId, list);
-      void touchAgent(orgId, agent.agentId);
-      server.log.info({ event: "gateway_agent_connected", orgId, agentId: agent.agentId });
-      wireAgentSocket(ws, agent);
-    });
+    socket.destroy();
   });
 
   server.addHook("onClose", async () => {
     terminateSessions();
 
     wss.close();
+    wssClient.close();
     for (const timeout of asyncTimeoutByRequestId.values()) {
       clearTimeout(timeout);
     }
