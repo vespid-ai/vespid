@@ -9,9 +9,11 @@ import type {
   InvitationRecord,
   MembershipRecord,
   OrganizationAgentRecord,
+  OrganizationCreditsRecord,
   OrganizationRecord,
   OrganizationSettings,
   SessionRecord,
+  UserOrgSummaryRecord,
   UserRecord,
   WorkflowRecord,
   WorkflowRunEventRecord,
@@ -44,6 +46,9 @@ export class MemoryAppStore implements AppStore {
     secretIv: Buffer;
     secretTag: Buffer;
   })>();
+  private orgCreditBalances = new Map<string, { balanceCredits: number; updatedAt: string }>();
+  private processedStripeEvents = new Set<string>();
+  private orgBillingAccounts = new Map<string, { stripeCustomerId: string }>();
   private agentPairingTokensByHash = new Map<string, AgentPairingTokenRecord>();
   private organizationAgents = new Map<
     string,
@@ -92,6 +97,43 @@ export class MemoryAppStore implements AppStore {
     return this.users.get(id) ?? null;
   }
 
+  async listOrganizationsForUser(input: { actorUserId: string }): Promise<UserOrgSummaryRecord[]> {
+    const results: UserOrgSummaryRecord[] = [];
+    for (const membership of this.memberships.values()) {
+      if (membership.userId !== input.actorUserId) {
+        continue;
+      }
+      const org = this.organizations.get(membership.organizationId);
+      if (!org) {
+        continue;
+      }
+      results.push({ organization: org, membership });
+    }
+    results.sort((a, b) => a.organization.createdAt.localeCompare(b.organization.createdAt));
+    return results;
+  }
+
+  async ensurePersonalOrganizationForUser(input: {
+    actorUserId: string;
+    trialCredits: number;
+  }): Promise<{ defaultOrgId: string; created: boolean }> {
+    const existing = await this.listOrganizationsForUser({ actorUserId: input.actorUserId });
+    if (existing.length > 0) {
+      return { defaultOrgId: existing[0]!.organization.id, created: false };
+    }
+
+    const created = await this.createOrganizationWithOwner({
+      name: "Personal workspace",
+      slug: `personal-${input.actorUserId.slice(0, 8)}`,
+      ownerUserId: input.actorUserId,
+    });
+    this.orgCreditBalances.set(created.organization.id, {
+      balanceCredits: Math.max(0, Math.floor(input.trialCredits)),
+      updatedAt: nowIso(),
+    });
+    return { defaultOrgId: created.organization.id, created: true };
+  }
+
   async createOrganizationWithOwner(input: {
     name: string;
     slug: string;
@@ -119,6 +161,9 @@ export class MemoryAppStore implements AppStore {
     };
 
     this.memberships.set(membership.id, membership);
+    if (!this.orgCreditBalances.has(organization.id)) {
+      this.orgCreditBalances.set(organization.id, { balanceCredits: 0, updatedAt: nowIso() });
+    }
     return { organization, membership };
   }
 
@@ -931,6 +976,65 @@ export class MemoryAppStore implements AppStore {
     }
     this.connectorSecrets.delete(input.secretId);
     return true;
+  }
+
+  async getOrganizationCredits(input: { organizationId: string; actorUserId?: string }): Promise<OrganizationCreditsRecord> {
+    const row = this.orgCreditBalances.get(input.organizationId) ?? { balanceCredits: 0, updatedAt: nowIso() };
+    this.orgCreditBalances.set(input.organizationId, row);
+    return { organizationId: input.organizationId, balanceCredits: row.balanceCredits, updatedAt: row.updatedAt };
+  }
+
+  async grantOrganizationCredits(input: {
+    organizationId: string;
+    actorUserId?: string;
+    credits: number;
+    reason: string;
+    metadata?: unknown;
+  }): Promise<OrganizationCreditsRecord> {
+    const existing = await this.getOrganizationCredits({ organizationId: input.organizationId });
+    const next = {
+      balanceCredits: existing.balanceCredits + Math.max(0, Math.floor(input.credits)),
+      updatedAt: nowIso(),
+    };
+    this.orgCreditBalances.set(input.organizationId, next);
+    return { organizationId: input.organizationId, balanceCredits: next.balanceCredits, updatedAt: next.updatedAt };
+  }
+
+  async creditOrganizationFromStripeEvent(input: {
+    organizationId: string;
+    stripeEventId: string;
+    credits: number;
+    metadata?: unknown;
+  }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }> {
+    if (this.processedStripeEvents.has(input.stripeEventId)) {
+      return { applied: false, balance: await this.getOrganizationCredits({ organizationId: input.organizationId }) };
+    }
+    this.processedStripeEvents.add(input.stripeEventId);
+    const balance = await this.grantOrganizationCredits({
+      organizationId: input.organizationId,
+      credits: input.credits,
+      reason: "stripe_topup",
+      metadata: input.metadata,
+    });
+    return { applied: true, balance };
+  }
+
+  async getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null> {
+    return this.orgBillingAccounts.get(input.organizationId) ?? null;
+  }
+
+  async createOrganizationBillingAccount(input: {
+    organizationId: string;
+    actorUserId?: string;
+    stripeCustomerId: string;
+  }): Promise<{ stripeCustomerId: string }> {
+    const existing = this.orgBillingAccounts.get(input.organizationId);
+    if (existing) {
+      return existing;
+    }
+    const row = { stripeCustomerId: input.stripeCustomerId };
+    this.orgBillingAccounts.set(input.organizationId, row);
+    return row;
   }
 
   async createAgentPairingToken(input: {

@@ -1892,6 +1892,154 @@ describe("api rbac promotion flow", () => {
     expect(ownerCanAssignOwner.statusCode).toBe(200);
     expect((ownerCanAssignOwner.json() as { membership: { roleKey: string } }).membership.roleKey).toBe("owner");
   });
+
+  it("bootstraps a personal workspace and exposes it via /v1/me", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "personal@example.com",
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const signupBody = signup.json() as { session: { token: string } };
+
+    const me = await server.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: {
+        authorization: `Bearer ${bearerToken(signupBody as any)}`,
+      },
+    });
+    expect(me.statusCode).toBe(200);
+    const meBody = me.json() as { defaultOrgId: string | null; orgs: Array<{ id: string; name: string; roleKey: string }> };
+    expect(typeof meBody.defaultOrgId).toBe("string");
+    expect(meBody.orgs.length).toBeGreaterThan(0);
+    const found = meBody.orgs.find((o) => o.id === meBody.defaultOrgId);
+    expect(found?.roleKey).toBe("owner");
+  });
+});
+
+describe("personal billing credits (memory store + fake Stripe)", () => {
+  const store = new MemoryAppStore();
+  const queueProducer = createFakeQueueProducer();
+  let organizationIdForWebhook = "org-from-test";
+
+  const stripe = {
+    customers: {
+      create: vi.fn(async () => ({ id: "cus_test_1" })),
+    },
+    checkout: {
+      sessions: {
+        create: vi.fn(async () => ({ id: "cs_test_1", url: "https://checkout.local/session/cs_test_1" })),
+      },
+    },
+    webhooks: {
+      constructEvent: vi.fn((rawBody: Buffer, signature: string, secret: string) => {
+        return {
+          id: "evt_test_1",
+          type: "checkout.session.completed",
+          data: {
+            object: {
+              id: "cs_test_1",
+              payment_status: "paid",
+              metadata: {
+                organizationId: organizationIdForWebhook,
+                packId: "credits-1m",
+                credits: "10",
+              },
+              amount_total: 1000,
+              currency: "usd",
+            },
+          },
+        };
+      }),
+    },
+  } as any;
+
+  let server: Awaited<ReturnType<typeof buildServer>>;
+
+  beforeAll(async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
+    process.env.STRIPE_CREDITS_PACKS_JSON = JSON.stringify({
+      "credits-1m": { priceId: "price_test_1", credits: 10 },
+    });
+    server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      orgContextEnforcement: "strict",
+      queueProducer,
+      stripe,
+    });
+  });
+
+  afterAll(async () => {
+    await server.close();
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    delete process.env.STRIPE_CREDITS_PACKS_JSON;
+  });
+
+  it("creates checkout sessions and applies credits idempotently via webhook", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: "bill@example.com",
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const signupBody = signup.json() as { session: { token: string } };
+
+    const me = await server.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${bearerToken(signupBody as any)}` },
+    });
+    const meBody = me.json() as { defaultOrgId: string | null };
+    const orgId = meBody.defaultOrgId as string;
+    expect(typeof orgId).toBe("string");
+    organizationIdForWebhook = orgId;
+
+    const checkout = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/billing/credits/checkout`,
+      headers: {
+        authorization: `Bearer ${bearerToken(signupBody as any)}`,
+        "x-org-id": orgId,
+      },
+      payload: { packId: "credits-1m" },
+    });
+    expect(checkout.statusCode).toBe(200);
+    const checkoutBody = checkout.json() as { checkoutUrl: string };
+    expect(checkoutBody.checkoutUrl).toContain("checkout.local");
+
+    // Webhook: apply credits to the org from metadata. In this unit test we simply assert idempotency.
+    const webhook1 = await server.inject({
+      method: "POST",
+      url: "/v1/billing/stripe/webhook",
+      headers: {
+        "content-type": "application/json",
+        "stripe-signature": "sig_test",
+      },
+      payload: JSON.stringify({ any: "payload" }),
+    });
+    expect(webhook1.statusCode).toBe(200);
+    expect(webhook1.json()).toMatchObject({ ok: true, applied: true });
+
+    const webhook2 = await server.inject({
+      method: "POST",
+      url: "/v1/billing/stripe/webhook",
+      headers: {
+        "content-type": "application/json",
+        "stripe-signature": "sig_test",
+      },
+      payload: JSON.stringify({ any: "payload" }),
+    });
+    expect(webhook2.statusCode).toBe(200);
+    expect(webhook2.json()).toMatchObject({ ok: true, applied: false });
+  });
 });
 
 describe("api enterprise provider integration", () => {

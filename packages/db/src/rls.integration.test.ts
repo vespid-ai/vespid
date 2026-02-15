@@ -123,6 +123,14 @@ describeIf("RLS integration", () => {
         [secretAId, orgAId, adminId]
       );
       await setup.query(
+        "insert into organization_credit_balances(organization_id, balance_credits) values ($1, 100)",
+        [orgAId]
+      );
+      await setup.query(
+        "insert into organization_credit_ledger(organization_id, delta_credits, reason, created_by_user_id, metadata) values ($1, 100, 'trial_grant', $2, $3::jsonb)",
+        [orgAId, adminId, JSON.stringify({ seed: true })]
+      );
+      await setup.query(
         "insert into agent_toolsets(id, organization_id, name, description, visibility, public_slug, published_at, mcp_servers, agent_skills, created_by_user_id, updated_by_user_id) values ($1, $2, 'Toolset A', 'Public', 'public', $3, now(), '[]'::jsonb, '[]'::jsonb, $4, $4)",
         [toolsetAId, orgAId, toolsetPublicSlug, adminId]
       );
@@ -172,6 +180,14 @@ describeIf("RLS integration", () => {
         "insert into connector_secrets(id, organization_id, connector_id, name, kek_id, dek_ciphertext, dek_iv, dek_tag, secret_ciphertext, secret_iv, secret_tag, created_by_user_id, updated_by_user_id) values ($1, $2, 'github', 'token', 'test', decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), $3, $3)",
         [secretBId, orgBId, otherId]
       );
+      await setup.query(
+        "insert into organization_credit_balances(organization_id, balance_credits) values ($1, 50)",
+        [orgBId]
+      );
+      await setup.query(
+        "insert into organization_credit_ledger(organization_id, delta_credits, reason, created_by_user_id, metadata) values ($1, 50, 'trial_grant', $2, $3::jsonb)",
+        [orgBId, otherId, JSON.stringify({ seed: true })]
+      );
 
       await setup.query("commit");
     } catch (error) {
@@ -188,6 +204,17 @@ describeIf("RLS integration", () => {
       const noContext = await client.query("select id from organizations where id = $1", [orgAId]);
       expect(noContext.rowCount).toBe(0);
 
+      // User-only context: allow discovery of orgs the user belongs to (used by /v1/me),
+      // without granting cross-tenant access.
+      await client.query(
+        "select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)",
+        [adminId, ""]
+      );
+      const myMemberships = await client.query("select organization_id from memberships where user_id = $1", [adminId]);
+      expect(myMemberships.rowCount).toBe(1);
+      const myOrgs = await client.query("select id from organizations order by created_at asc");
+      expect(myOrgs.rowCount).toBe(1);
+
       await client.query("select set_config('app.current_org_id', $1, true)", [orgBId]);
       const wrongContext = await client.query("select id from organizations where id = $1", [orgAId]);
       expect(wrongContext.rowCount).toBe(0);
@@ -203,6 +230,16 @@ describeIf("RLS integration", () => {
         [orgAId, secretAId]
       );
       expect(wrongSecretContext.rowCount).toBe(0);
+      const wrongCreditBalanceContext = await client.query(
+        "select organization_id from organization_credit_balances where organization_id = $1",
+        [orgAId]
+      );
+      expect(wrongCreditBalanceContext.rowCount).toBe(0);
+      const wrongCreditLedgerContext = await client.query(
+        "select id from organization_credit_ledger where organization_id = $1",
+        [orgAId]
+      );
+      expect(wrongCreditLedgerContext.rowCount).toBe(0);
 
       const publicToolsetVisibleFromOtherOrg = await client.query(
         "select id from agent_toolsets where public_slug = $1",
@@ -248,6 +285,16 @@ describeIf("RLS integration", () => {
         [orgAId, secretAId]
       );
       expect(rightSecretContext.rowCount).toBe(1);
+      const rightCreditBalanceContext = await client.query(
+        "select organization_id from organization_credit_balances where organization_id = $1",
+        [orgAId]
+      );
+      expect(rightCreditBalanceContext.rowCount).toBe(1);
+      const rightCreditLedgerContext = await client.query(
+        "select id from organization_credit_ledger where organization_id = $1",
+        [orgAId]
+      );
+      expect(rightCreditLedgerContext.rowCount).toBe(1);
 
       const canUpdateOwnToolset = await client.query(
         "update agent_toolsets set name = 'Toolset A Updated' where public_slug = $1 returning id",

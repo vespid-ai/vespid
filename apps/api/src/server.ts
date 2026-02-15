@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import rawBody from "fastify-raw-body";
+import Stripe from "stripe";
 import {
   AppError,
   badRequest,
@@ -78,6 +80,7 @@ const ACCESS_TOKEN_TTL_SEC = Number(process.env.ACCESS_TOKEN_TTL_SEC ?? 15 * 60)
 const SESSION_TTL_SEC = Number(process.env.SESSION_TTL_SEC ?? 7 * 24 * 60 * 60);
 const OAUTH_CONTEXT_TTL_SEC = Number(process.env.OAUTH_CONTEXT_TTL_SEC ?? 10 * 60);
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME ?? "vespid_session";
+const PERSONAL_TRIAL_CREDITS = Number(process.env.PERSONAL_TRIAL_CREDITS ?? 100);
 const OAUTH_STATE_COOKIE_NAME = "vespid_oauth_state";
 const OAUTH_NONCE_COOKIE_NAME = "vespid_oauth_nonce";
 const WEB_BASE_URL = process.env.WEB_BASE_URL ?? "http://localhost:3000";
@@ -660,6 +663,7 @@ export async function buildServer(input?: {
   orgContextEnforcement?: OrgContextEnforcement;
   queueProducer?: WorkflowRunQueueProducer;
   enterpriseProvider?: EnterpriseProvider;
+  stripe?: Stripe;
 }) {
   const server = Fastify({
     logger: {
@@ -682,6 +686,12 @@ export async function buildServer(input?: {
     },
     credentials: true,
   });
+  await server.register(rawBody, {
+    field: "rawBody",
+    global: false,
+    encoding: false,
+    runFirst: true,
+  });
 
   const store = input?.store ?? createStore();
   const oauthService = input?.oauthService ?? createOAuthServiceFromEnv();
@@ -703,8 +713,52 @@ export async function buildServer(input?: {
     ...connectorCatalog.map((connector) => connector.id),
     "llm.openai",
     "llm.anthropic",
+    "llm.gemini",
   ]);
   await store.ensureDefaultRoles();
+
+  const stripe =
+    input?.stripe ??
+    (process.env.STRIPE_SECRET_KEY
+      ? new Stripe(process.env.STRIPE_SECRET_KEY, {
+          // Pin an API version for reproducibility. Update intentionally when needed.
+          apiVersion: "2026-01-28.clover",
+        })
+      : null);
+  const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET ?? null;
+
+  type StripeCreditsPackConfig = { priceId: string; credits: number };
+  function parseStripeCreditsPacks(): Record<string, StripeCreditsPackConfig> | null {
+    const raw = process.env.STRIPE_CREDITS_PACKS_JSON;
+    if (!raw || raw.trim().length === 0) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return null;
+      }
+      const out: Record<string, StripeCreditsPackConfig> = {};
+      for (const [packId, value] of Object.entries(parsed as Record<string, any>)) {
+        if (typeof packId !== "string" || packId.trim().length === 0) {
+          continue;
+        }
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          continue;
+        }
+        const priceId = typeof (value as any).priceId === "string" ? String((value as any).priceId) : "";
+        const credits = Number((value as any).credits);
+        if (!priceId || !Number.isFinite(credits) || credits <= 0) {
+          continue;
+        }
+        out[packId] = { priceId, credits: Math.floor(credits) };
+      }
+      return Object.keys(out).length > 0 ? out : null;
+    } catch {
+      return null;
+    }
+  }
+  const stripeCreditsPacks = parseStripeCreditsPacks();
 
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
   const refreshSecret = process.env.REFRESH_TOKEN_SECRET ?? authSecret;
@@ -803,6 +857,11 @@ export async function buildServer(input?: {
 
     setSessionCookie(input.reply, refreshToken);
     return session;
+  }
+
+  async function ensurePersonalWorkspace(user: UserRecord): Promise<void> {
+    const credits = Number.isFinite(PERSONAL_TRIAL_CREDITS) ? Math.max(0, Math.floor(PERSONAL_TRIAL_CREDITS)) : 0;
+    await store.ensurePersonalOrganizationForUser({ actorUserId: user.id, trialCredits: credits });
   }
 
   async function authenticateFromBearerToken(token: string): Promise<AuthContext | null> {
@@ -1064,6 +1123,8 @@ export async function buildServer(input?: {
       reply,
     });
 
+    await ensurePersonalWorkspace(user);
+
     return reply.status(201).send({ session, user: toPublicUser(user) });
   });
 
@@ -1089,6 +1150,8 @@ export async function buildServer(input?: {
       ip: request.ip,
       reply,
     });
+
+    await ensurePersonalWorkspace(user);
 
     return { session, user: toPublicUser(user) };
   });
@@ -1127,6 +1190,29 @@ export async function buildServer(input?: {
     const revokedCount = await store.revokeAllSessionsForUser(auth.userId);
     clearSessionCookie(reply);
     return { ok: true, revokedCount };
+  });
+
+  server.get("/v1/me", async (request) => {
+    const auth = requireAuth(request);
+    const user = await store.getUserById(auth.userId);
+    if (!user) {
+      throw unauthorized("Session is invalid");
+    }
+
+    await ensurePersonalWorkspace(user);
+    const orgs = await store.listOrganizationsForUser({ actorUserId: auth.userId });
+    const defaultOrgId = orgs.length > 0 ? orgs[0]!.organization.id : null;
+
+    return {
+      user: toPublicUser(user),
+      orgs: orgs.map((row) => ({
+        id: row.organization.id,
+        slug: row.organization.slug,
+        name: row.organization.name,
+        roleKey: row.membership.roleKey,
+      })),
+      defaultOrgId,
+    };
   });
 
   server.get("/v1/auth/oauth/:provider/start", async (request, reply) => {
@@ -1242,6 +1328,8 @@ export async function buildServer(input?: {
         reply,
       });
 
+      await ensurePersonalWorkspace(user);
+
       if (parsed.data.mode === "json") {
         return {
           session,
@@ -1293,6 +1381,151 @@ export async function buildServer(input?: {
 
     return reply.status(201).send(created);
   });
+
+  server.get("/v1/orgs/:orgId/billing/credits", async (request) => {
+    const auth = requireAuth(request);
+    const orgId = (request.params as { orgId?: string }).orgId;
+    if (!orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
+    const credits = await store.getOrganizationCredits({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
+
+    return {
+      balanceCredits: credits.balanceCredits,
+      lastUpdatedAt: credits.updatedAt,
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/billing/credits/checkout", async (request) => {
+    const auth = requireAuth(request);
+    const orgId = (request.params as { orgId?: string }).orgId;
+    if (!orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const parsed = z.object({ packId: z.string().min(1).max(120) }).safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid checkout payload", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage billing");
+    }
+
+    if (!stripe || !stripeCreditsPacks) {
+      throw new AppError(500, { code: "STRIPE_NOT_CONFIGURED", message: "Stripe is not configured" });
+    }
+    const pack = stripeCreditsPacks[parsed.data.packId];
+    if (!pack) {
+      throw badRequest("Unknown packId");
+    }
+
+    const existingAccount = await store.getOrganizationBillingAccount({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+
+    const stripeCustomerId =
+      existingAccount?.stripeCustomerId ??
+      (await (async () => {
+        const customer = await stripe.customers.create({
+          email: auth.email,
+          metadata: { organizationId: orgContext.organizationId },
+        });
+        const created = await store.createOrganizationBillingAccount({
+          organizationId: orgContext.organizationId,
+          actorUserId: auth.userId,
+          stripeCustomerId: customer.id,
+        });
+        return created.stripeCustomerId;
+      })());
+
+    const successUrl = new URL("/billing/success", WEB_BASE_URL);
+    successUrl.searchParams.set("orgId", orgContext.organizationId);
+    const cancelUrl = new URL("/billing/cancel", WEB_BASE_URL);
+    cancelUrl.searchParams.set("orgId", orgContext.organizationId);
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer: stripeCustomerId,
+      line_items: [{ price: pack.priceId, quantity: 1 }],
+      success_url: successUrl.toString(),
+      cancel_url: cancelUrl.toString(),
+      metadata: {
+        organizationId: orgContext.organizationId,
+        packId: parsed.data.packId,
+        credits: String(pack.credits),
+      },
+    });
+
+    if (!session.url) {
+      throw new AppError(500, { code: "STRIPE_CHECKOUT_FAILED", message: "Stripe checkout session did not return a URL" });
+    }
+
+    return { checkoutUrl: session.url };
+  });
+
+  server.post(
+    "/v1/billing/stripe/webhook",
+    { config: { rawBody: true } as any },
+    async (request, reply) => {
+      if (!stripe || !stripeWebhookSecret) {
+        throw new AppError(500, { code: "STRIPE_NOT_CONFIGURED", message: "Stripe webhook is not configured" });
+      }
+
+      const signature = request.headers["stripe-signature"];
+      if (typeof signature !== "string" || signature.trim().length === 0) {
+        throw badRequest("Missing Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
+      }
+
+      const raw = (request as any).rawBody as Buffer | undefined;
+      if (!raw || !Buffer.isBuffer(raw)) {
+        throw badRequest("Missing raw body", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
+      }
+
+      let event: Stripe.Event;
+      try {
+        event = stripe.webhooks.constructEvent(raw, signature, stripeWebhookSecret);
+      } catch {
+        throw badRequest("Invalid Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
+      }
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const organizationId = typeof session.metadata?.organizationId === "string" ? session.metadata.organizationId : null;
+        const creditsRaw = typeof session.metadata?.credits === "string" ? session.metadata.credits : null;
+        const credits = creditsRaw ? Number(creditsRaw) : NaN;
+
+        if (!organizationId || !Number.isFinite(credits) || credits <= 0) {
+          throw badRequest("Invalid session metadata", { code: "STRIPE_WEBHOOK_INVALID_METADATA" });
+        }
+
+        if (session.payment_status !== "paid") {
+          return reply.status(200).send({ ok: true, ignored: true });
+        }
+
+        const result = await store.creditOrganizationFromStripeEvent({
+          organizationId,
+          stripeEventId: event.id,
+          credits: Math.floor(credits),
+          metadata: {
+            kind: "stripe_checkout_session_completed",
+            checkoutSessionId: session.id,
+            packId: session.metadata?.packId ?? null,
+            amountTotal: session.amount_total ?? null,
+            currency: session.currency ?? null,
+          },
+        });
+
+        return reply.status(200).send({ ok: true, applied: result.applied });
+      }
+
+      return reply.status(200).send({ ok: true });
+    }
+  );
 
   server.post("/v1/orgs/:orgId/invitations", async (request, reply) => {
     const auth = requireAuth(request);

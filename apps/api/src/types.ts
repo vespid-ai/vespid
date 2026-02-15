@@ -136,6 +136,17 @@ export type OrganizationAgentRecord = {
   createdAt: string;
 };
 
+export type UserOrgSummaryRecord = {
+  organization: OrganizationRecord;
+  membership: MembershipRecord;
+};
+
+export type OrganizationCreditsRecord = {
+  organizationId: string;
+  balanceCredits: number;
+  updatedAt: string;
+};
+
 export type AgentPairingTokenRecord = {
   id: string;
   organizationId: string;
@@ -189,6 +200,11 @@ export interface AppStore {
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
   getUserByEmail(email: string): Promise<UserRecord | null>;
   getUserById(id: string): Promise<UserRecord | null>;
+  listOrganizationsForUser(input: { actorUserId: string }): Promise<UserOrgSummaryRecord[]>;
+  ensurePersonalOrganizationForUser(input: {
+    actorUserId: string;
+    trialCredits: number;
+  }): Promise<{ defaultOrgId: string; created: boolean }>;
   createOrganizationWithOwner(input: { name: string; slug: string; ownerUserId: string }): Promise<{
     organization: OrganizationRecord;
     membership: MembershipRecord;
@@ -384,6 +400,30 @@ export interface AppStore {
     actorUserId: string;
     secretId: string;
   }): Promise<boolean>;
+
+  getOrganizationCredits(input: {
+    organizationId: string;
+    actorUserId?: string;
+  }): Promise<OrganizationCreditsRecord>;
+  grantOrganizationCredits(input: {
+    organizationId: string;
+    actorUserId?: string;
+    credits: number;
+    reason: string;
+    metadata?: unknown;
+  }): Promise<OrganizationCreditsRecord>;
+  creditOrganizationFromStripeEvent(input: {
+    organizationId: string;
+    stripeEventId: string;
+    credits: number;
+    metadata?: unknown;
+  }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }>;
+  getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null>;
+  createOrganizationBillingAccount(input: {
+    organizationId: string;
+    actorUserId?: string;
+    stripeCustomerId: string;
+  }): Promise<{ stripeCustomerId: string }>;
 
   createAgentPairingToken(input: {
     organizationId: string;

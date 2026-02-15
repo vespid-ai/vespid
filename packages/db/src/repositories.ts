@@ -6,6 +6,9 @@ import {
   agentPairingTokens,
   agentToolsets,
   connectorSecrets,
+  organizationBillingAccounts,
+  organizationCreditBalances,
+  organizationCreditLedger,
   organizationAgents,
   memberships,
   organizationInvitations,
@@ -96,9 +99,272 @@ export async function createOrganizationWithOwner(
   return { organization, membership };
 }
 
+export async function listOrganizationsForUser(db: Db, input: { userId: string }) {
+  const rows = await db
+    .select({
+      organizationId: organizations.id,
+      organizationSlug: organizations.slug,
+      organizationName: organizations.name,
+      organizationSettings: organizations.settings,
+      organizationCreatedAt: organizations.createdAt,
+      membershipId: memberships.id,
+      membershipOrganizationId: memberships.organizationId,
+      membershipUserId: memberships.userId,
+      membershipRoleKey: memberships.roleKey,
+      membershipCreatedAt: memberships.createdAt,
+    })
+    .from(memberships)
+    .innerJoin(organizations, eq(organizations.id, memberships.organizationId))
+    .where(eq(memberships.userId, input.userId))
+    .orderBy(asc(organizations.createdAt), asc(organizations.id));
+
+  return rows.map((row) => ({
+    organization: {
+      id: row.organizationId,
+      slug: row.organizationSlug,
+      name: row.organizationName,
+      settings: row.organizationSettings,
+      createdAt: row.organizationCreatedAt,
+    },
+    membership: {
+      id: row.membershipId,
+      organizationId: row.membershipOrganizationId,
+      userId: row.membershipUserId,
+      roleKey: row.membershipRoleKey,
+      createdAt: row.membershipCreatedAt,
+    },
+  }));
+}
+
 export async function getOrganizationById(db: Db, input: { organizationId: string }) {
   const [row] = await db.select().from(organizations).where(eq(organizations.id, input.organizationId));
   return row ?? null;
+}
+
+export async function ensureOrganizationCreditBalanceRow(db: Db, input: { organizationId: string }) {
+  const existing = await getOrganizationCreditBalance(db, input);
+  if (existing) {
+    return existing;
+  }
+
+  try {
+    const [row] = await db
+      .insert(organizationCreditBalances)
+      .values({ organizationId: input.organizationId, balanceCredits: 0 })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to create organization credit balance row");
+    }
+    return row;
+  } catch (error) {
+    if (!isPgUniqueViolation(error)) {
+      throw error;
+    }
+    const retry = await getOrganizationCreditBalance(db, input);
+    if (!retry) {
+      throw new Error("Failed to load organization credit balance row after unique violation");
+    }
+    return retry;
+  }
+}
+
+export async function getOrganizationCreditBalance(db: Db, input: { organizationId: string }) {
+  const [row] = await db
+    .select()
+    .from(organizationCreditBalances)
+    .where(eq(organizationCreditBalances.organizationId, input.organizationId));
+  return row ?? null;
+}
+
+export async function tryDebitOrganizationCredits(
+  db: Db,
+  input: {
+    organizationId: string;
+    credits: number;
+    reason: string;
+    stripeEventId?: string | null;
+    workflowRunId?: string | null;
+    createdByUserId?: string | null;
+    metadata?: unknown;
+  }
+): Promise<{ ok: true; balanceCredits: number } | { ok: false; balanceCredits: number }> {
+  const credits = Math.max(0, Math.floor(input.credits));
+  if (credits <= 0) {
+    const balanceRow = await ensureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
+    return { ok: true, balanceCredits: balanceRow.balanceCredits };
+  }
+
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(organizationCreditBalances)
+      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
+      .limit(1)
+      .for("update");
+
+    const current = locked ?? (await ensureOrganizationCreditBalanceRow(tx as any, { organizationId: input.organizationId }));
+    const balance = current.balanceCredits;
+    if (balance < credits) {
+      return { ok: false, balanceCredits: balance };
+    }
+
+    await tx.insert(organizationCreditLedger).values({
+      organizationId: input.organizationId,
+      deltaCredits: -credits,
+      reason: input.reason,
+      stripeEventId: input.stripeEventId ?? null,
+      workflowRunId: input.workflowRunId ?? null,
+      createdByUserId: input.createdByUserId ?? null,
+      metadata: input.metadata as any,
+    });
+
+    const [updated] = await tx
+      .update(organizationCreditBalances)
+      .set({
+        balanceCredits: balance - credits,
+        updatedAt: new Date(),
+      })
+      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
+      .returning();
+
+    return { ok: true, balanceCredits: updated?.balanceCredits ?? balance - credits };
+  });
+}
+
+export async function creditOrganizationFromStripeEvent(
+  db: Db,
+  input: {
+    organizationId: string;
+    credits: number;
+    stripeEventId: string;
+    metadata?: unknown;
+  }
+): Promise<{ applied: true; balanceCredits: number } | { applied: false; balanceCredits: number }> {
+  const credits = Math.max(0, Math.floor(input.credits));
+  if (credits <= 0) {
+    const balanceRow = await ensureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
+    return { applied: true, balanceCredits: balanceRow.balanceCredits };
+  }
+
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(organizationCreditBalances)
+      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
+      .limit(1)
+      .for("update");
+    const current = locked ?? (await ensureOrganizationCreditBalanceRow(tx as any, { organizationId: input.organizationId }));
+
+    try {
+      await tx.insert(organizationCreditLedger).values({
+        organizationId: input.organizationId,
+        deltaCredits: credits,
+        reason: "stripe_topup",
+        stripeEventId: input.stripeEventId,
+        metadata: input.metadata as any,
+      });
+    } catch (error) {
+      if (!isPgUniqueViolation(error)) {
+        throw error;
+      }
+      // Already processed.
+      return { applied: false, balanceCredits: current.balanceCredits };
+    }
+
+    const [updated] = await tx
+      .update(organizationCreditBalances)
+      .set({
+        balanceCredits: current.balanceCredits + credits,
+        updatedAt: new Date(),
+      })
+      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
+      .returning();
+
+    return { applied: true, balanceCredits: updated?.balanceCredits ?? current.balanceCredits + credits };
+  });
+}
+
+export async function grantOrganizationCredits(
+  db: Db,
+  input: {
+    organizationId: string;
+    credits: number;
+    reason: string;
+    createdByUserId?: string | null;
+    metadata?: unknown;
+  }
+): Promise<{ balanceCredits: number }> {
+  const credits = Math.max(0, Math.floor(input.credits));
+  if (credits <= 0) {
+    const balanceRow = await ensureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
+    return { balanceCredits: balanceRow.balanceCredits };
+  }
+
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(organizationCreditBalances)
+      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
+      .limit(1)
+      .for("update");
+    const current = locked ?? (await ensureOrganizationCreditBalanceRow(tx as any, { organizationId: input.organizationId }));
+
+    await tx.insert(organizationCreditLedger).values({
+      organizationId: input.organizationId,
+      deltaCredits: credits,
+      reason: input.reason,
+      createdByUserId: input.createdByUserId ?? null,
+      metadata: input.metadata as any,
+    });
+
+    const [updated] = await tx
+      .update(organizationCreditBalances)
+      .set({
+        balanceCredits: current.balanceCredits + credits,
+        updatedAt: new Date(),
+      })
+      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
+      .returning();
+    return { balanceCredits: updated?.balanceCredits ?? current.balanceCredits + credits };
+  });
+}
+
+export async function getOrganizationBillingAccount(db: Db, input: { organizationId: string }) {
+  const [row] = await db
+    .select()
+    .from(organizationBillingAccounts)
+    .where(eq(organizationBillingAccounts.organizationId, input.organizationId));
+  return row ?? null;
+}
+
+export async function createOrganizationBillingAccount(
+  db: Db,
+  input: { organizationId: string; stripeCustomerId: string }
+) {
+  const existing = await getOrganizationBillingAccount(db, { organizationId: input.organizationId });
+  if (existing) {
+    return existing;
+  }
+
+  try {
+    const [row] = await db
+      .insert(organizationBillingAccounts)
+      .values({ organizationId: input.organizationId, stripeCustomerId: input.stripeCustomerId })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to create billing account");
+    }
+    return row;
+  } catch (error) {
+    if (!isPgUniqueViolation(error)) {
+      throw error;
+    }
+    const retry = await getOrganizationBillingAccount(db, { organizationId: input.organizationId });
+    if (!retry) {
+      throw new Error("Failed to load billing account after unique violation");
+    }
+    return retry;
+  }
 }
 
 export async function updateOrganizationSettings(
@@ -342,10 +608,11 @@ export async function createWorkflowDraftFromWorkflow(
 
   // Avoid revision collisions under concurrent draft creation by retrying on unique violations.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const [{ maxRevision }] = await db
+    const rows = await db
       .select({ maxRevision: sql<number | null>`max(${workflows.revision})` })
       .from(workflows)
       .where(and(eq(workflows.organizationId, input.organizationId), eq(workflows.familyId, familyId)));
+    const maxRevision = rows[0]?.maxRevision ?? null;
 
     const nextRevision = (maxRevision ?? 0) + 1;
     const newWorkflowId = crypto.randomUUID();

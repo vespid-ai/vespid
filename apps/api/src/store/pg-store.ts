@@ -66,10 +66,25 @@ import {
   markWorkflowRunSucceeded as dbMarkWorkflowRunSucceeded,
   markWorkflowRunFailed as dbMarkWorkflowRunFailed,
   updateOrganizationSettings as dbUpdateOrganizationSettings,
+  listOrganizationsForUser as dbListOrganizationsForUser,
+  ensureOrganizationCreditBalanceRow as dbEnsureOrganizationCreditBalanceRow,
+  getOrganizationCreditBalance as dbGetOrganizationCreditBalance,
+  grantOrganizationCredits as dbGrantOrganizationCredits,
+  creditOrganizationFromStripeEvent as dbCreditOrganizationFromStripeEvent,
+  getOrganizationBillingAccount as dbGetOrganizationBillingAccount,
+  createOrganizationBillingAccount as dbCreateOrganizationBillingAccount,
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
-import type { AgentToolsetRecord, AppStore, OrganizationSettings, ToolsetBuilderSessionRecord, ToolsetBuilderTurnRecord } from "../types.js";
+import type {
+  AgentToolsetRecord,
+  AppStore,
+  OrganizationCreditsRecord,
+  OrganizationSettings,
+  ToolsetBuilderSessionRecord,
+  ToolsetBuilderTurnRecord,
+  UserOrgSummaryRecord,
+} from "../types.js";
 
 function toIso(value: Date): string {
   return value.toISOString();
@@ -192,6 +207,77 @@ export class PgAppStore implements AppStore {
     };
   }
 
+  async listOrganizationsForUser(input: { actorUserId: string }): Promise<UserOrgSummaryRecord[]> {
+    const rows = await this.withUserContext({ userId: input.actorUserId }, async (db) =>
+      dbListOrganizationsForUser(db, { userId: input.actorUserId })
+    );
+
+    return rows.map((row) => ({
+      organization: {
+        id: row.organization.id,
+        slug: row.organization.slug,
+        name: row.organization.name,
+        createdAt: toIso(row.organization.createdAt),
+      },
+      membership: {
+        id: row.membership.id,
+        organizationId: row.membership.organizationId,
+        userId: row.membership.userId,
+        roleKey: row.membership.roleKey as any,
+        createdAt: toIso(row.membership.createdAt),
+      },
+    }));
+  }
+
+  async ensurePersonalOrganizationForUser(input: {
+    actorUserId: string;
+    trialCredits: number;
+  }): Promise<{ defaultOrgId: string; created: boolean }> {
+    const existing = await this.listOrganizationsForUser({ actorUserId: input.actorUserId });
+    if (existing.length > 0) {
+      return { defaultOrgId: existing[0]!.organization.id, created: false };
+    }
+
+    const organizationId = crypto.randomUUID();
+    const baseSlug = `personal-${input.actorUserId.slice(0, 8)}`;
+    const name = "Personal workspace";
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const slug = attempt === 0 ? baseSlug : `${baseSlug}-${crypto.randomBytes(3).toString("hex")}`;
+      try {
+        await this.withOrgContext({ userId: input.actorUserId, organizationId }, async (db) =>
+          createOrganizationWithOwner(db, {
+            id: organizationId,
+            name,
+            slug,
+            ownerUserId: input.actorUserId,
+          })
+        );
+
+        await this.withOrgContext({ userId: input.actorUserId, organizationId }, async (db) => {
+          await dbEnsureOrganizationCreditBalanceRow(db, { organizationId });
+          if (input.trialCredits > 0) {
+            await dbGrantOrganizationCredits(db, {
+              organizationId,
+              credits: input.trialCredits,
+              reason: "trial_grant",
+              createdByUserId: input.actorUserId,
+              metadata: { kind: "personal_workspace_bootstrap" },
+            });
+          }
+        });
+
+        return { defaultOrgId: organizationId, created: true };
+      } catch (error) {
+        if (attempt === 2) {
+          throw error;
+        }
+      }
+    }
+
+    throw new Error("Failed to create personal organization");
+  }
+
   async createOrganizationWithOwner(input: { name: string; slug: string; ownerUserId: string }) {
     const organizationId = crypto.randomUUID();
     const { organization, membership } = await this.withOrgContext(
@@ -204,6 +290,9 @@ export class PgAppStore implements AppStore {
           ownerUserId: input.ownerUserId,
         })
     );
+    await this.withOrgContext({ userId: input.ownerUserId, organizationId }, async (db) => {
+      await dbEnsureOrganizationCreditBalanceRow(db, { organizationId });
+    });
     return {
       organization: {
         id: organization.id,
@@ -1196,6 +1285,92 @@ export class PgAppStore implements AppStore {
       async (db) => dbDeleteConnectorSecret(db, { organizationId: input.organizationId, secretId: input.secretId })
     );
     return Boolean(row);
+  }
+
+  async getOrganizationCredits(input: { organizationId: string; actorUserId?: string }): Promise<OrganizationCreditsRecord> {
+    const row = await this.withOrgContext(
+      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
+      async (db) => {
+        const existing = await dbGetOrganizationCreditBalance(db, { organizationId: input.organizationId });
+        return existing ?? (await dbEnsureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId }));
+      }
+    );
+
+    return {
+      organizationId: row.organizationId,
+      balanceCredits: row.balanceCredits,
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async grantOrganizationCredits(input: {
+    organizationId: string;
+    actorUserId?: string;
+    credits: number;
+    reason: string;
+    metadata?: unknown;
+  }): Promise<OrganizationCreditsRecord> {
+    await this.withOrgContext(
+      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
+      async (db) => {
+        await dbEnsureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
+        await dbGrantOrganizationCredits(db, {
+          organizationId: input.organizationId,
+          credits: input.credits,
+          reason: input.reason,
+          createdByUserId: input.actorUserId ?? null,
+          metadata: input.metadata,
+        });
+      }
+    );
+
+    return this.getOrganizationCredits({
+      organizationId: input.organizationId,
+      ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
+    });
+  }
+
+  async creditOrganizationFromStripeEvent(input: {
+    organizationId: string;
+    stripeEventId: string;
+    credits: number;
+    metadata?: unknown;
+  }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }> {
+    const result = await this.withOrgContext({ organizationId: input.organizationId }, async (db) =>
+      dbCreditOrganizationFromStripeEvent(db, {
+        organizationId: input.organizationId,
+        credits: input.credits,
+        stripeEventId: input.stripeEventId,
+        metadata: input.metadata,
+      })
+    );
+
+    const balance = await this.getOrganizationCredits({ organizationId: input.organizationId });
+    return { applied: result.applied, balance };
+  }
+
+  async getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null> {
+    const row = await this.withOrgContext(
+      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
+      async (db) => dbGetOrganizationBillingAccount(db, { organizationId: input.organizationId })
+    );
+    if (!row) {
+      return null;
+    }
+    return { stripeCustomerId: row.stripeCustomerId };
+  }
+
+  async createOrganizationBillingAccount(input: {
+    organizationId: string;
+    actorUserId?: string;
+    stripeCustomerId: string;
+  }): Promise<{ stripeCustomerId: string }> {
+    const row = await this.withOrgContext(
+      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
+      async (db) =>
+        dbCreateOrganizationBillingAccount(db, { organizationId: input.organizationId, stripeCustomerId: input.stripeCustomerId })
+    );
+    return { stripeCustomerId: row.stripeCustomerId };
   }
 
   async createAgentPairingToken(input: {

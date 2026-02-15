@@ -1,5 +1,6 @@
 import { relations, sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   customType,
   index,
@@ -195,6 +196,35 @@ export const connectorSecrets = pgTable("connector_secrets", {
   ),
   connectorSecretsOrgConnectorIdx: index("connector_secrets_org_connector_idx").on(table.organizationId, table.connectorId),
 }));
+
+export const organizationCreditBalances = pgTable("organization_credit_balances", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  balanceCredits: bigint("balance_credits", { mode: "number" }).notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const organizationCreditLedger = pgTable("organization_credit_ledger", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  deltaCredits: bigint("delta_credits", { mode: "number" }).notNull(),
+  reason: text("reason").notNull(),
+  stripeEventId: text("stripe_event_id"),
+  workflowRunId: uuid("workflow_run_id").references(() => workflowRuns.id, { onDelete: "set null" }),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  organizationCreditLedgerOrgCreatedAtIdx: index("organization_credit_ledger_org_created_at_idx").on(
+    table.organizationId,
+    table.createdAt
+  ),
+}));
+
+export const organizationBillingAccounts = pgTable("organization_billing_accounts", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  stripeCustomerId: text("stripe_customer_id").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const organizationAgents = pgTable("organization_agents", {
   id: uuid("id").primaryKey().defaultRandom(),
