@@ -49,7 +49,7 @@ import { Separator } from "../ui/separator";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Sheet, SheetClose, SheetContent, SheetTrigger } from "../ui/sheet";
 import { CommandPalette } from "./command-palette";
-import { apiFetch, getApiBase } from "../../lib/api";
+import { apiFetch, apiFetchJson, getApiBase } from "../../lib/api";
 import { useDensity } from "../../lib/hooks/use-density";
 import { useMounted } from "../../lib/hooks/use-mounted";
 import { getApiReachability, subscribeApiReachability } from "../../lib/api-reachability";
@@ -88,6 +88,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [activeOrgId, setActiveOrgIdState] = useState<string>("");
   const [knownOrgIds, setKnownOrgIds] = useState<string[]>([]);
   const [draftOrgId, setDraftOrgId] = useState<string>("");
+  const [orgSummaries, setOrgSummaries] = useState<Array<{ id: string; name: string; roleKey: string }>>([]);
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -110,6 +112,66 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!session.data?.session) {
+      setOrgSummaries([]);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await apiFetchJson<{
+          user: { id: string; email: string };
+          orgs: Array<{ id: string; name: string; roleKey: string }>;
+          defaultOrgId: string | null;
+        }>("/v1/me");
+        if (cancelled) return;
+        setOrgSummaries(Array.isArray(me.orgs) ? me.orgs : []);
+        const ids = Array.isArray(me.orgs) ? me.orgs.map((o) => o.id).filter(Boolean) : [];
+        setKnownOrgIds((prev) => {
+          const merged = [...new Set([...ids, ...prev])];
+          return merged;
+        });
+        const current = getActiveOrgId();
+        if (!current && me.defaultOrgId) {
+          setActiveOrgId(me.defaultOrgId);
+        }
+      } catch {
+        // /v1/me is best-effort; org can still be set manually.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.data?.session]);
+
+  useEffect(() => {
+    if (!session.data?.session || !activeOrgId) {
+      setCreditsBalance(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const payload = await apiFetchJson<{ balanceCredits: number }>(
+          `/v1/orgs/${activeOrgId}/billing/credits`,
+          undefined,
+          { orgScoped: true }
+        );
+        if (cancelled) return;
+        setCreditsBalance(typeof payload.balanceCredits === "number" ? payload.balanceCredits : null);
+      } catch {
+        if (cancelled) return;
+        setCreditsBalance(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session.data?.session, activeOrgId]);
+
+  useEffect(() => {
     setReachability(getApiReachability());
     return subscribeApiReachability((next) => setReachability(next));
   }, []);
@@ -123,6 +185,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     ],
     []
   );
+
+  const orgLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const org of orgSummaries) {
+      map.set(org.id, org.name);
+    }
+    return map;
+  }, [orgSummaries]);
 
   function isActive(href: string): boolean {
     return (pathname ?? "").startsWith(href);
@@ -447,7 +517,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                               <option value="">{t("org.noActive")}</option>
                               {knownOrgIds.map((id) => (
                                 <option key={id} value={id}>
-                                  {id}
+                                  {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
                                 </option>
                               ))}
                             </select>
@@ -533,7 +603,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                             <option value="">{t("org.noActive")}</option>
                             {knownOrgIds.map((id) => (
                               <option key={id} value={id}>
-                                {id}
+                                {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
                               </option>
                             ))}
                           </select>
@@ -551,6 +621,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                         </div>
                       </PopoverContent>
                     </Popover>
+                    {typeof creditsBalance === "number" ? (
+                      <Badge variant={creditsBalance > 0 ? "ok" : "warn"} className="gap-1.5">
+                        {t("billing.credits")}: {creditsBalance}
+                      </Badge>
+                    ) : null}
                   </div>
                 </div>
 

@@ -514,5 +514,8 @@
       "id": "ID",
       "open": "选择"
     }
+  },
+  "billing": {
+    "credits": "积分"
   }
 }
