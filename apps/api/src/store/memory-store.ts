@@ -21,6 +21,8 @@ import type {
   WorkflowRunRecord,
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
+  AgentSessionRecord,
+  AgentSessionEventRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -63,6 +65,9 @@ export class MemoryAppStore implements AppStore {
   private toolsetBuilderSessions = new Map<string, ToolsetBuilderSessionRecord>();
   private toolsetBuilderTurnsBySessionId = new Map<string, ToolsetBuilderTurnRecord[]>();
   private toolsetBuilderTurnSeq = 0;
+  private agentSessions = new Map<string, AgentSessionRecord>();
+  private agentSessionEventsBySessionId = new Map<string, AgentSessionEventRecord[]>();
+  private agentSessionSeqBySessionId = new Map<string, number>();
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -1519,6 +1524,140 @@ export class MemoryAppStore implements AppStore {
     };
     this.toolsetBuilderSessions.set(existing.id, next);
     return next;
+  }
+
+  async createAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    title?: string | null;
+    engineId: string;
+    toolsetId?: string | null;
+    llm: { provider: string; model: string };
+    prompt: { system?: string | null; instructions: string };
+    tools: { allow: string[] };
+    limits?: unknown;
+    selector?: { tag?: string; group?: string } | null;
+  }): Promise<AgentSessionRecord> {
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const session: AgentSessionRecord = {
+      id,
+      organizationId: input.organizationId,
+      createdByUserId: input.actorUserId,
+      title: input.title ?? "",
+      status: "active",
+      pinnedAgentId: null,
+      selectorTag: input.selector?.tag ?? null,
+      selectorGroup: input.selector?.group ?? null,
+      engineId: input.engineId,
+      toolsetId: input.toolsetId ?? null,
+      llmProvider: input.llm.provider,
+      llmModel: input.llm.model,
+      toolsAllow: input.tools.allow,
+      limits: input.limits ?? {},
+      promptSystem: input.prompt.system ?? null,
+      promptInstructions: input.prompt.instructions,
+      createdAt: now,
+      updatedAt: now,
+      lastActivityAt: now,
+    };
+    this.agentSessions.set(id, session);
+    this.agentSessionEventsBySessionId.set(id, []);
+    this.agentSessionSeqBySessionId.set(id, 0);
+    return session;
+  }
+
+  async listAgentSessions(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { updatedAt: string; id: string } | null;
+  }): Promise<{ sessions: AgentSessionRecord[]; nextCursor: { updatedAt: string; id: string } | null }> {
+    const limit = Math.max(1, Math.min(200, Math.floor(input.limit)));
+    const cursor = input.cursor ?? null;
+
+    let sessions = [...this.agentSessions.values()].filter((s) => s.organizationId === input.organizationId);
+    sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+
+    if (cursor) {
+      sessions = sessions.filter((s) => s.updatedAt < cursor.updatedAt || (s.updatedAt === cursor.updatedAt && s.id < cursor.id));
+    }
+
+    const page = sessions.slice(0, limit);
+    const hasMore = sessions.length > limit;
+    const nextCursor = hasMore && page.length > 0 ? { updatedAt: page[page.length - 1]!.updatedAt, id: page[page.length - 1]!.id } : null;
+    return { sessions: page, nextCursor };
+  }
+
+  async getAgentSessionById(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null> {
+    const session = this.agentSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return null;
+    }
+    return session;
+  }
+
+  async appendAgentSessionEvent(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    eventType: string;
+    level: "info" | "warn" | "error";
+    payload?: unknown;
+  }): Promise<AgentSessionEventRecord> {
+    const session = this.agentSessions.get(input.sessionId);
+    if (!session || session.organizationId !== input.organizationId) {
+      throw new Error("AGENT_SESSION_NOT_FOUND");
+    }
+
+    const seq = this.agentSessionSeqBySessionId.get(input.sessionId) ?? 0;
+    this.agentSessionSeqBySessionId.set(input.sessionId, seq + 1);
+
+    const event: AgentSessionEventRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      sessionId: input.sessionId,
+      seq,
+      eventType: input.eventType,
+      level: input.level,
+      payload: input.payload ?? null,
+      createdAt: nowIso(),
+    };
+    const list = this.agentSessionEventsBySessionId.get(input.sessionId) ?? [];
+    list.push(event);
+    this.agentSessionEventsBySessionId.set(input.sessionId, list);
+
+    const now = nowIso();
+    this.agentSessions.set(input.sessionId, { ...session, updatedAt: now, lastActivityAt: now });
+
+    return event;
+  }
+
+  async listAgentSessionEvents(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    limit: number;
+    cursor?: { seq: number } | null;
+  }): Promise<{ events: AgentSessionEventRecord[]; nextCursor: { seq: number } | null }> {
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit)));
+    const cursor = input.cursor ?? null;
+
+    const session = this.agentSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return { events: [], nextCursor: null };
+    }
+
+    const list = this.agentSessionEventsBySessionId.get(input.sessionId) ?? [];
+    const filtered = cursor ? list.filter((e) => e.seq > cursor.seq) : list;
+    const page = filtered.slice(0, limit);
+    const hasMore = filtered.length > limit;
+    const nextCursor = hasMore && page.length > 0 ? { seq: page[page.length - 1]!.seq } : null;
+    return { events: page, nextCursor };
   }
 
   async attachMembership(input: {
