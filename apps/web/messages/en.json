@@ -256,8 +256,7 @@
         "name": "Agent shell runner",
         "description": "A minimal workflow that runs a shell script."
       }
-    }
-    ,
+    },
     "detail": {
       "tabOverview": "Overview",
       "tabEditor": "Editor",
@@ -352,8 +351,7 @@
     "agentRevoked": "Agent revoked",
     "tagsUpdated": "Agent tags updated",
     "createPairingToken": "Create pairing token",
-    "pairingHint": "Tokens are displayed only once. They expire in 15 minutes."
-    ,
+    "pairingHint": "Tokens are displayed only once. They expire in 15 minutes.",
     "table": {
       "agent": "Agent",
       "status": "Status",
@@ -451,7 +449,6 @@
       "commandLabel": "Command",
       "argsLabel": "Args (comma-separated)",
       "urlLabel": "URL",
-      "envLabel": "Env (one per line: KEY=${ENV:VAR})",
       "envLabel": "Env (one per line: KEY=$'{'ENV:VAR'}')",
       "headersLabel": "Headers (one per line: KEY=$'{'ENV:VAR'}')",
       "descriptionLabel": "Description"
@@ -509,8 +506,7 @@
     "rotateValue": "Rotate value",
     "selected": "Selected",
     "deleteSecretTitle": "Delete secret",
-    "deleteSecretDescription": "This cannot be undone."
-    ,
+    "deleteSecretDescription": "This cannot be undone.",
     "table": {
       "connector": "Connector",
       "name": "Name",
@@ -520,5 +516,290 @@
   },
   "billing": {
     "credits": "Credits"
+  },
+  "marketing": {
+    "nav": {
+      "product": "Product",
+      "useCases": "Use cases",
+      "compare": "Compare",
+      "pricing": "Pricing",
+      "faq": "FAQ"
+    },
+    "hero": {
+      "eyebrow": "Agentic Automation Platform",
+      "title": "Orchestrate agents, workflows, and execution at enterprise scale.",
+      "subtitle": "Vespid turns agent ideas into production workflows with secure multi-tenant isolation, auditable runs, and optional node execution.",
+      "ctaPrimary": "Start Free",
+      "ctaSecondary": "Book Demo",
+      "stats": {
+        "rls": "Multi-tenant RLS by default",
+        "queue": "Queued execution with retries",
+        "runtime": "Agent + Browser + Node runtime"
+      },
+      "panel": {
+        "title": "Execution cockpit",
+        "badge": "live",
+        "steps": {
+          "intake": "Intake → Normalize",
+          "reasoning": "Agent reasoning",
+          "connector": "Connector action",
+          "node": "Node execution",
+          "audit": "Audit event"
+        },
+        "runLabel": "Run status",
+        "runId": "workflow_run_9841",
+        "runStatus": "Succeeded"
+      }
+    },
+    "logos": {
+      "title": "Trusted by teams building automation at scale",
+      "items": {
+        "novaBank": "NovaBank",
+        "helixBio": "HelixBio",
+        "northwind": "Northwind Logistics",
+        "atlasRetail": "Atlas Retail",
+        "orchidMedia": "Orchid Media",
+        "kiteManufacturing": "Kite Manufacturing"
+      }
+    },
+    "features": {
+      "eyebrow": "Execution stack",
+      "title": "Everything required to run agents in production",
+      "subtitle": "From governance to execution, Vespid delivers the orchestration layer your teams can trust.",
+      "items": {
+        "orgIsolation": {
+          "title": "Org-scoped isolation",
+          "description": "Strict tenant boundaries with PostgreSQL RLS and scoped credentials."
+        },
+        "workflowDsl": {
+          "title": "Workflow DSL v2",
+          "description": "Model agentic graphs that are versioned, testable, and production-safe."
+        },
+        "queueFirst": {
+          "title": "Queue-first execution",
+          "description": "Async runs with retries, backoff, and deterministic state transitions."
+        },
+        "nodeBrowser": {
+          "title": "Node & browser execution",
+          "description": "Route sensitive steps to node agents or browser sessions on demand."
+        },
+        "auditReady": {
+          "title": "Audit-ready events",
+          "description": "Every run and node emits immutable events for compliance teams."
+        },
+        "connectors": {
+          "title": "Extensible connectors",
+          "description": "Connectors for business tools with encrypted secret storage."
+        }
+      }
+    },
+    "how": {
+      "eyebrow": "How it works",
+      "title": "From design to audited execution",
+      "subtitle": "3 steps to production execution",
+      "steps": {
+        "design": {
+          "title": "Design workflows",
+          "description": "Compose agent reasoning, connectors, and runtime rules in a visual DSL."
+        },
+        "publish": {
+          "title": "Publish & enqueue",
+          "description": "Move from draft to production with queue-backed runs and retries."
+        },
+        "observe": {
+          "title": "Observe runs & optimize",
+          "description": "Inspect every node event, diagnose failures, and iterate safely."
+        }
+      }
+    },
+    "useCases": {
+      "eyebrow": "Use cases",
+      "title": "Agent workflows that move real operations",
+      "subtitle": "Build repeatable automation across teams without rewriting infrastructure.",
+      "items": {
+        "onboarding": {
+          "title": "Customer onboarding automation",
+          "description": "Turn intake, verification, and follow-up into a single orchestrated run."
+        },
+        "compliance": {
+          "title": "Compliance evidence collection",
+          "description": "Gather records, approvals, and audit trails without manual chasing."
+        },
+        "revenueOps": {
+          "title": "Revenue ops enrichment",
+          "description": "Sync CRM updates and enrich pipeline data automatically."
+        },
+        "reconciliation": {
+          "title": "Back-office reconciliation",
+          "description": "Match data across systems and surface exceptions instantly."
+        },
+        "supportRouting": {
+          "title": "Support escalation routing",
+          "description": "Detect risk signals and route cases to the right operators."
+        },
+        "postmortems": {
+          "title": "Incident postmortems",
+          "description": "Collect signals, timelines, and actions into a standardized report."
+        }
+      }
+    },
+    "caseStudies": {
+      "eyebrow": "Case studies",
+      "title": "Outcomes teams ship with Vespid",
+      "items": {
+        "logistics": {
+          "title": "Global logistics cut manual ops by 42%",
+          "description": "Automated routing, booking, and exception handling across three regions.",
+          "metric": "-42% manual time"
+        },
+        "fintech": {
+          "title": "Fintech reduced workflow failures by 68%",
+          "description": "Queue-backed retries and observability cut incident rework drastically.",
+          "metric": "-68% failures"
+        },
+        "retail": {
+          "title": "Retail team shipped 12 agent workflows in 30 days",
+          "description": "Reusable templates and connectors sped up cross-functional automation.",
+          "metric": "12 workflows"
+        }
+      }
+    },
+    "comparison": {
+      "eyebrow": "Compare",
+      "title": "Vespid vs the old way",
+      "capabilityLabel": "Capability",
+      "columns": {
+        "vespid": "Vespid",
+        "traditional": "Traditional Automation",
+        "diy": "DIY LLM Scripts"
+      },
+      "rows": {
+        "time": {
+          "label": "Time to production",
+          "vespid": "Days",
+          "traditional": "Weeks",
+          "diy": "Unclear"
+        },
+        "reliability": {
+          "label": "Reliability under retries",
+          "vespid": "Best",
+          "traditional": "Limited",
+          "diy": "Manual"
+        },
+        "isolation": {
+          "label": "Tenant isolation",
+          "vespid": "Best",
+          "traditional": "Limited",
+          "diy": "Manual"
+        },
+        "audit": {
+          "label": "Audit trail",
+          "vespid": "Best",
+          "traditional": "Partial",
+          "diy": "Manual"
+        },
+        "connectors": {
+          "label": "Connector ecosystem",
+          "vespid": "Growing",
+          "traditional": "Limited",
+          "diy": "Manual"
+        },
+        "governance": {
+          "label": "Governance controls",
+          "vespid": "Built-in",
+          "traditional": "Partial",
+          "diy": "Manual"
+        }
+      }
+    },
+    "pricing": {
+      "eyebrow": "Pricing",
+      "title": "Pricing built for orchestration at scale",
+      "subtitle": "Start small, upgrade when you need deeper governance and node execution.",
+      "footerNote": "Annual billing discounts available.",
+      "tiers": {
+        "starter": {
+          "title": "Starter",
+          "description": "Best for early automation pilots.",
+          "pricePrimary": "$49 / seat / month",
+          "priceSecondary": "¥199 / seat / month",
+          "cta": "Start Free"
+        },
+        "team": {
+          "title": "Team",
+          "description": "For teams running production workflows.",
+          "pricePrimary": "$149 / month",
+          "priceSecondary": "¥999 / month (up to 5 seats)",
+          "cta": "Start Free"
+        },
+        "enterprise": {
+          "title": "Enterprise",
+          "description": "Custom controls and dedicated infrastructure.",
+          "pricePrimary": "Contact sales",
+          "cta": "Contact sales"
+        }
+      },
+      "features": {
+        "starter": {
+          "workflowBuilder": "Workflow builder",
+          "standardAgents": "Standard agents",
+          "sharedQueue": "Shared queue",
+          "communityConnectors": "Community connectors"
+        },
+        "team": {
+          "priorityQueue": "Priority queue",
+          "advancedRuns": "Advanced runs",
+          "nodeExecution": "Node execution",
+          "auditExport": "Audit log export"
+        },
+        "enterprise": {
+          "dedicatedVpc": "Dedicated VPC",
+          "slaSupport": "SLA & support",
+          "customConnectors": "Custom connectors",
+          "ssoSaml": "SSO/SAML"
+        }
+      },
+      "highlight": "Recommended"
+    },
+    "faq": {
+      "eyebrow": "FAQ",
+      "title": "Frequently asked questions",
+      "items": {
+        "data": {
+          "question": "Do you store customer data?",
+          "answer": "Only the workflow data required for execution, protected by tenant isolation and encrypted secrets."
+        },
+        "infra": {
+          "question": "Can we use our own infrastructure?",
+          "answer": "Yes. Use node agents and the gateway to execute sensitive workloads inside your network."
+        },
+        "queue": {
+          "question": "What happens if the queue is down?",
+          "answer": "Runs fail fast with a 503 to avoid dirty queued states. Retry once the queue is healthy."
+        },
+        "start": {
+          "question": "How do we start?",
+          "answer": "Create an account, build a workflow, and publish it to run your first automation."
+        },
+        "locale": {
+          "question": "Do you support zh-CN?",
+          "answer": "Yes, the product ships with zh-CN localization."
+        }
+      }
+    },
+    "cta": {
+      "eyebrow": "Get started",
+      "title": "Ready to orchestrate your first agent workflow?",
+      "subtitle": "Give your teams the execution backbone they need to ship reliable automation.",
+      "ctaPrimary": "Start Free",
+      "contactTitle": "Contact sales",
+      "contactSubtitle": "We reply within 2 business days.",
+      "contactEmail": "sales@vespid.example"
+    },
+    "footer": {
+      "copyright": "© 2026 Vespid. All rights reserved.",
+      "terms": "Terms",
+      "privacy": "Privacy"
+    }
   }
 }

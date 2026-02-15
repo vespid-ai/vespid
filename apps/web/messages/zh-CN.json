@@ -256,8 +256,7 @@
         "name": "Agent shell runner",
         "description": "一个执行 shell 脚本的最小工作流。"
       }
-    }
-    ,
+    },
     "detail": {
       "tabOverview": "概览",
       "tabEditor": "编辑器",
@@ -517,5 +516,290 @@
   },
   "billing": {
     "credits": "积分"
+  },
+  "marketing": {
+    "nav": {
+      "product": "产品",
+      "useCases": "用例",
+      "compare": "对比",
+      "pricing": "定价",
+      "faq": "常见问题"
+    },
+    "hero": {
+      "eyebrow": "企业级智能代理平台",
+      "title": "企业级代理编排与自动化执行平台。",
+      "subtitle": "Vespid 将代理想法转化为生产工作流，提供多租户隔离、可审计运行与可选节点执行。",
+      "ctaPrimary": "免费开始",
+      "ctaSecondary": "预约演示",
+      "stats": {
+        "rls": "默认多租户 RLS",
+        "queue": "队列执行与重试",
+        "runtime": "Agent + Browser + Node 运行时"
+      },
+      "panel": {
+        "title": "执行驾驶舱",
+        "badge": "实时",
+        "steps": {
+          "intake": "接入 → 规范化",
+          "reasoning": "代理推理",
+          "connector": "连接器动作",
+          "node": "节点执行",
+          "audit": "审计事件"
+        },
+        "runLabel": "运行状态",
+        "runId": "workflow_run_9841",
+        "runStatus": "成功"
+      }
+    },
+    "logos": {
+      "title": "深受规模化自动化团队信赖",
+      "items": {
+        "novaBank": "NovaBank",
+        "helixBio": "HelixBio",
+        "northwind": "Northwind Logistics",
+        "atlasRetail": "Atlas Retail",
+        "orchidMedia": "Orchid Media",
+        "kiteManufacturing": "Kite Manufacturing"
+      }
+    },
+    "features": {
+      "eyebrow": "执行栈",
+      "title": "运行生产级智能代理的全栈能力",
+      "subtitle": "从治理到执行，Vespid 提供团队可信赖的编排层。",
+      "items": {
+        "orgIsolation": {
+          "title": "组织隔离与 RLS",
+          "description": "通过 PostgreSQL RLS 与组织级凭据实现严格租户隔离。"
+        },
+        "workflowDsl": {
+          "title": "工作流 DSL v2",
+          "description": "构建可版本化、可测试、可上线的代理图。"
+        },
+        "queueFirst": {
+          "title": "队列优先执行",
+          "description": "异步运行配合重试、退避与确定性状态迁移。"
+        },
+        "nodeBrowser": {
+          "title": "节点与浏览器执行",
+          "description": "按需将敏感步骤路由至节点代理或浏览器会话。"
+        },
+        "auditReady": {
+          "title": "审计级运行事件",
+          "description": "每个运行与节点事件都可追踪，满足合规要求。"
+        },
+        "connectors": {
+          "title": "可扩展连接器",
+          "description": "连接业务系统并使用加密密钥存储。"
+        }
+      }
+    },
+    "how": {
+      "eyebrow": "工作方式",
+      "title": "从设计到审计执行",
+      "subtitle": "3 步实现生产级执行",
+      "steps": {
+        "design": {
+          "title": "设计工作流",
+          "description": "用可视化 DSL 组合代理推理、连接器与运行规则。"
+        },
+        "publish": {
+          "title": "发布并入队",
+          "description": "从草稿到生产，队列驱动运行与重试。"
+        },
+        "observe": {
+          "title": "观察运行并优化",
+          "description": "查看每个节点事件，定位失败并安全迭代。"
+        }
+      }
+    },
+    "useCases": {
+      "eyebrow": "用例",
+      "title": "驱动真实业务运转的代理工作流",
+      "subtitle": "跨团队构建可复用的自动化，而无需重写基础设施。",
+      "items": {
+        "onboarding": {
+          "title": "客户入驻自动化",
+          "description": "将资料收集、验证与跟进整合成单次运行。"
+        },
+        "compliance": {
+          "title": "合规证据收集",
+          "description": "汇集记录、审批与审计轨迹，避免人工追踪。"
+        },
+        "revenueOps": {
+          "title": "收入运营补全",
+          "description": "同步 CRM 更新并自动补全管道数据。"
+        },
+        "reconciliation": {
+          "title": "后台对账",
+          "description": "跨系统匹配数据并即时提示异常。"
+        },
+        "supportRouting": {
+          "title": "支持升级分流",
+          "description": "识别风险信号并分派至合适的处理人。"
+        },
+        "postmortems": {
+          "title": "事故复盘",
+          "description": "收集信号、时间线与行动并生成标准报告。"
+        }
+      }
+    },
+    "caseStudies": {
+      "eyebrow": "案例",
+      "title": "团队借助 Vespid 交付的成果",
+      "items": {
+        "logistics": {
+          "title": "全球物流将人工操作降低 42%",
+          "description": "在三大区域实现路由、订舱与异常处理自动化。",
+          "metric": "-42% 人工时间"
+        },
+        "fintech": {
+          "title": "金融科技将工作流失败率降低 68%",
+          "description": "队列重试与可观测性显著减少事故返工。",
+          "metric": "-68% 失败"
+        },
+        "retail": {
+          "title": "零售团队 30 天交付 12 条代理工作流",
+          "description": "可复用模板与连接器加速跨团队自动化落地。",
+          "metric": "12 条工作流"
+        }
+      }
+    },
+    "comparison": {
+      "eyebrow": "对比",
+      "title": "Vespid 与传统方式的差异",
+      "capabilityLabel": "能力",
+      "columns": {
+        "vespid": "Vespid",
+        "traditional": "传统自动化",
+        "diy": "自研 LLM 脚本"
+      },
+      "rows": {
+        "time": {
+          "label": "上线时间",
+          "vespid": "几天",
+          "traditional": "几周",
+          "diy": "不确定"
+        },
+        "reliability": {
+          "label": "重试可靠性",
+          "vespid": "最佳",
+          "traditional": "有限",
+          "diy": "手动"
+        },
+        "isolation": {
+          "label": "租户隔离",
+          "vespid": "最佳",
+          "traditional": "有限",
+          "diy": "手动"
+        },
+        "audit": {
+          "label": "审计轨迹",
+          "vespid": "完善",
+          "traditional": "部分",
+          "diy": "手动"
+        },
+        "connectors": {
+          "label": "连接器生态",
+          "vespid": "持续扩展",
+          "traditional": "有限",
+          "diy": "手动"
+        },
+        "governance": {
+          "label": "治理控制",
+          "vespid": "内置",
+          "traditional": "部分",
+          "diy": "手动"
+        }
+      }
+    },
+    "pricing": {
+      "eyebrow": "定价",
+      "title": "为规模化编排打造的定价",
+      "subtitle": "从小规模起步，随着治理与节点执行需求升级。",
+      "footerNote": "支持年付优惠。",
+      "tiers": {
+        "starter": {
+          "title": "Starter",
+          "description": "适合早期自动化试点。",
+          "pricePrimary": "$49 / 座位 / 月",
+          "priceSecondary": "¥199 / 座位 / 月",
+          "cta": "免费开始"
+        },
+        "team": {
+          "title": "Team",
+          "description": "适合运行生产工作流的团队。",
+          "pricePrimary": "$149 / 月",
+          "priceSecondary": "¥999 / 月（含 5 个座位）",
+          "cta": "免费开始"
+        },
+        "enterprise": {
+          "title": "Enterprise",
+          "description": "定制化控制与专属基础设施。",
+          "pricePrimary": "联系销售",
+          "cta": "联系销售"
+        }
+      },
+      "features": {
+        "starter": {
+          "workflowBuilder": "工作流构建器",
+          "standardAgents": "标准代理",
+          "sharedQueue": "共享队列",
+          "communityConnectors": "社区连接器"
+        },
+        "team": {
+          "priorityQueue": "优先级队列",
+          "advancedRuns": "高级运行分析",
+          "nodeExecution": "节点执行",
+          "auditExport": "审计日志导出"
+        },
+        "enterprise": {
+          "dedicatedVpc": "专属 VPC",
+          "slaSupport": "SLA 与支持",
+          "customConnectors": "定制连接器",
+          "ssoSaml": "SSO/SAML"
+        }
+      },
+      "highlight": "推荐"
+    },
+    "faq": {
+      "eyebrow": "常见问题",
+      "title": "常见问题解答",
+      "items": {
+        "data": {
+          "question": "你们会存储客户数据吗？",
+          "answer": "仅存储执行所需的工作流数据，租户隔离与加密密钥全程保护。"
+        },
+        "infra": {
+          "question": "可以使用自己的基础设施吗？",
+          "answer": "可以。通过节点代理与网关在你的网络内执行敏感任务。"
+        },
+        "queue": {
+          "question": "队列不可用时会发生什么？",
+          "answer": "运行会快速失败并返回 503，避免产生脏队列状态；队列恢复后可重试。"
+        },
+        "start": {
+          "question": "如何开始？",
+          "answer": "创建账户、构建工作流并发布，即可运行你的第一个自动化。"
+        },
+        "locale": {
+          "question": "是否支持中文？",
+          "answer": "是的，产品已提供 zh-CN 本地化。"
+        }
+      }
+    },
+    "cta": {
+      "eyebrow": "开始使用",
+      "title": "准备好编排你的第一个代理工作流了吗？",
+      "subtitle": "为团队提供可靠的执行底座，快速交付自动化。",
+      "ctaPrimary": "免费开始",
+      "contactTitle": "联系销售",
+      "contactSubtitle": "我们会在 2 个工作日内回复。",
+      "contactEmail": "sales@vespid.example"
+    },
+    "footer": {
+      "copyright": "© 2026 Vespid. 保留所有权利。",
+      "terms": "条款",
+      "privacy": "隐私"
+    }
   }
 }

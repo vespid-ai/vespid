@@ -133,3 +133,49 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+@layer utilities {
+  .grid-lines {
+    background-image:
+      linear-gradient(to right, rgb(var(--border-subtle) / 0.35) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--border-subtle) / 0.35) 1px, transparent 1px);
+    background-size: 140px 140px;
+    mask-image: radial-gradient(circle at 50% 20%, black 0%, transparent 70%);
+  }
+
+  .noise-overlay {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+    background-size: 240px 240px;
+    mix-blend-mode: soft-light;
+  }
+
+  .hero-orb {
+    position: absolute;
+    border-radius: 999px;
+    animation: float-slow 18s ease-in-out infinite;
+  }
+
+  .pulse-soft {
+    animation: pulse-soft 8s ease-in-out infinite;
+  }
+}
+
+@keyframes float-slow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -14px, 0) scale(1.05);
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}

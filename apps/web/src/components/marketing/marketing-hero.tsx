@@ -1,0 +1,111 @@
+import Link from "next/link";
+import { Button } from "../ui/button";
+
+type HeroStat = {
+  label: string;
+};
+
+type MarketingHeroProps = {
+  eyebrow: string;
+  title: string;
+  subtitle: string;
+  primaryCta: { label: string; href: string };
+  secondaryCta: { label: string; href: string };
+  stats: HeroStat[];
+  panel: {
+    title: string;
+    badge: string;
+    steps: string[];
+    runLabel: string;
+    runId: string;
+    runStatus: string;
+  };
+};
+
+export function MarketingHero({
+  eyebrow,
+  title,
+  subtitle,
+  primaryCta,
+  secondaryCta,
+  stats,
+  panel,
+}: MarketingHeroProps) {
+  return (
+    <section className="relative py-20 sm:py-28">
+      <div className="absolute inset-0 -z-10">
+        <div className="hero-orb left-[6%] top-10 h-64 w-64 bg-brand/25 blur-3xl pulse-soft" />
+        <div className="hero-orb right-[4%] top-20 h-72 w-72 bg-brand2/22 blur-3xl pulse-soft" />
+        <div className="hero-orb left-[40%] top-[55%] h-56 w-56 bg-ok/18 blur-3xl" />
+      </div>
+
+      <div className="mx-auto grid max-w-6xl items-center gap-12 px-6 lg:grid-cols-[1.05fr_0.95fr]">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full border border-borderSubtle/60 bg-panel/65 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-muted shadow-inset">
+            <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+            {eyebrow}
+          </div>
+          <h1 className="mt-6 text-4xl font-semibold leading-tight text-text sm:text-5xl lg:text-6xl font-[var(--font-marketing)]">
+            {title}
+          </h1>
+          <p className="mt-5 max-w-xl text-base text-muted sm:text-lg">{subtitle}</p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Button asChild variant="accent" size="lg">
+              <Link href={primaryCta.href}>{primaryCta.label}</Link>
+            </Button>
+            <Button asChild variant="outline" size="lg" className="border-borderStrong/70">
+              <Link href={secondaryCta.href}>{secondaryCta.label}</Link>
+            </Button>
+          </div>
+          <div className="mt-10 grid gap-4 sm:grid-cols-3">
+            {stats.map((stat) => (
+              <div
+                key={stat.label}
+                className="rounded-2xl border border-borderSubtle/70 bg-panel/60 px-4 py-4 text-sm text-muted shadow-elev1"
+              >
+                <div className="font-medium text-text">{stat.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className="absolute inset-0 -z-10 rounded-[28px] bg-surface1/80 shadow-elev3" />
+          <div className="grid gap-5 rounded-[28px] border border-borderSubtle/70 bg-surface1/80 p-6 shadow-elev2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-[0.28em] text-muted">{panel.title}</div>
+              <div className="rounded-full border border-borderSubtle/60 px-3 py-1 text-xs text-muted">
+                {panel.badge}
+              </div>
+            </div>
+            <div className="grid gap-4">
+              {panel.steps.map((step, index) => (
+                <div
+                  key={step}
+                  className="flex items-center gap-4 rounded-2xl border border-borderSubtle/60 bg-panel/70 px-4 py-3 text-sm text-muted shadow-inset"
+                >
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-brand/15 text-xs font-semibold text-brand">
+                    0{index + 1}
+                  </div>
+                  <div className="text-text">{step}</div>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-2xl border border-borderSubtle/60 bg-panel/70 px-4 py-4 text-sm text-muted">
+              <div className="text-xs uppercase tracking-[0.28em] text-muted">{panel.runLabel}</div>
+              <div className="mt-2 flex items-center justify-between text-sm">
+                <span className="text-text">{panel.runId}</span>
+                <span className="rounded-full bg-ok/15 px-3 py-1 text-xs font-semibold text-ok">
+                  {panel.runStatus}
+                </span>
+              </div>
+              <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface3">
+                <div className="h-full w-[82%] rounded-full bg-brand" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
