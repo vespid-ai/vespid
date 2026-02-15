@@ -294,10 +294,15 @@ export async function createWorkflow(
     createdByUserId: string;
   }
 ) {
+  const workflowId = crypto.randomUUID();
   const [row] = await db
     .insert(workflows)
     .values({
+      id: workflowId,
       organizationId: input.organizationId,
+      familyId: workflowId,
+      revision: 1,
+      sourceWorkflowId: null,
       name: input.name,
       status: "draft",
       version: 1,
@@ -310,6 +315,72 @@ export async function createWorkflow(
     throw new Error("Failed to create workflow");
   }
   return row;
+}
+
+export async function createWorkflowDraftFromWorkflow(
+  db: Db,
+  input: {
+    organizationId: string;
+    sourceWorkflowId: string;
+    createdByUserId: string;
+  }
+) {
+  const source = await getWorkflowById(db, {
+    organizationId: input.organizationId,
+    workflowId: input.sourceWorkflowId,
+  });
+  if (!source) {
+    return null;
+  }
+
+  const familyId = (source as any).familyId as string | undefined;
+  if (!familyId) {
+    throw new Error("WORKFLOW_FAMILY_ID_MISSING");
+  }
+
+  // Avoid revision collisions under concurrent draft creation by retrying on unique violations.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [{ maxRevision }] = await db
+      .select({ maxRevision: sql<number | null>`max(${workflows.revision})` })
+      .from(workflows)
+      .where(and(eq(workflows.organizationId, input.organizationId), eq(workflows.familyId, familyId)));
+
+    const nextRevision = (maxRevision ?? 0) + 1;
+    const newWorkflowId = crypto.randomUUID();
+
+    try {
+      const [row] = await db
+        .insert(workflows)
+        .values({
+          id: newWorkflowId,
+          organizationId: input.organizationId,
+          familyId,
+          revision: nextRevision,
+          sourceWorkflowId: source.id,
+          name: source.name,
+          status: "draft",
+          version: 1,
+          dsl: source.dsl,
+          editorState: (source as any).editorState ?? null,
+          createdByUserId: input.createdByUserId,
+          publishedAt: null,
+          updatedAt: new Date(),
+          createdAt: new Date(),
+        })
+        .returning();
+
+      if (!row) {
+        throw new Error("Failed to create workflow draft from workflow");
+      }
+      return row;
+    } catch (error) {
+      if (!isPgUniqueViolation(error) || attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Failed to create workflow draft from workflow after retries");
 }
 
 export async function getWorkflowById(db: Db, input: { organizationId: string; workflowId: string }) {

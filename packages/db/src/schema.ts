@@ -88,6 +88,12 @@ export const authSessions = pgTable("auth_sessions", {
 export const workflows = pgTable("workflows", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // Groups versions of the same conceptual workflow. (family_id = id for the first revision)
+  familyId: uuid("family_id").notNull(),
+  // Monotonic per (organization_id, family_id). Each revision is its own row.
+  revision: integer("revision").notNull(),
+  // Optional pointer to the workflow row this draft was cloned from.
+  sourceWorkflowId: uuid("source_workflow_id"),
   name: text("name").notNull(),
   status: text("status").notNull().default("draft"),
   version: integer("version").notNull().default(1),
