@@ -8,6 +8,26 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
 
 const defaultAgentLlmProvider = "openai" as const;
 
+const conditionConfigSchema = z.object({
+  path: z.string().min(1).max(500),
+  op: z.enum(["eq", "neq", "contains", "exists", "gt", "gte", "lt", "lte"]),
+  value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
+});
+
+const parallelJoinConfigSchema = z
+  .object({
+    mode: z.literal("all").default("all"),
+    failFast: z.boolean().default(true),
+  })
+  .default({ mode: "all", failFast: true });
+
+const httpRequestConfigSchema = z.object({
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
+  url: z.string().min(1).max(2000),
+  headers: z.record(z.string().min(1), z.string()).optional(),
+  body: z.unknown().optional(),
+});
+
 const agentExecuteTaskSchema = z.object({
   type: z.literal("shell"),
   script: z.string().min(1).max(200_000),
@@ -174,7 +194,11 @@ const agentRunNodeSchema = z.object({
 });
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [
-  z.object({ id: z.string().min(1), type: z.literal("http.request") }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("http.request"),
+    config: httpRequestConfigSchema.optional(),
+  }),
   agentRunNodeSchema,
   z.object({
     id: z.string().min(1),
@@ -223,8 +247,16 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
       }),
     }),
   }),
-  z.object({ id: z.string().min(1), type: z.literal("condition") }),
-  z.object({ id: z.string().min(1), type: z.literal("parallel.join") }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("condition"),
+    config: conditionConfigSchema.optional(),
+  }),
+  z.object({
+    id: z.string().min(1),
+    type: z.literal("parallel.join"),
+    config: parallelJoinConfigSchema.optional(),
+  }),
 ]);
 
 export const workflowDslSchema = z.object({
@@ -235,11 +267,247 @@ export const workflowDslSchema = z.object({
 
 export type WorkflowDsl = z.infer<typeof workflowDslSchema>;
 
+export const workflowEdgeV3Schema = z.object({
+  id: z.string().min(1).max(120),
+  from: z.string().min(1).max(120),
+  to: z.string().min(1).max(120),
+  kind: z.enum(["always", "cond_true", "cond_false"]).optional(),
+});
+
+export const workflowDslV3Schema = z.object({
+  version: z.literal("v3"),
+  trigger: workflowTriggerSchema,
+  graph: z.object({
+    nodes: z.record(z.string().min(1).max(120), workflowNodeSchema),
+    edges: z.array(workflowEdgeV3Schema),
+  }),
+});
+
+export type WorkflowDslV3 = z.infer<typeof workflowDslV3Schema>;
+export type WorkflowDslAny = WorkflowDsl | WorkflowDslV3;
+
+export const workflowDslAnySchema = z.union([workflowDslSchema, workflowDslV3Schema]);
+
+function isRemoteExecutionMode(node: z.infer<typeof workflowNodeSchema>): boolean {
+  if (node.type === "agent.execute") {
+    return (node.config?.execution?.mode ?? "cloud") === "node";
+  }
+  if (node.type === "agent.run") {
+    return (node.config.execution?.mode ?? "cloud") === "node";
+  }
+  if (node.type === "connector.action") {
+    return (node.config.execution?.mode ?? "cloud") === "node";
+  }
+  return false;
+}
+
+export type WorkflowDslV3ValidationError = {
+  ok: false;
+  code:
+    | "GRAPH_NODE_MISSING"
+    | "GRAPH_EDGE_INVALID"
+    | "GRAPH_CYCLE_DETECTED"
+    | "CONDITION_EDGE_CONSTRAINTS"
+    | "PARALLEL_REMOTE_NOT_SUPPORTED";
+  message: string;
+};
+
+export function validateV3GraphConstraints(dsl: WorkflowDslV3): { ok: true } | WorkflowDslV3ValidationError {
+  const nodes = dsl.graph.nodes ?? {};
+  const edges = dsl.graph.edges ?? [];
+
+  const nodeIds = new Set(Object.keys(nodes));
+  if (nodeIds.size === 0) {
+    return { ok: false, code: "GRAPH_NODE_MISSING", message: "Graph must include at least one node" };
+  }
+
+  const edgeIds = new Set<string>();
+  const outgoing = new Map<string, Array<z.infer<typeof workflowEdgeV3Schema>>>();
+  const incoming = new Map<string, Array<z.infer<typeof workflowEdgeV3Schema>>>();
+
+  for (const edge of edges) {
+    if (edgeIds.has(edge.id)) {
+      return { ok: false, code: "GRAPH_EDGE_INVALID", message: `Duplicate edge id: ${edge.id}` };
+    }
+    edgeIds.add(edge.id);
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
+      return { ok: false, code: "GRAPH_EDGE_INVALID", message: `Edge must connect existing nodes: ${edge.id}` };
+    }
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge]);
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge]);
+  }
+
+  for (const [id, node] of Object.entries(nodes)) {
+    if (!node || node.type !== "condition") {
+      continue;
+    }
+    const out = outgoing.get(id) ?? [];
+    const kinds = out.map((e) => e.kind ?? "always");
+    const trueCount = kinds.filter((k) => k === "cond_true").length;
+    const falseCount = kinds.filter((k) => k === "cond_false").length;
+    const other = kinds.filter((k) => k !== "cond_true" && k !== "cond_false").length;
+    if (trueCount !== 1 || falseCount !== 1 || other !== 0 || out.length !== 2) {
+      return {
+        ok: false,
+        code: "CONDITION_EDGE_CONSTRAINTS",
+        message: `Condition node ${id} must have exactly one cond_true and one cond_false outgoing edge`,
+      };
+    }
+  }
+
+  const inDegree = new Map<string, number>();
+  for (const id of nodeIds) {
+    inDegree.set(id, 0);
+  }
+  for (const edge of edges) {
+    inDegree.set(edge.to, (inDegree.get(edge.to) ?? 0) + 1);
+  }
+  const queue: string[] = [];
+  for (const [id, deg] of inDegree.entries()) {
+    if (deg === 0) {
+      queue.push(id);
+    }
+  }
+  let visited = 0;
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (!id) {
+      break;
+    }
+    visited += 1;
+    for (const edge of outgoing.get(id) ?? []) {
+      const next = edge.to;
+      const deg = (inDegree.get(next) ?? 0) - 1;
+      inDegree.set(next, deg);
+      if (deg === 0) {
+        queue.push(next);
+      }
+    }
+  }
+  if (visited !== nodeIds.size) {
+    return {
+      ok: false,
+      code: "GRAPH_CYCLE_DETECTED",
+      message: "Graph must be a DAG (cycles are not supported in v3 MVP)",
+    };
+  }
+
+  const joinNodeIds = Object.entries(nodes)
+    .filter(([, node]) => node?.type === "parallel.join")
+    .map(([id]) => id);
+
+  function computeCanReach(targetId: string): Set<string> {
+    const seen = new Set<string>();
+    const stack = [targetId];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) {
+        continue;
+      }
+      for (const edge of incoming.get(current) ?? []) {
+        if (!seen.has(edge.from)) {
+          seen.add(edge.from);
+          stack.push(edge.from);
+        }
+      }
+    }
+    return seen;
+  }
+
+  function computeReachableFrom(startId: string): Set<string> {
+    const seen = new Set<string>([startId]);
+    const stack = [startId];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) {
+        continue;
+      }
+      for (const edge of outgoing.get(current) ?? []) {
+        if (!seen.has(edge.to)) {
+          seen.add(edge.to);
+          stack.push(edge.to);
+        }
+      }
+    }
+    return seen;
+  }
+
+  for (const joinId of joinNodeIds) {
+    const canReachJoin = computeCanReach(joinId);
+    for (const rootId of canReachJoin) {
+      const out = outgoing.get(rootId) ?? [];
+      const alwaysEdges = out.filter((e) => (e.kind ?? "always") === "always");
+      if (alwaysEdges.length < 2) {
+        continue;
+      }
+      for (const edge of alwaysEdges) {
+        const branchReach = computeReachableFrom(edge.to);
+        for (const nodeId of branchReach) {
+          if (nodeId === joinId) {
+            continue;
+          }
+          if (!canReachJoin.has(nodeId)) {
+            continue;
+          }
+          const node = nodes[nodeId];
+          if (node && isRemoteExecutionMode(node)) {
+            return {
+              ok: false,
+              code: "PARALLEL_REMOTE_NOT_SUPPORTED",
+              message: `Remote execution is not supported inside parallel regions in v3 MVP (node ${nodeId})`,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+export function upgradeV2ToV3(dslV2: WorkflowDsl): WorkflowDslV3 {
+  const nodes: Record<string, z.infer<typeof workflowNodeSchema>> = {};
+  for (const node of dslV2.nodes) {
+    if (node.type === "connector.github.issue.create") {
+      nodes[node.id] = {
+        id: node.id,
+        type: "connector.action",
+        config: {
+          connectorId: "github",
+          actionId: "issue.create",
+          input: {
+            repo: node.config.repo,
+            title: node.config.title,
+            ...(node.config.body ? { body: node.config.body } : {}),
+          },
+          auth: { secretId: node.config.auth.secretId },
+        },
+      } as any;
+      continue;
+    }
+    nodes[node.id] = node;
+  }
+  const edges: Array<z.infer<typeof workflowEdgeV3Schema>> = [];
+  for (let i = 0; i < dslV2.nodes.length - 1; i += 1) {
+    const from = dslV2.nodes[i]?.id;
+    const to = dslV2.nodes[i + 1]?.id;
+    if (!from || !to) {
+      continue;
+    }
+    edges.push({ id: `e:${from}->${to}`, from, to, kind: "always" });
+  }
+  return {
+    version: "v3",
+    trigger: dslV2.trigger,
+    graph: { nodes, edges },
+  };
+}
+
 export type WorkflowExecutionStatus = "succeeded" | "failed";
 
 export type WorkflowExecutionStep = {
   nodeId: string;
-  nodeType: WorkflowDsl["nodes"][number]["type"];
+  nodeType: z.infer<typeof workflowNodeSchema>["type"];
   status: WorkflowExecutionStatus;
   output?: unknown;
   error?: string;

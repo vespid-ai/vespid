@@ -65,6 +65,7 @@ export type WorkflowRecord = {
   status: "draft" | "published";
   version: number;
   dsl: unknown;
+  editorState?: unknown | null;
   createdByUserId: string;
   publishedAt: string | null;
   createdAt: string;
@@ -197,10 +198,24 @@ export interface AppStore {
     dsl: unknown;
     createdByUserId: string;
   }): Promise<WorkflowRecord>;
+  listWorkflows(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ workflows: WorkflowRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
   getWorkflowById(input: {
     organizationId: string;
     workflowId: string;
     actorUserId: string;
+  }): Promise<WorkflowRecord | null>;
+  updateWorkflowDraft(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    name?: string | null;
+    dsl?: unknown;
+    editorState?: unknown;
   }): Promise<WorkflowRecord | null>;
   publishWorkflow(input: {
     organizationId: string;

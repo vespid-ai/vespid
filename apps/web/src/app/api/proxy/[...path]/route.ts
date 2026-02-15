@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+
+export const dynamic = "force-dynamic";
 
 type NetworkErrorPayload = {
   code: "NETWORK_ERROR" | "UPSTREAM_ERROR";
@@ -23,14 +26,13 @@ function buildUpstreamUrl(request: Request, pathParts: string[]): string {
   return `${base}${upstreamPath}${url.search}`;
 }
 
-function filterRequestHeaders(request: Request): Headers {
+async function filterRequestHeaders(request: Request): Promise<Headers> {
   const headers = new Headers();
   const passthrough = [
     "content-type",
     "accept",
     "x-org-id",
     "authorization",
-    "cookie",
     "user-agent",
   ];
   for (const key of passthrough) {
@@ -38,6 +40,15 @@ function filterRequestHeaders(request: Request): Headers {
     if (value) {
       headers.set(key, value);
     }
+  }
+
+  const jar = await cookies();
+  const cookieHeader = jar
+    .getAll()
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+  if (cookieHeader) {
+    headers.set("cookie", cookieHeader);
   }
   return headers;
 }
@@ -50,7 +61,7 @@ async function proxy(request: Request, pathParts: string[]) {
   try {
     const init: RequestInit = {
       method: request.method,
-      headers: filterRequestHeaders(request),
+      headers: await filterRequestHeaders(request),
       cache: "no-store",
     };
     if (request.method !== "GET" && request.method !== "HEAD") {

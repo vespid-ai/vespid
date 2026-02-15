@@ -1,0 +1,513 @@
+"use client";
+
+import "@xyflow/react/dist/style.css";
+
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+import {
+  Background,
+  Controls,
+  MiniMap,
+  ReactFlow,
+  addEdge,
+  useEdgesState,
+  useNodesState,
+  type Connection,
+  type Edge,
+  type Node,
+  type ReactFlowInstance,
+} from "@xyflow/react";
+import { upgradeV2ToV3, type WorkflowDsl as WorkflowDslV2, type WorkflowDslV3 } from "@vespid/workflow";
+import { Button } from "../../../../../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../../components/ui/card";
+import { CodeBlock } from "../../../../../../components/ui/code-block";
+import { Input } from "../../../../../../components/ui/input";
+import { Label } from "../../../../../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../../../components/ui/select";
+import { Textarea } from "../../../../../../components/ui/textarea";
+import { useActiveOrgId } from "../../../../../../lib/hooks/use-active-org-id";
+import { useUpdateWorkflowDraft, useWorkflow } from "../../../../../../lib/hooks/use-workflows";
+
+type EdgeKind = "always" | "cond_true" | "cond_false";
+
+type WorkflowNodeAny = {
+  id: string;
+  type: string;
+  config?: unknown;
+};
+
+type EditorState = {
+  nodes?: Array<{ id: string; position: { x: number; y: number } }>;
+  viewport?: { x: number; y: number; zoom: number };
+};
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function parseEditorState(input: unknown): EditorState | null {
+  const obj = asObject(input);
+  if (!obj) {
+    return null;
+  }
+  const nodesRaw = obj["nodes"];
+  const viewportRaw = obj["viewport"];
+  const state: EditorState = {};
+  if (Array.isArray(nodesRaw)) {
+    state.nodes = nodesRaw
+      .map((n) => asObject(n))
+      .filter(Boolean)
+      .map((n) => {
+        const id = typeof n!.id === "string" ? n!.id : "";
+        const pos = asObject(n!.position);
+        const x = typeof pos?.x === "number" ? pos.x : 0;
+        const y = typeof pos?.y === "number" ? pos.y : 0;
+        return { id, position: { x, y } };
+      })
+      .filter((n) => n.id.length > 0);
+  }
+  const viewportObj = asObject(viewportRaw);
+  if (viewportObj) {
+    const x = typeof viewportObj.x === "number" ? viewportObj.x : 0;
+    const y = typeof viewportObj.y === "number" ? viewportObj.y : 0;
+    const zoom = typeof viewportObj.zoom === "number" ? viewportObj.zoom : 1;
+    state.viewport = { x, y, zoom };
+  }
+  return state;
+}
+
+function defaultPosition(index: number) {
+  const col = index % 4;
+  const row = Math.floor(index / 4);
+  return { x: 60 + col * 260, y: 60 + row * 140 };
+}
+
+function toFlowNodes(input: { dsl: WorkflowDslV3; editorState: EditorState | null }): Node[] {
+  const positions = new Map<string, { x: number; y: number }>();
+  for (const item of input.editorState?.nodes ?? []) {
+    positions.set(item.id, item.position);
+  }
+  return Object.entries(input.dsl.graph.nodes).map(([id, node], index) => ({
+    id,
+    position: positions.get(id) ?? defaultPosition(index),
+    data: {
+      label: node.type,
+      node,
+    },
+  }));
+}
+
+function toFlowEdges(input: { dsl: WorkflowDslV3 }): Edge[] {
+  return input.dsl.graph.edges.map((e) => ({
+    id: e.id,
+    source: e.from,
+    target: e.to,
+    label: e.kind ?? "always",
+    data: { kind: e.kind ?? "always" },
+    animated: false,
+  }));
+}
+
+function safeJsonParse(text: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export default function WorkflowGraphEditorPage() {
+  const router = useRouter();
+  const params = useParams<{ locale?: string | string[]; workflowId?: string | string[] }>();
+  const locale = Array.isArray(params?.locale) ? (params.locale[0] ?? "en") : (params?.locale ?? "en");
+  const workflowId = Array.isArray(params?.workflowId) ? (params.workflowId[0] ?? "") : (params?.workflowId ?? "");
+
+  const orgId = useActiveOrgId() ?? null;
+  const workflowQuery = useWorkflow(orgId, workflowId);
+  const updateDraft = useUpdateWorkflowDraft(orgId, workflowId);
+
+  const [instance, setInstance] = useState<ReactFlowInstance | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>("");
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
+  const [configJson, setConfigJson] = useState<string>("{}");
+  const [edgeKind, setEdgeKind] = useState<EdgeKind>("always");
+  const [nameDraft, setNameDraft] = useState<string>("");
+
+  const loaded = workflowQuery.data?.workflow ?? null;
+  const dslAny = loaded?.dsl as any;
+
+  const parsedEditorState = useMemo(() => parseEditorState(loaded?.editorState), [loaded?.editorState]);
+
+  const v3Dsl: WorkflowDslV3 | null = useMemo(() => {
+    if (!dslAny || typeof dslAny !== "object") {
+      return null;
+    }
+    if (dslAny.version === "v3") {
+      return dslAny as WorkflowDslV3;
+    }
+    if (dslAny.version === "v2") {
+      return upgradeV2ToV3(dslAny as WorkflowDslV2) as any;
+    }
+    return null;
+  }, [dslAny]);
+
+  const initialNodes = useMemo(() => (v3Dsl ? toFlowNodes({ dsl: v3Dsl, editorState: parsedEditorState }) : []), [v3Dsl, parsedEditorState]);
+  const initialEdges = useMemo(() => (v3Dsl ? toFlowEdges({ dsl: v3Dsl }) : []), [v3Dsl]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  useEffect(() => {
+    if (!loaded) {
+      return;
+    }
+    setNameDraft(loaded.name ?? "");
+  }, [loaded]);
+
+  useEffect(() => {
+    // When a workflow loads/changes, reset the graph state.
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
+
+  useEffect(() => {
+    if (!selectedNodeId) {
+      return;
+    }
+    const node = nodes.find((n) => n.id === selectedNodeId) as any;
+    const cfg = node?.data?.node?.config ?? null;
+    setConfigJson(JSON.stringify(cfg ?? {}, null, 2));
+  }, [selectedNodeId, nodes]);
+
+  useEffect(() => {
+    if (!selectedEdgeId) {
+      return;
+    }
+    const edge = edges.find((e) => e.id === selectedEdgeId) as any;
+    const kind = (edge?.data?.kind ?? "always") as any;
+    if (kind === "cond_true" || kind === "cond_false" || kind === "always") {
+      setEdgeKind(kind);
+    }
+  }, [selectedEdgeId, edges]);
+
+  const onConnect = (connection: Connection) => {
+    if (!connection.source || !connection.target) {
+      return;
+    }
+    const id = `e:${connection.source}->${connection.target}:${Date.now()}`;
+    setEdges((eds) =>
+      addEdge(
+        {
+          id,
+          source: connection.source!,
+          target: connection.target!,
+          label: "always",
+          data: { kind: "always" },
+        },
+        eds
+      )
+    );
+  };
+
+  function addNode(type: WorkflowNodeAny["type"]) {
+    const id = `${type.replaceAll(".", "_")}-${Math.floor(Math.random() * 100000)}`;
+    const node: WorkflowNodeAny = { id, type };
+    const position = defaultPosition(nodes.length);
+    setNodes((ns) => [
+      ...ns,
+      {
+        id,
+        position,
+        data: { label: type, node },
+      },
+    ]);
+    setSelectedNodeId(id);
+    setSelectedEdgeId("");
+  }
+
+  async function saveSelectedNodeConfig() {
+    if (!selectedNodeId) {
+      return;
+    }
+    const parsed = safeJsonParse(configJson);
+    if (!parsed.ok) {
+      toast.error("Invalid JSON config");
+      return;
+    }
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id !== selectedNodeId) {
+          return n;
+        }
+        const current = (n as any).data?.node as WorkflowNodeAny;
+        const next: WorkflowNodeAny = { ...current, config: parsed.value };
+        return { ...n, data: { ...(n as any).data, node: next } };
+      })
+    );
+    toast.success("Node config updated");
+  }
+
+  async function saveEdgeKind() {
+    if (!selectedEdgeId) {
+      return;
+    }
+    setEdges((eds) =>
+      eds.map((e) => {
+        if (e.id !== selectedEdgeId) {
+          return e;
+        }
+        return { ...e, label: edgeKind, data: { ...(e.data as any), kind: edgeKind } };
+      })
+    );
+    toast.success("Edge updated");
+  }
+
+  async function saveWorkflow() {
+    if (!orgId) {
+      toast.error("Organization is required");
+      return;
+    }
+    if (!workflowId) {
+      toast.error("Workflow is required");
+      return;
+    }
+    if (!loaded) {
+      toast.error("Workflow is not loaded");
+      return;
+    }
+    if (loaded.status !== "draft") {
+      toast.error("Only drafts can be edited");
+      return;
+    }
+
+    const nodesRecord: Record<string, unknown> = {};
+    for (const n of nodes as any[]) {
+      const node = n?.data?.node as WorkflowNodeAny | undefined;
+      if (!node || typeof node.id !== "string" || node.id.length === 0) {
+        continue;
+      }
+      nodesRecord[node.id] = node;
+    }
+    const edgesList: Array<{ id: string; from: string; to: string; kind?: EdgeKind }> = edges.map((e) => {
+      const raw = ((e.data as any)?.kind ?? "always") as unknown;
+      const kind: EdgeKind = raw === "cond_true" || raw === "cond_false" || raw === "always" ? raw : "always";
+      return { id: e.id, from: e.source, to: e.target, kind };
+    });
+
+    const dsl: WorkflowDslV3 = {
+      version: "v3",
+      trigger: (v3Dsl?.trigger ?? { type: "trigger.manual" }) as any,
+      // The server validates and persists the canonical DSL via @vespid/workflow schemas.
+      graph: { nodes: nodesRecord as any, edges: edgesList },
+    };
+
+    const editorState: EditorState = {
+      nodes: nodes.map((n) => ({ id: n.id, position: n.position })),
+      ...(instance ? { viewport: instance.getViewport() } : {}),
+    };
+
+    try {
+      await updateDraft.mutateAsync({
+        ...(nameDraft.trim().length > 0 ? { name: nameDraft.trim() } : {}),
+        dsl,
+        editorState,
+      });
+      toast.success("Saved");
+    } catch (err: any) {
+      const code = err?.payload?.code;
+      if (code === "PARALLEL_REMOTE_NOT_SUPPORTED") {
+        toast.error("Remote execution is not supported inside parallel regions (v3 MVP).");
+        return;
+      }
+      throw err;
+    }
+  }
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">Workflow Graph Editor</div>
+          <div className="mt-1 text-sm text-muted break-all">{workflowId}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline">
+            <Link href={`/${locale}/workflows/${workflowId}`}>Back</Link>
+          </Button>
+          <Button variant="accent" onClick={saveWorkflow} disabled={updateDraft.isPending || workflowQuery.isLoading}>
+            {updateDraft.isPending ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </div>
+
+      {!orgId ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Organization Required</CardTitle>
+            <CardDescription>Select an organization first.</CardDescription>
+          </CardHeader>
+        </Card>
+      ) : workflowQuery.isLoading ? (
+        <div className="text-sm text-muted">Loading...</div>
+      ) : !loaded ? (
+        <div className="text-sm text-muted">Workflow not found.</div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
+          <Card className="min-h-[640px] overflow-hidden">
+            <CardHeader>
+              <CardTitle>Graph</CardTitle>
+              <CardDescription>
+                DSL: <span className="font-mono text-xs">{String((loaded.dsl as any)?.version ?? "unknown")}</span> | Status:{" "}
+                <span className="font-mono text-xs">{loaded.status}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="h-[560px]">
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onInit={(inst) => {
+                  setInstance(inst);
+                  const state = parsedEditorState;
+                  if (state?.viewport) {
+                    inst.setViewport(state.viewport);
+                  }
+                }}
+                onNodeClick={(_, n) => {
+                  setSelectedNodeId(n.id);
+                  setSelectedEdgeId("");
+                }}
+                onEdgeClick={(_, e) => {
+                  setSelectedEdgeId(e.id);
+                  setSelectedNodeId("");
+                }}
+                fitView
+              >
+                <Background />
+                <Controls />
+                <MiniMap pannable zoomable />
+              </ReactFlow>
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Workflow</CardTitle>
+                <CardDescription>Draft updates only. Published workflows are read-only.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="workflow-name">Name</Label>
+                  <Input id="workflow-name" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} />
+                </div>
+
+                <div className="grid gap-2">
+                  <div className="text-sm font-medium">Add Node</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => addNode("http.request")}>
+                      http.request
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => addNode("condition")}>
+                      condition
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => addNode("parallel.join")}>
+                      parallel.join
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => addNode("agent.execute")}>
+                      agent.execute
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => addNode("connector.action")}>
+                      connector.action
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => addNode("agent.run")}>
+                      agent.run
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {selectedNodeId ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Node</CardTitle>
+                  <CardDescription className="break-all">{selectedNodeId}</CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="node-config">Config (JSON)</Label>
+                    <Textarea id="node-config" value={configJson} onChange={(e) => setConfigJson(e.target.value)} rows={10} />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="accent" onClick={saveSelectedNodeConfig}>
+                      Apply Config
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setSelectedNodeId("")}>
+                      Close
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {selectedEdgeId ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Edge</CardTitle>
+                  <CardDescription className="break-all">{selectedEdgeId}</CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <Label>Kind</Label>
+                    <Select
+                      value={edgeKind}
+                      onValueChange={(v) => {
+                        if (v === "always" || v === "cond_true" || v === "cond_false") {
+                          setEdgeKind(v);
+                        }
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="always">always</SelectItem>
+                        <SelectItem value="cond_true">cond_true</SelectItem>
+                        <SelectItem value="cond_false">cond_false</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="accent" onClick={saveEdgeKind}>
+                      Apply Edge
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setSelectedEdgeId("")}>
+                      Close
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Debug</CardTitle>
+                <CardDescription>Current draft payload preview.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CodeBlock value={{ workflow: loaded, nodes: nodes.length, edges: edges.length }} />
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

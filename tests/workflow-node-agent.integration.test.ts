@@ -13,6 +13,25 @@ import { getCommunityConnectorAction } from "@vespid/connectors";
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
 
+async function listenGatewayWithRetry(input: { server: Awaited<ReturnType<typeof buildGatewayServer>>; host: string; port: number }) {
+  const maxAttempts = 25;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await input.server.listen({ host: input.host, port: input.port });
+      return;
+    } catch (error) {
+      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+      if (code === "EADDRINUSE" || code === "EACCES") {
+        // Port can linger briefly after close() in CI. Retry a few times.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("GATEWAY_LISTEN_RETRY_EXHAUSTED");
+}
+
 async function startGithubStub() {
   let lastAuth: string | null = null;
   let lastBody: unknown = null;
@@ -300,7 +319,14 @@ async function startStubAgent(input: {
 
   return {
     async close() {
-      ws.close();
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => resolve(), 2000);
+        ws.once("close", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        ws.close();
+      });
     },
   };
 }
@@ -685,6 +711,7 @@ describe("workflow node-agent integration", () => {
       const runId = (runCreate.json() as { run: { id: string } }).run.id;
 
       // Wait until the worker has dispatched the node, then restart the gateway while the node-agent is still executing.
+      let dispatched = false;
       for (let index = 0; index < 40; index += 1) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         const events = await api.inject({
@@ -695,14 +722,18 @@ describe("workflow node-agent integration", () => {
         expect(events.statusCode).toBe(200);
         const body = events.json() as { events: Array<{ eventType: string }> };
         if (body.events.some((e) => e.eventType === "node_dispatched")) {
+          dispatched = true;
           break;
         }
       }
+      expect(dispatched).toBe(true);
 
-      await gateway?.close();
+      // Restart the gateway on the same port so the node-agent reconnect loop can recover.
       const parsed = new URL(gatewayBaseUrl);
+      const port = Number(parsed.port);
+      await gateway?.close();
       gateway = await buildGatewayServer();
-      await gateway.listen({ port: Number(parsed.port), host: "127.0.0.1" });
+      await listenGatewayWithRetry({ server: gateway, host: "127.0.0.1", port });
 
       let finalStatus: string | null = null;
       for (let index = 0; index < 160; index += 1) {
@@ -738,7 +769,7 @@ describe("workflow node-agent integration", () => {
         await nodeAgent.close();
       }
     }
-  });
+  }, 90_000);
 
   it("routes connector.action only to agents that declare support", async () => {
     if (!available || !api || !githubStub || !gatewayWsUrl) {

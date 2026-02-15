@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+
+export const dynamic = "force-dynamic";
 
 type NetworkErrorPayload = {
   code: "NETWORK_ERROR" | "UPSTREAM_ERROR";
@@ -18,7 +21,18 @@ function parseErrorMessage(err: unknown): string {
 
 export async function GET(request: Request) {
   const base = getControlPlaneBase();
-  const cookie = request.headers.get("cookie") ?? "";
+  let cookie = "";
+  try {
+    // In Next.js runtime this is always available. In unit tests it may be called
+    // outside a request scope; treat that as "anonymous browsing".
+    const jar = await cookies();
+    cookie = jar
+      .getAll()
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+  } catch {
+    cookie = "";
+  }
 
   let upstream: Response;
   try {

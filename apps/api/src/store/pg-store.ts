@@ -32,7 +32,9 @@ import {
   revokeOrganizationAgent as dbRevokeOrganizationAgent,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
+  listWorkflows as dbListWorkflows,
   getWorkflowById as dbGetWorkflowById,
+  updateWorkflowDraft as dbUpdateWorkflowDraft,
   publishWorkflow as dbPublishWorkflow,
   createWorkflowRun as dbCreateWorkflowRun,
   deleteQueuedWorkflowRun as dbDeleteQueuedWorkflowRun,
@@ -404,10 +406,54 @@ export class PgAppStore implements AppStore {
       status: row.status as "draft" | "published",
       version: row.version,
       dsl: row.dsl,
+      editorState: (row as any).editorState ?? null,
       createdByUserId: row.createdByUserId,
       publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
       createdAt: toIso(row.createdAt),
       updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async listWorkflows(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }) {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+
+    const result = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflows(db, {
+          organizationId: input.organizationId,
+          limit: input.limit,
+          cursor,
+        })
+    );
+
+    return {
+      workflows: result.rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        name: row.name,
+        status: row.status as "draft" | "published",
+        version: row.version,
+        dsl: row.dsl,
+        editorState: (row as any).editorState ?? null,
+        createdByUserId: row.createdByUserId,
+        publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
+        createdAt: toIso(row.createdAt),
+        updatedAt: toIso(row.updatedAt),
+      })),
+      nextCursor: result.nextCursor
+        ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id }
+        : null,
     };
   }
 
@@ -426,6 +472,44 @@ export class PgAppStore implements AppStore {
       status: row.status as "draft" | "published",
       version: row.version,
       dsl: row.dsl,
+      editorState: (row as any).editorState ?? null,
+      createdByUserId: row.createdByUserId,
+      publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async updateWorkflowDraft(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    name?: string | null;
+    dsl?: unknown;
+    editorState?: unknown;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpdateWorkflowDraft(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.dsl !== undefined ? { dsl: input.dsl } : {}),
+          ...(input.editorState !== undefined ? { editorState: input.editorState } : {}),
+        })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      status: row.status as "draft" | "published",
+      version: row.version,
+      dsl: row.dsl,
+      editorState: (row as any).editorState ?? null,
       createdByUserId: row.createdByUserId,
       publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
       createdAt: toIso(row.createdAt),

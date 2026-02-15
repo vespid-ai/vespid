@@ -341,6 +341,68 @@ export async function publishWorkflow(
   return row ?? null;
 }
 
+export async function updateWorkflowDraft(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    name?: string | null;
+    dsl?: unknown;
+    editorState?: unknown;
+  }
+) {
+  const [row] = await db
+    .update(workflows)
+    .set({
+      ...(typeof input.name === "string" ? { name: input.name } : {}),
+      ...(input.dsl !== undefined ? { dsl: input.dsl } : {}),
+      ...(input.editorState !== undefined ? { editorState: input.editorState as any } : {}),
+      version: sql`${workflows.version} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(workflows.organizationId, input.organizationId),
+        eq(workflows.id, input.workflowId),
+        eq(workflows.status, "draft")
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function listWorkflows(
+  db: Db,
+  input: {
+    organizationId: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+) {
+  const limit = Math.min(200, Math.max(1, input.limit));
+
+  const baseWhere = eq(workflows.organizationId, input.organizationId);
+  const cursorWhere = input.cursor
+    ? or(
+        lt(workflows.createdAt, input.cursor.createdAt),
+        and(eq(workflows.createdAt, input.cursor.createdAt), lt(workflows.id, input.cursor.id))
+      )
+    : null;
+
+  const where = cursorWhere ? and(baseWhere, cursorWhere) : baseWhere;
+
+  const rows = await db
+    .select()
+    .from(workflows)
+    .where(where)
+    .orderBy(desc(workflows.createdAt), desc(workflows.id))
+    .limit(limit);
+
+  const last = rows.length > 0 ? rows[rows.length - 1] : null;
+  const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+  return { rows, nextCursor };
+}
+
 export async function createWorkflowRun(
   db: Db,
   input: {

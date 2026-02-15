@@ -331,6 +331,7 @@ export class MemoryAppStore implements AppStore {
       status: "draft",
       version: 1,
       dsl: input.dsl,
+      editorState: null,
       createdByUserId: input.createdByUserId,
       publishedAt: null,
       createdAt: now,
@@ -338,6 +339,40 @@ export class MemoryAppStore implements AppStore {
     };
     this.workflows.set(workflow.id, workflow);
     return workflow;
+  }
+
+  async listWorkflows(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ workflows: WorkflowRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const limit = Math.min(200, Math.max(1, input.limit));
+    const cursorCreatedAt = input.cursor?.createdAt ? new Date(input.cursor.createdAt).getTime() : null;
+    const cursorId = input.cursor?.id ?? null;
+
+    const workflows = [...this.workflows.values()]
+      .filter((wf) => wf.organizationId === input.organizationId)
+      .filter((wf) => {
+        if (!cursorCreatedAt || !cursorId) {
+          return true;
+        }
+        const createdAtMs = new Date(wf.createdAt).getTime();
+        return createdAtMs < cursorCreatedAt || (createdAtMs === cursorCreatedAt && wf.id < cursorId);
+      })
+      .sort((a, b) => {
+        const aMs = new Date(a.createdAt).getTime();
+        const bMs = new Date(b.createdAt).getTime();
+        if (aMs !== bMs) {
+          return bMs - aMs;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, limit);
+
+    const last = workflows.length > 0 ? workflows[workflows.length - 1] : null;
+    const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+    return { workflows, nextCursor };
   }
 
   async getWorkflowById(input: {
@@ -350,6 +385,34 @@ export class MemoryAppStore implements AppStore {
       return null;
     }
     return workflow;
+  }
+
+  async updateWorkflowDraft(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    name?: string | null;
+    dsl?: unknown;
+    editorState?: unknown;
+  }): Promise<WorkflowRecord | null> {
+    const existing = await this.getWorkflowById(input);
+    if (!existing) {
+      return null;
+    }
+    if (existing.status !== "draft") {
+      return null;
+    }
+
+    const updated: WorkflowRecord = {
+      ...existing,
+      ...(typeof input.name === "string" ? { name: input.name } : {}),
+      ...(input.dsl !== undefined ? { dsl: input.dsl } : {}),
+      ...(input.editorState !== undefined ? { editorState: input.editorState } : {}),
+      version: existing.version + 1,
+      updatedAt: nowIso(),
+    };
+    this.workflows.set(updated.id, updated);
+    return updated;
   }
 
   async publishWorkflow(input: {

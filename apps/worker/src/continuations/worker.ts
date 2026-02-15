@@ -10,7 +10,7 @@ import {
   withTenantContext,
 } from "@vespid/db";
 import type { WorkflowExecutionResult, WorkflowExecutionStep } from "@vespid/workflow";
-import { workflowDslSchema } from "@vespid/workflow";
+import { workflowDslAnySchema } from "@vespid/workflow";
 import type { WorkflowRunJobPayload } from "@vespid/shared";
 import { REMOTE_EXEC_ERROR } from "@vespid/shared";
 import type { GatewayDispatchResponse } from "@vespid/shared";
@@ -160,9 +160,15 @@ export async function processContinuationPayload(input: {
     return;
   }
 
-  const dsl = workflowDslSchema.parse(workflow.dsl);
-  const cursorNodeIndex = Math.max(0, run.cursorNodeIndex ?? 0);
-  const node = dsl.nodes[cursorNodeIndex];
+  const dslAny = workflowDslAnySchema.parse(workflow.dsl);
+  const cursorNodeIndex = dslAny.version === "v2" ? Math.max(0, run.cursorNodeIndex ?? 0) : 0;
+  const node =
+    dslAny.version === "v2"
+      ? dslAny.nodes[cursorNodeIndex] ?? null
+      : run.blockedNodeId
+        ? (dslAny.graph.nodes as any)[run.blockedNodeId] ?? null
+        : null;
+
   if (!node) {
     await withTenantContext(input.pool, actor, async (tenantDb) =>
       markWorkflowRunFailed(tenantDb, {

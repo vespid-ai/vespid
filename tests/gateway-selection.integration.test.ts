@@ -91,7 +91,14 @@ async function startEchoAgent(input: {
       return executeCount;
     },
     async close() {
-      ws.close();
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => resolve(), 2000);
+        ws.once("close", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+        ws.close();
+      });
     },
   };
 }

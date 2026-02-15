@@ -35,9 +35,10 @@ vi.mock("@vespid/db", () => ({
 }));
 
 vi.mock("@vespid/workflow", () => ({
-  workflowDslSchema: {
+  workflowDslAnySchema: {
     parse: mocks.parseDsl,
   },
+  validateV3GraphConstraints: vi.fn(() => ({ ok: true })),
 }));
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -164,6 +165,72 @@ describe("workflow worker", () => {
       expect.anything(),
       expect.objectContaining({ eventType: "node_dispatched" })
     );
+  });
+
+  it("executes a v3 condition graph and only runs the selected branch", async () => {
+    const exec: WorkflowNodeExecutor = {
+      nodeType: "http.request",
+      async execute() {
+        return { status: "succeeded", output: { ok: true } };
+      },
+    };
+    const executorRegistry = new Map<string, WorkflowNodeExecutor>([[exec.nodeType, exec]]);
+
+    mocks.getWorkflowRunById.mockResolvedValue({
+      id: "run-1",
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      status: "queued",
+      attemptCount: 0,
+      maxAttempts: 3,
+      cursorNodeIndex: 0,
+      blockedRequestId: null,
+      output: null,
+      input: { flag: true },
+    });
+
+    mocks.getWorkflowById.mockResolvedValue({
+      id: "wf-1",
+      organizationId: "org-1",
+      status: "published",
+      dsl: {
+        version: "v3",
+        trigger: { type: "trigger.manual" },
+        graph: {
+          nodes: {
+            root: { id: "root", type: "http.request" },
+            cond: { id: "cond", type: "condition", config: { path: "flag", op: "eq", value: true } },
+            a: { id: "a", type: "http.request" },
+            b: { id: "b", type: "http.request" },
+          },
+          edges: [
+            { id: "e1", from: "root", to: "cond" },
+            { id: "e2", from: "cond", to: "a", kind: "cond_true" },
+            { id: "e3", from: "cond", to: "b", kind: "cond_false" },
+          ],
+        },
+      },
+    });
+
+    await processWorkflowRunJob(pool, jobBase, { executorRegistry });
+
+    expect(mocks.markWorkflowRunSucceeded).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        output: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ nodeId: "root", status: "succeeded" }),
+            expect.objectContaining({ nodeId: "cond", status: "succeeded" }),
+            expect.objectContaining({ nodeId: "a", status: "succeeded" }),
+          ]),
+        }),
+      })
+    );
+
+    const call = mocks.markWorkflowRunSucceeded.mock.calls[mocks.markWorkflowRunSucceeded.mock.calls.length - 1]?.[1];
+    const steps = call?.output?.steps ?? [];
+    expect(Array.isArray(steps)).toBe(true);
+    expect(steps.some((s: any) => s.nodeId === "b")).toBe(false);
   });
 
   it("requeues when execution fails before final attempt", async () => {

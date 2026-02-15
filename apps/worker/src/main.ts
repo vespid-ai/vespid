@@ -1,4 +1,5 @@
 import { Worker, type Job } from "bullmq";
+import crypto from "node:crypto";
 import {
   createPool,
   appendWorkflowRunEvent,
@@ -24,7 +25,13 @@ import {
   type WorkflowNodeExecutor,
   type WorkflowRunJobPayload,
 } from "@vespid/shared";
-import { workflowDslSchema, type WorkflowExecutionResult, type WorkflowExecutionStep } from "@vespid/workflow";
+import {
+  workflowDslAnySchema,
+  validateV3GraphConstraints,
+  type WorkflowDslV3,
+  type WorkflowExecutionResult,
+  type WorkflowExecutionStep,
+} from "@vespid/workflow";
 import {
   getRedisConnectionOptions,
   getWorkflowContinuationQueueName,
@@ -51,6 +58,10 @@ function envNumber(name: string, fallback: number): number {
     return fallback;
   }
   return value;
+}
+
+function sha256Hex(value: string): string {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 const WORKFLOW_EVENT_PAYLOAD_MAX_CHARS = Math.min(
@@ -410,14 +421,32 @@ export async function processWorkflowRunJob(
   }
 
   try {
-    const dsl = workflowDslSchema.parse(workflow.dsl);
+    const dslAny = workflowDslAnySchema.parse(workflow.dsl);
+    if (dslAny.version === "v3") {
+      const constraints = validateV3GraphConstraints(dslAny as WorkflowDslV3);
+      if (!constraints.ok) {
+        throw new Error(constraints.code);
+      }
+    }
     const nodeExecTimeoutMs = envNumber("NODE_EXEC_TIMEOUT_MS", 60_000);
 
-    for (let index = cursorNodeIndex; index < dsl.nodes.length; index += 1) {
-      const node = dsl.nodes[index];
-      if (!node) {
-        break;
-      }
+    const checkpointCursorIndexForV3 = 0;
+
+    const checkpointProgress = async (nextCursorNodeIndex: number) => {
+      const graphV3 = dslAny.version === "v3" ? { completed: steps.filter((s) => s.status === "succeeded").map((s) => s.nodeId) } : null;
+      runtime = dslAny.version === "v3" ? mergeRuntime(runtime, { graphV3 }) : runtime;
+      await withTenantContext(pool, actor, async (tenantDb) =>
+        updateWorkflowRunProgress(tenantDb, {
+          organizationId: job.data.organizationId,
+          workflowId: job.data.workflowId,
+          runId: job.data.runId,
+          cursorNodeIndex: nextCursorNodeIndex,
+          output: buildProgressOutput(steps, runtime),
+        })
+      );
+    };
+
+    const executeNode = async (node: any, checkpointCursorNodeIndex: number) => {
       await appendEvent({
         eventType: "node_started",
         level: "info",
@@ -451,6 +480,7 @@ export async function processWorkflowRunJob(
         block?: any;
         runtime?: unknown;
       };
+
       try {
         const emitEvent = async (event: {
           eventType: string;
@@ -470,15 +500,7 @@ export async function processWorkflowRunJob(
 
         const checkpointRuntime = async (runtimeOverride: unknown) => {
           runtime = mergeRuntime(runtime, runtimeOverride);
-          await withTenantContext(pool, actor, async (tenantDb) =>
-            updateWorkflowRunProgress(tenantDb, {
-              organizationId: job.data.organizationId,
-              workflowId: job.data.workflowId,
-              runId: job.data.runId,
-              cursorNodeIndex: index,
-              output: buildProgressOutput(steps, runtime),
-            })
-          );
+          await checkpointProgress(checkpointCursorNodeIndex);
         };
 
         nodeResult = await executor.execute({
@@ -524,7 +546,10 @@ export async function processWorkflowRunJob(
             ? nodeResult.block.timeoutMs
             : nodeExecTimeoutMs;
 
-        const dispatchNodeId = typeof nodeResult.block.dispatchNodeId === "string" && nodeResult.block.dispatchNodeId.length > 0 ? nodeResult.block.dispatchNodeId : node.id;
+        const dispatchNodeId =
+          typeof nodeResult.block.dispatchNodeId === "string" && nodeResult.block.dispatchNodeId.length > 0
+            ? nodeResult.block.dispatchNodeId
+            : node.id;
 
         const dispatchInput = {
           organizationId: job.data.organizationId,
@@ -537,9 +562,13 @@ export async function processWorkflowRunJob(
           kind,
           payload: nodeResult.block.payload,
           ...(typeof nodeResult.block.selectorTag === "string" ? { selectorTag: nodeResult.block.selectorTag } : {}),
-          ...(typeof nodeResult.block.selectorAgentId === "string" ? { selectorAgentId: nodeResult.block.selectorAgentId } : {}),
+          ...(typeof nodeResult.block.selectorAgentId === "string"
+            ? { selectorAgentId: nodeResult.block.selectorAgentId }
+            : {}),
           ...(typeof nodeResult.block.selectorGroup === "string" ? { selectorGroup: nodeResult.block.selectorGroup } : {}),
-          ...(typeof nodeResult.block.secret === "string" && nodeResult.block.secret.length > 0 ? { secret: nodeResult.block.secret } : {}),
+          ...(typeof nodeResult.block.secret === "string" && nodeResult.block.secret.length > 0
+            ? { secret: nodeResult.block.secret }
+            : {}),
           timeoutMs,
         } as const;
 
@@ -561,7 +590,7 @@ export async function processWorkflowRunJob(
             organizationId: job.data.organizationId,
             workflowId: job.data.workflowId,
             runId: job.data.runId,
-            cursorNodeIndex: index,
+            cursorNodeIndex: checkpointCursorNodeIndex,
             blockedRequestId: dispatched.requestId,
             blockedNodeId: node.id,
             blockedNodeType: node.type,
@@ -590,7 +619,7 @@ export async function processWorkflowRunJob(
           requestId: dispatched.requestId,
         });
 
-        return;
+        return { blocked: true as const };
       }
 
       if (nodeResult.status === "failed") {
@@ -626,16 +655,195 @@ export async function processWorkflowRunJob(
         output: nodeResult.output,
       });
 
-      cursorNodeIndex = index + 1;
-      await withTenantContext(pool, actor, async (tenantDb) =>
-        updateWorkflowRunProgress(tenantDb, {
-          organizationId: job.data.organizationId,
-          workflowId: job.data.workflowId,
-          runId: job.data.runId,
-          cursorNodeIndex,
-          output: buildProgressOutput(steps, runtime),
-        })
-      );
+      return { blocked: false as const };
+    };
+
+    function getInputValueByPath(input: unknown, rawPath: string): unknown {
+      const path = rawPath.startsWith("$.") ? rawPath.slice(2) : rawPath;
+      const parts = path.split(".").filter((p) => p.length > 0);
+      let current: any = input;
+      for (const part of parts) {
+        if (current === null || current === undefined) {
+          return undefined;
+        }
+        if (typeof current !== "object") {
+          return undefined;
+        }
+        current = (current as any)[part];
+      }
+      return current;
+    }
+
+    if (dslAny.version === "v3") {
+      const dsl = dslAny as WorkflowDslV3;
+      const nodes = dsl.graph.nodes;
+      const edges = dsl.graph.edges;
+
+      const nodeIds = Object.keys(nodes);
+      const incomingByNodeId = new Map<string, Array<{ from: string; kind: "always" | "cond_true" | "cond_false" }>>();
+      for (const edge of edges) {
+        const kind = (edge.kind ?? "always") as "always" | "cond_true" | "cond_false";
+        incomingByNodeId.set(edge.to, [...(incomingByNodeId.get(edge.to) ?? []), { from: edge.from, kind }]);
+      }
+
+      const stepByNodeId = new Map<string, WorkflowExecutionStep>();
+      for (const step of steps) {
+        stepByNodeId.set(step.nodeId, step);
+      }
+
+      const getConditionResult = (nodeId: string): boolean | null => {
+        const step = stepByNodeId.get(nodeId);
+        if (!step || step.status !== "succeeded") {
+          return null;
+        }
+        const out = step.output as any;
+        return out && typeof out === "object" && typeof out.result === "boolean" ? out.result : null;
+      };
+
+      const hasSucceeded = (nodeId: string): boolean => stepByNodeId.get(nodeId)?.status === "succeeded";
+
+      const edgeSatisfied = (edge: { from: string; kind: "always" | "cond_true" | "cond_false" }): boolean => {
+        if (!hasSucceeded(edge.from)) {
+          return false;
+        }
+        if (edge.kind === "always") {
+          return true;
+        }
+        const cond = getConditionResult(edge.from);
+        if (cond === null) {
+          return false;
+        }
+        return edge.kind === "cond_true" ? cond === true : cond === false;
+      };
+
+      const nodeReady = (nodeId: string): boolean => {
+        if (stepByNodeId.has(nodeId)) {
+          return false;
+        }
+        const incoming = incomingByNodeId.get(nodeId) ?? [];
+        for (const edge of incoming) {
+          if (!edgeSatisfied(edge)) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      while (true) {
+        const ready = nodeIds.filter(nodeReady).sort((a, b) => a.localeCompare(b));
+        if (ready.length === 0) {
+          break;
+        }
+        const nodeId = ready[0];
+        if (!nodeId) {
+          break;
+        }
+        const node = nodes[nodeId];
+        if (!node) {
+          break;
+        }
+
+        if (node.type === "condition") {
+          await appendEvent({ eventType: "node_started", level: "info", nodeId: node.id, nodeType: node.type });
+          const cfg = (node as any).config;
+          if (!cfg || typeof cfg !== "object" || typeof cfg.path !== "string" || typeof cfg.op !== "string") {
+            const message = "INVALID_CONDITION_CONFIG";
+            await appendEvent({ eventType: "node_failed", level: "error", nodeId: node.id, nodeType: node.type, message });
+            steps.push({ nodeId: node.id, nodeType: node.type, status: "failed", error: message });
+            throw new Error(message);
+          }
+          const actual = getInputValueByPath(run.input ?? null, cfg.path);
+          let result = false;
+          switch (cfg.op) {
+            case "exists":
+              result = actual !== undefined && actual !== null;
+              break;
+            case "eq":
+              result = actual === cfg.value;
+              break;
+            case "neq":
+              result = actual !== cfg.value;
+              break;
+            case "contains":
+              if (typeof actual === "string" && typeof cfg.value === "string") {
+                result = actual.includes(cfg.value);
+              } else if (Array.isArray(actual)) {
+                result = actual.includes(cfg.value);
+              } else {
+                result = false;
+              }
+              break;
+            case "gt":
+            case "gte":
+            case "lt":
+            case "lte": {
+              const a = typeof actual === "number" ? actual : Number(actual);
+              const b = typeof cfg.value === "number" ? cfg.value : Number(cfg.value);
+              if (!Number.isFinite(a) || !Number.isFinite(b)) {
+                result = false;
+              } else if (cfg.op === "gt") {
+                result = a > b;
+              } else if (cfg.op === "gte") {
+                result = a >= b;
+              } else if (cfg.op === "lt") {
+                result = a < b;
+              } else {
+                result = a <= b;
+              }
+              break;
+            }
+            default:
+              result = false;
+          }
+
+          await appendEvent({
+            eventType: "node_succeeded",
+            level: "info",
+            nodeId: node.id,
+            nodeType: node.type,
+            payload: summarizeForEvent({ result }),
+          });
+          const step: WorkflowExecutionStep = { nodeId: node.id, nodeType: node.type, status: "succeeded", output: { result } };
+          steps.push(step);
+          stepByNodeId.set(node.id, step);
+          await checkpointProgress(checkpointCursorIndexForV3);
+          continue;
+        }
+
+        if (node.type === "parallel.join") {
+          await appendEvent({ eventType: "node_started", level: "info", nodeId: node.id, nodeType: node.type });
+          await appendEvent({ eventType: "node_succeeded", level: "info", nodeId: node.id, nodeType: node.type, payload: summarizeForEvent({ joined: true }) });
+          const step: WorkflowExecutionStep = { nodeId: node.id, nodeType: node.type, status: "succeeded", output: { joined: true } };
+          steps.push(step);
+          stepByNodeId.set(node.id, step);
+          await checkpointProgress(checkpointCursorIndexForV3);
+          continue;
+        }
+
+        const res = await executeNode(node, checkpointCursorIndexForV3);
+        const last = steps[steps.length - 1];
+        if (last) {
+          stepByNodeId.set(last.nodeId, last);
+        }
+        if (res.blocked) {
+          return;
+        }
+        await checkpointProgress(checkpointCursorIndexForV3);
+      }
+    } else {
+      const dsl = dslAny;
+      for (let index = cursorNodeIndex; index < dsl.nodes.length; index += 1) {
+        const node = dsl.nodes[index];
+        if (!node) {
+          break;
+        }
+        const res = await executeNode(node, index);
+        if (res.blocked) {
+          return;
+        }
+        cursorNodeIndex = index + 1;
+        await checkpointProgress(cursorNodeIndex);
+      }
     }
 
     const execution = buildProgressOutput(steps, runtime);
@@ -816,6 +1024,7 @@ export async function startWorkflowWorker(input?: {
     requestId: string;
     attemptCount: number;
   }) {
+    const pollJobId = `poll-${sha256Hex(payload.requestId)}`;
     await continuationQueue.queue.add(
       "continuation",
       {
@@ -827,7 +1036,7 @@ export async function startWorkflowWorker(input?: {
         attemptCount: payload.attemptCount,
       },
       {
-        jobId: payload.requestId,
+        jobId: pollJobId,
         attempts: 500,
         backoff: { type: "fixed", delay: continuationPollMs },
         removeOnComplete: 1000,

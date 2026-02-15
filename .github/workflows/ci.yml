@@ -61,7 +61,7 @@ jobs:
       - name: Generate secrets KEK
         run: |
           set -euo pipefail
-          SECRETS_KEK_BASE64="$(node -e 'process.stdout.write(require(\"crypto\").randomBytes(32).toString(\"base64\"))')"
+          SECRETS_KEK_BASE64="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))')"
           echo "SECRETS_KEK_BASE64=${SECRETS_KEK_BASE64}" >> "$GITHUB_ENV"
 
       - name: Open core boundary gate

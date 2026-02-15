@@ -109,13 +109,17 @@ function parseRedisConnectionOptions(redisUrl: string): ConnectionOptions {
   const password = url.password ? decodeURIComponent(url.password) : null;
   const username = url.username ? decodeURIComponent(url.username) : null;
   const tls = url.protocol === "rediss:";
+  const dbValue = url.pathname && url.pathname !== "/" ? Number(url.pathname.slice(1)) : null;
 
-  const options: ConnectionOptions = { host, port };
+  const options: ConnectionOptions = { host, port, maxRetriesPerRequest: null };
   if (username) {
     (options as any).username = username;
   }
   if (password) {
     (options as any).password = password;
+  }
+  if (dbValue !== null && Number.isFinite(dbValue)) {
+    (options as any).db = dbValue;
   }
   if (tls) {
     (options as any).tls = {};
@@ -208,7 +212,7 @@ export async function buildGatewayServer(input?: {
       : null;
   const metaRedis =
     redisUrl && enableContinuationPush
-      ? new Redis(redisUrl, { maxRetriesPerRequest: 2, enableReadyCheck: true, lazyConnect: false })
+      ? new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false, lazyConnect: false })
       : null;
 
   const agentsByOrg = new Map<string, ConnectedAgent[]>();
@@ -217,6 +221,7 @@ export async function buildGatewayServer(input?: {
   const pendingByRequestId = new Map<string, PendingRequest>();
   const dispatchedByRequestId = new Map<string, string>();
   const asyncTimeoutByRequestId = new Map<string, NodeJS.Timeout>();
+  const metaByRequestId = new Map<string, z.infer<typeof gatewayDispatchMetaSchema>>();
 
   function getInFlight(agentId: string): number {
     return inFlightByAgentId.get(agentId) ?? 0;
@@ -601,18 +606,30 @@ export async function buildGatewayServer(input?: {
       ...(parsed.data.secret ? { secret: parsed.data.secret } : {}),
     };
 
+    const meta = {
+      organizationId: parsed.data.organizationId,
+      workflowId: parsed.data.workflowId,
+      runId: parsed.data.runId,
+      requestId,
+      attemptCount: parsed.data.attemptCount,
+    };
+    metaByRequestId.set(requestId, meta);
+    setTimeout(() => {
+      metaByRequestId.delete(requestId);
+    }, resultsTtlSec * 1000).unref?.();
+
     if (metaRedis && continuationQueue) {
-      const meta = {
-        organizationId: parsed.data.organizationId,
-        workflowId: parsed.data.workflowId,
-        runId: parsed.data.runId,
-        requestId,
-        attemptCount: parsed.data.attemptCount,
-      };
       try {
         await metaRedis.set(metaKey(requestId), JSON.stringify(meta), "EX", resultsTtlSec);
-      } catch {
+      } catch (error) {
         // Best-effort; if meta is missing, worker polling fallback will apply results.
+        server.log.warn({
+          event: "gateway_dispatch_meta_set_failed",
+          orgId: parsed.data.organizationId,
+          agentId: agent.agentId,
+          requestId,
+          reasonCode: error instanceof Error ? error.message : "REDIS_SET_FAILED",
+        });
       }
     }
 
@@ -768,45 +785,82 @@ export async function buildGatewayServer(input?: {
         };
         await resultsStore.set(parsed.data.requestId, result, resultsTtlSec);
 
-        if (metaRedis && continuationQueue) {
+        if (continuationQueue) {
           try {
-            const raw = await metaRedis.get(metaKey(parsed.data.requestId));
-            if (!raw) {
-              server.log.info({
-                event: "gateway_result_meta_missing",
-                orgId: agent.organizationId,
-                agentId: agent.agentId,
-                requestId: parsed.data.requestId,
-              });
-            } else {
-              const parsedMeta = gatewayDispatchMetaSchema.safeParse(JSON.parse(raw) as unknown);
-              if (!parsedMeta.success) {
-                server.log.warn({
-                  event: "gateway_result_meta_invalid",
+            let meta: z.infer<typeof gatewayDispatchMetaSchema> | null = null;
+
+            if (metaRedis) {
+              const raw = await metaRedis.get(metaKey(parsed.data.requestId));
+              if (raw) {
+                const parsedMeta = gatewayDispatchMetaSchema.safeParse(JSON.parse(raw) as unknown);
+                if (parsedMeta.success) {
+                  meta = parsedMeta.data;
+                } else {
+                  server.log.warn({
+                    event: "gateway_result_meta_invalid",
+                    orgId: agent.organizationId,
+                    agentId: agent.agentId,
+                    requestId: parsed.data.requestId,
+                  });
+                }
+              }
+            }
+
+            if (!meta) {
+              meta = metaByRequestId.get(parsed.data.requestId) ?? null;
+              if (meta) {
+                server.log.info({
+                  event: "gateway_result_meta_fallback_memory",
                   orgId: agent.organizationId,
                   agentId: agent.agentId,
                   requestId: parsed.data.requestId,
                 });
               } else {
-                const payload: WorkflowContinuationJobPayload = {
-                  type: "remote.apply",
-                  organizationId: parsedMeta.data.organizationId,
-                  workflowId: parsedMeta.data.workflowId,
-                  runId: parsedMeta.data.runId,
-                  requestId: parsedMeta.data.requestId,
-                  attemptCount: parsedMeta.data.attemptCount,
-                  result,
-                };
-                await continuationQueue.add("continuation", payload, {
-                  jobId: `apply:${parsed.data.requestId}`,
-                  removeOnComplete: 1000,
-                  removeOnFail: 1000,
+                server.log.info({
+                  event: "gateway_result_meta_missing",
+                  orgId: agent.organizationId,
+                  agentId: agent.agentId,
+                  requestId: parsed.data.requestId,
                 });
+              }
+            }
+
+            if (meta) {
+              const payload: WorkflowContinuationJobPayload = {
+                type: "remote.apply",
+                organizationId: meta.organizationId,
+                workflowId: meta.workflowId,
+                runId: meta.runId,
+                requestId: meta.requestId,
+                attemptCount: meta.attemptCount,
+                result,
+              };
+              const requestHash = sha256Hex(parsed.data.requestId);
+              await continuationQueue.add("continuation", payload, {
+                jobId: `apply-${requestHash}`,
+                removeOnComplete: 1000,
+                removeOnFail: 1000,
+              });
+              server.log.info({
+                event: "gateway_continuation_apply_enqueued",
+                orgId: agent.organizationId,
+                agentId: agent.agentId,
+                requestId: parsed.data.requestId,
+              });
+              metaByRequestId.delete(parsed.data.requestId);
+              if (metaRedis) {
                 await metaRedis.del(metaKey(parsed.data.requestId));
               }
             }
-          } catch {
+          } catch (error) {
             // Best-effort; worker polling fallback remains.
+            server.log.warn({
+              event: "gateway_continuation_apply_enqueue_failed",
+              orgId: agent.organizationId,
+              agentId: agent.agentId,
+              requestId: parsed.data.requestId,
+              reasonCode: error instanceof Error ? error.message : "APPLY_ENQUEUE_FAILED",
+            });
           }
         }
 
@@ -861,25 +915,34 @@ export async function buildGatewayServer(input?: {
         agent.lastSeenAtMs = Date.now();
         await touchAgent(agent.organizationId, agent.agentId);
 
-        if (!metaRedis || !continuationQueue) {
+        if (!continuationQueue) {
           return;
         }
 
         try {
-          const raw = await metaRedis.get(metaKey(parsed.data.requestId));
-          if (!raw) {
+          let meta: z.infer<typeof gatewayDispatchMetaSchema> | null = null;
+          if (metaRedis) {
+            const raw = await metaRedis.get(metaKey(parsed.data.requestId));
+            if (raw) {
+              const parsedMeta = gatewayDispatchMetaSchema.safeParse(JSON.parse(raw) as unknown);
+              if (parsedMeta.success) {
+                meta = parsedMeta.data;
+              } else {
+                server.log.warn({
+                  event: "gateway_event_meta_invalid",
+                  orgId: agent.organizationId,
+                  agentId: agent.agentId,
+                  requestId: parsed.data.requestId,
+                });
+              }
+            }
+          }
+          if (!meta) {
+            meta = metaByRequestId.get(parsed.data.requestId) ?? null;
+          }
+          if (!meta) {
             server.log.info({
               event: "gateway_event_meta_missing",
-              orgId: agent.organizationId,
-              agentId: agent.agentId,
-              requestId: parsed.data.requestId,
-            });
-            return;
-          }
-          const parsedMeta = gatewayDispatchMetaSchema.safeParse(JSON.parse(raw) as unknown);
-          if (!parsedMeta.success) {
-            server.log.warn({
-              event: "gateway_event_meta_invalid",
               orgId: agent.organizationId,
               agentId: agent.agentId,
               requestId: parsed.data.requestId,
@@ -889,21 +952,35 @@ export async function buildGatewayServer(input?: {
 
           const payload: WorkflowContinuationJobPayload = {
             type: "remote.event",
-            organizationId: parsedMeta.data.organizationId,
-            workflowId: parsedMeta.data.workflowId,
-            runId: parsedMeta.data.runId,
-            requestId: parsedMeta.data.requestId,
-            attemptCount: parsedMeta.data.attemptCount,
+            organizationId: meta.organizationId,
+            workflowId: meta.workflowId,
+            runId: meta.runId,
+            requestId: meta.requestId,
+            attemptCount: meta.attemptCount,
             event: parsed.data.event,
           };
 
+          const requestHash = sha256Hex(parsed.data.requestId);
           await continuationQueue.add("continuation", payload, {
-            jobId: `event:${parsed.data.requestId}:${parsed.data.event.seq}`,
+            jobId: `event-${requestHash}-${parsed.data.event.seq}`,
             removeOnComplete: 1000,
             removeOnFail: 1000,
           });
+          server.log.info({
+            event: "gateway_continuation_event_enqueued",
+            orgId: agent.organizationId,
+            agentId: agent.agentId,
+            requestId: parsed.data.requestId,
+            seq: parsed.data.event.seq,
+          });
         } catch {
           // Best-effort: streaming is optional.
+          server.log.warn({
+            event: "gateway_continuation_event_enqueue_failed",
+            orgId: agent.organizationId,
+            agentId: agent.agentId,
+            requestId: parsed.data.requestId,
+          });
         }
 
         return;

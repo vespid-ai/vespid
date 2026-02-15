@@ -92,6 +92,8 @@ export const workflows = pgTable("workflows", {
   status: text("status").notNull().default("draft"),
   version: integer("version").notNull().default(1),
   dsl: jsonb("dsl").notNull(),
+  // UI-only metadata (node positions, viewport, etc). Never used for execution.
+  editorState: jsonb("editor_state"),
   createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

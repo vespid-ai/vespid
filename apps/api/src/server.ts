@@ -24,7 +24,7 @@ import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from
 import { createStore } from "./store/index.js";
 import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
-import { workflowDslSchema } from "@vespid/workflow";
+import { workflowDslAnySchema, validateV3GraphConstraints } from "@vespid/workflow";
 import {
   createBullMqWorkflowRunQueueProducer,
   createInMemoryWorkflowRunQueueProducer,
@@ -106,8 +106,16 @@ const roleMutationSchema = z.object({
 
 const createWorkflowSchema = z.object({
   name: z.string().min(2).max(120),
-  dsl: workflowDslSchema,
+  dsl: workflowDslAnySchema,
 });
+
+const updateWorkflowDraftSchema = z
+  .object({
+    name: z.string().min(2).max(120).optional(),
+    dsl: workflowDslAnySchema.optional(),
+    editorState: z.unknown().optional(),
+  })
+  .strict();
 
 const createWorkflowRunSchema = z.object({
   input: z.unknown().optional(),
@@ -151,6 +159,11 @@ const agentPairSchema = z.object({
 });
 
 const listWorkflowRunsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().min(1).optional(),
+});
+
+const listWorkflowsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   cursor: z.string().min(1).optional(),
 });
@@ -1509,6 +1522,13 @@ export async function buildServer(input?: {
       throw badRequest("Invalid workflow payload", parsed.error.flatten());
     }
 
+    if (parsed.data.dsl.version === "v3") {
+      const constraints = validateV3GraphConstraints(parsed.data.dsl);
+      if (!constraints.ok) {
+        throw new AppError(400, { code: constraints.code, message: constraints.message });
+      }
+    }
+
     const workflow = await store.createWorkflow({
       organizationId: orgContext.organizationId,
       name: parsed.data.name,
@@ -1517,6 +1537,37 @@ export async function buildServer(input?: {
     });
 
     return reply.status(201).send({ workflow });
+  });
+
+  server.get("/v1/orgs/:orgId/workflows", async (request) => {
+    const auth = requireAuth(request);
+    const orgId = (request.params as { orgId?: string }).orgId;
+    if (!orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const queryParsed = listWorkflowsQuerySchema.safeParse(request.query ?? {});
+    if (!queryParsed.success) {
+      throw badRequest("Invalid query", queryParsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
+
+    const decodedCursor = queryParsed.data.cursor ? decodeCursor(queryParsed.data.cursor) : null;
+    const cursor =
+      decodedCursor && typeof decodedCursor === "object" && "createdAt" in decodedCursor && "id" in decodedCursor
+        ? (decodedCursor as { createdAt: string; id: string })
+        : null;
+
+    const result = await store.listWorkflows({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      limit: queryParsed.data.limit ?? 50,
+      cursor,
+    });
+
+    const nextCursor = result.nextCursor ? encodeCursor(result.nextCursor) : null;
+    return { workflows: result.workflows, nextCursor };
   });
 
   server.get("/v1/orgs/:orgId/workflows/:workflowId", async (request) => {
@@ -1538,6 +1589,57 @@ export async function buildServer(input?: {
     }
 
     return { workflow };
+  });
+
+  server.put("/v1/orgs/:orgId/workflows/:workflowId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to update workflows");
+    }
+
+    const parsed = updateWorkflowDraftSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid workflow payload", parsed.error.flatten());
+    }
+
+    const existing = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!existing) {
+      throw notFound("Workflow not found");
+    }
+    if (existing.status !== "draft") {
+      throw conflict("Published workflows cannot be edited");
+    }
+
+    if (parsed.data.dsl && parsed.data.dsl.version === "v3") {
+      const constraints = validateV3GraphConstraints(parsed.data.dsl);
+      if (!constraints.ok) {
+        throw new AppError(400, { code: constraints.code, message: constraints.message });
+      }
+    }
+
+    const updated = await store.updateWorkflowDraft({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+      ...(parsed.data.dsl !== undefined ? { dsl: parsed.data.dsl } : {}),
+      ...(parsed.data.editorState !== undefined ? { editorState: parsed.data.editorState } : {}),
+    });
+    if (!updated) {
+      throw conflict("Workflow draft update failed");
+    }
+
+    return { workflow: updated };
   });
 
   server.post("/v1/orgs/:orgId/workflows/:workflowId/publish", async (request) => {

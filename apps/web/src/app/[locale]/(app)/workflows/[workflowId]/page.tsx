@@ -250,7 +250,12 @@ export default function WorkflowDetailPage() {
               <CardDescription>{t("workflows.detail.editorStubHint")}</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-sm text-muted">{t("workflows.detail.notImplemented")}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-sm text-muted">Graph editor (v3) is available.</div>
+                <Button asChild size="sm" variant="accent">
+                  <Link href={`/${locale}/workflows/${workflowId}/graph`}>Open Graph Editor</Link>
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

@@ -869,6 +869,116 @@ describe("api hardening foundation", () => {
     expect((outsiderDenied.json() as { code: string }).code).toBe("ORG_ACCESS_DENIED");
   });
 
+  it("lists workflows and updates drafts (v2/v3) but rejects published edits", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `wf-edit-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "WF Edit Org",
+        slug: `wf-edit-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const createRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        name: "Draft A",
+        dsl: { version: "v2", trigger: { type: "trigger.manual" }, nodes: [{ id: "n1", type: "agent.execute" }] },
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const workflowId = (createRes.json() as { workflow: { id: string } }).workflow.id;
+
+    const listRes = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows?limit=50`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(listRes.statusCode).toBe(200);
+    const listBody = listRes.json() as { workflows: Array<{ id: string }>; nextCursor: string | null };
+    expect(listBody.workflows.some((wf) => wf.id === workflowId)).toBe(true);
+
+    const updateRes = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        name: "Draft A (Renamed)",
+        dsl: {
+          version: "v3",
+          trigger: { type: "trigger.manual" },
+          graph: { nodes: { n1: { id: "n1", type: "agent.execute" } }, edges: [] },
+        },
+        editorState: { nodes: [{ id: "n1", position: { x: 12, y: 34 } }], viewport: { x: 0, y: 0, zoom: 1 } },
+      },
+    });
+    expect(updateRes.statusCode).toBe(200);
+    const updated = (updateRes.json() as { workflow: { name: string; dsl: any; editorState: any } }).workflow;
+    expect(updated.name).toBe("Draft A (Renamed)");
+    expect(updated.dsl.version).toBe("v3");
+    expect(updated.editorState?.nodes?.[0]?.id).toBe("n1");
+
+    const publishRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(publishRes.statusCode).toBe(200);
+
+    const editPublished = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { name: "should fail" },
+    });
+    expect(editPublished.statusCode).toBe(409);
+
+    const invalidParallelRemote = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        name: "Invalid v3",
+        dsl: {
+          version: "v3",
+          trigger: { type: "trigger.manual" },
+          graph: {
+            nodes: {
+              root: { id: "root", type: "http.request" },
+              a: { id: "a", type: "agent.execute", config: { execution: { mode: "node" } } },
+              b: { id: "b", type: "http.request" },
+              join: { id: "join", type: "parallel.join", config: { mode: "all", failFast: true } },
+            },
+            edges: [
+              { id: "e1", from: "root", to: "a" },
+              { id: "e2", from: "root", to: "b" },
+              { id: "e3", from: "a", to: "join" },
+              { id: "e4", from: "b", to: "join" },
+            ],
+          },
+        },
+      },
+    });
+    expect(invalidParallelRemote.statusCode).toBe(400);
+    expect((invalidParallelRemote.json() as { code: string }).code).toBe("PARALLEL_REMOTE_NOT_SUPPORTED");
+  });
+
   it("completes invitation accept flow and enforces email match", async () => {
     const ownerSignup = await server.inject({
       method: "POST",

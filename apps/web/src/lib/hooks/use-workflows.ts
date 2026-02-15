@@ -8,6 +8,7 @@ export type Workflow = {
   createdAt?: string;
   updatedAt?: string;
   dsl?: unknown;
+  editorState?: unknown;
 };
 
 export type WorkflowRun = {
@@ -99,6 +100,24 @@ export function useCreateWorkflow(orgId: string | null) {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["runs", orgId] });
+    },
+  });
+}
+
+export function useUpdateWorkflowDraft(orgId: string | null, workflowId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { name?: string; dsl?: unknown; editorState?: unknown }) => {
+      return apiFetchJson<{ workflow: Workflow }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}`,
+        { method: "PUT", body: JSON.stringify(input) },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["workflow", orgId, workflowId] });
+      await queryClient.invalidateQueries({ queryKey: ["workflows", orgId] });
     },
   });
 }
