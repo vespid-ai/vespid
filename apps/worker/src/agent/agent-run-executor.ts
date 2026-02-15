@@ -254,29 +254,27 @@ export function createAgentRunExecutor(input: {
         const timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, node.config.limits.timeoutMs));
 
         let toolsetPayload: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null = null;
-        if (engineId === "claude.agent-sdk.v1") {
-          const effectiveToolsetId = node.config.toolsetId ?? parseDefaultToolsetId(context.organizationSettings);
-          if (effectiveToolsetId) {
-            if (!input.loadToolsetById) {
-              return { status: "failed", error: "TOOLSET_LOADER_NOT_CONFIGURED" };
-            }
-            const loaded = await input.loadToolsetById({ organizationId: context.organizationId, toolsetId: effectiveToolsetId });
-            if (!loaded) {
-              return { status: "failed", error: "TOOLSET_NOT_FOUND" };
-            }
-            toolsetPayload = {
-              id: loaded.id,
-              name: loaded.name,
-              mcpServers: loaded.mcpServers ?? [],
-              agentSkills: loaded.agentSkills ?? [],
-            };
-            if (context.emitEvent) {
-              await context.emitEvent({
-                eventType: "agent_toolset_applied",
-                level: "info",
-                payload: { toolsetId: loaded.id, toolsetName: loaded.name },
-              });
-            }
+        const effectiveToolsetId = node.config.toolsetId ?? parseDefaultToolsetId(context.organizationSettings);
+        if (effectiveToolsetId) {
+          if (!input.loadToolsetById) {
+            return { status: "failed", error: "TOOLSET_LOADER_NOT_CONFIGURED" };
+          }
+          const loaded = await input.loadToolsetById({ organizationId: context.organizationId, toolsetId: effectiveToolsetId });
+          if (!loaded) {
+            return { status: "failed", error: "TOOLSET_NOT_FOUND" };
+          }
+          toolsetPayload = {
+            id: loaded.id,
+            name: loaded.name,
+            mcpServers: loaded.mcpServers ?? [],
+            agentSkills: loaded.agentSkills ?? [],
+          };
+          if (context.emitEvent) {
+            await context.emitEvent({
+              eventType: "agent_toolset_applied",
+              level: "info",
+              payload: { toolsetId: loaded.id, toolsetName: loaded.name, engineId },
+            });
           }
         }
 
