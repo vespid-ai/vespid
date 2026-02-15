@@ -19,7 +19,13 @@ import {
   type Node,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { upgradeV2ToV3, type WorkflowDsl as WorkflowDslV2, type WorkflowDslV3 } from "@vespid/workflow";
+import {
+  upgradeV2ToV3,
+  validateV3GraphConstraints,
+  workflowDslV3Schema,
+  type WorkflowDsl as WorkflowDslV2,
+  type WorkflowDslV3,
+} from "@vespid/workflow";
 import { Button } from "../../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../../components/ui/card";
 import { CodeBlock } from "../../../../../../components/ui/code-block";
@@ -49,6 +55,20 @@ type GraphValidationIssue = {
   nodeId?: string;
   edgeId?: string;
 };
+
+function normalizeIssues(maybeIssues: unknown): GraphValidationIssue[] {
+  if (!Array.isArray(maybeIssues)) {
+    return [];
+  }
+  return maybeIssues
+    .filter((it) => it && typeof it === "object" && !Array.isArray(it))
+    .map((it: any) => ({
+      code: typeof it.code === "string" ? it.code : "VALIDATION_ERROR",
+      message: typeof it.message === "string" ? it.message : "Validation error",
+      nodeId: typeof it.nodeId === "string" ? it.nodeId : undefined,
+      edgeId: typeof it.edgeId === "string" ? it.edgeId : undefined,
+    }));
+}
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -135,13 +155,22 @@ export default function WorkflowGraphEditorPage() {
   const workflowQuery = useWorkflow(orgId, workflowId);
   const updateDraft = useUpdateWorkflowDraft(orgId, workflowId);
 
-  const [instance, setInstance] = useState<ReactFlowInstance | null>(null);
+  const [instance, setInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [configJson, setConfigJson] = useState<string>("{}");
   const [edgeKind, setEdgeKind] = useState<EdgeKind>("always");
   const [nameDraft, setNameDraft] = useState<string>("");
   const [issues, setIssues] = useState<GraphValidationIssue[]>([]);
+
+  const issueNodeIds = useMemo(
+    () => new Set(issues.map((i) => i.nodeId).filter((v): v is string => typeof v === "string" && v.length > 0)),
+    [issues]
+  );
+  const issueEdgeIds = useMemo(
+    () => new Set(issues.map((i) => i.edgeId).filter((v): v is string => typeof v === "string" && v.length > 0)),
+    [issues]
+  );
 
   const loaded = workflowQuery.data?.workflow ?? null;
   const dslAny = loaded?.dsl as any;
@@ -166,6 +195,40 @@ export default function WorkflowGraphEditorPage() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  const decoratedNodes = useMemo<Node[]>(() => {
+    return nodes.map((n) => {
+      const hasIssue = issueNodeIds.has(n.id);
+      const selected = selectedNodeId === n.id;
+      const style = { ...(n.style ?? {}) } as any;
+      if (hasIssue) {
+        style.border = "2px solid rgba(239, 68, 68, 0.95)";
+        style.boxShadow = "0 0 0 3px rgba(239, 68, 68, 0.14)";
+      }
+      if (selected) {
+        style.border = "2px solid rgba(59, 130, 246, 0.95)";
+        style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.18)";
+      }
+      return { ...n, style } as Node;
+    });
+  }, [nodes, issueNodeIds, selectedNodeId]);
+
+  const decoratedEdges = useMemo<Edge[]>(() => {
+    return edges.map((e) => {
+      const hasIssue = issueEdgeIds.has(e.id);
+      const selected = selectedEdgeId === e.id;
+      const style = { ...(e.style ?? {}) } as any;
+      if (hasIssue) {
+        style.stroke = "rgba(239, 68, 68, 0.95)";
+        style.strokeWidth = 3;
+      }
+      if (selected) {
+        style.stroke = "rgba(59, 130, 246, 0.95)";
+        style.strokeWidth = 3;
+      }
+      return { ...e, style } as Edge;
+    });
+  }, [edges, issueEdgeIds, selectedEdgeId]);
 
   useEffect(() => {
     if (!loaded) {
@@ -274,24 +337,26 @@ export default function WorkflowGraphEditorPage() {
     toast.success("Edge updated");
   }
 
-  async function saveWorkflow() {
-    if (!orgId) {
-      toast.error("Organization is required");
+  function focusIssue(issue: GraphValidationIssue | null) {
+    if (!issue) {
       return;
     }
-    if (!workflowId) {
-      toast.error("Workflow is required");
+    if (issue.nodeId) {
+      setSelectedNodeId(issue.nodeId);
+      setSelectedEdgeId("");
+      const hit = nodes.find((n) => n.id === issue.nodeId);
+      if (hit && instance) {
+        instance.setCenter(hit.position.x, hit.position.y, { zoom: 1.2, duration: 250 });
+      }
       return;
     }
-    if (!loaded) {
-      toast.error("Workflow is not loaded");
-      return;
+    if (issue.edgeId) {
+      setSelectedEdgeId(issue.edgeId);
+      setSelectedNodeId("");
     }
-    if (loaded.status !== "draft") {
-      toast.error("Only drafts can be edited");
-      return;
-    }
+  }
 
+  function buildDraftDsl() {
     const nodesRecord: Record<string, unknown> = {};
     for (const n of nodes as any[]) {
       const node = n?.data?.node as WorkflowNodeAny | undefined;
@@ -318,6 +383,68 @@ export default function WorkflowGraphEditorPage() {
       ...(instance ? { viewport: instance.getViewport() } : {}),
     };
 
+    return { dsl, edgesList, editorState };
+  }
+
+  function validateClient(input: { dsl: WorkflowDslV3; edgesList: Array<{ id: string }> }): GraphValidationIssue[] {
+    const parsed = workflowDslV3Schema.safeParse(input.dsl);
+    if (!parsed.success) {
+      return parsed.error.issues.map((issue) => {
+        const path = issue.path.join(".");
+        let nodeId: string | undefined;
+        let edgeId: string | undefined;
+
+        if (issue.path.length >= 3 && issue.path[0] === "graph" && issue.path[1] === "nodes" && typeof issue.path[2] === "string") {
+          nodeId = issue.path[2];
+        }
+        if (issue.path.length >= 3 && issue.path[0] === "graph" && issue.path[1] === "edges" && typeof issue.path[2] === "number") {
+          edgeId = input.edgesList[issue.path[2]]?.id;
+        }
+
+        return {
+          code: "INVALID_DSL",
+          message: `${issue.message}${path ? ` (${path})` : ""}`,
+          ...(nodeId ? { nodeId } : {}),
+          ...(edgeId ? { edgeId } : {}),
+        };
+      });
+    }
+
+    const constraints = validateV3GraphConstraints(parsed.data);
+    if (constraints.ok) {
+      return [];
+    }
+    const payload = (constraints as any).issues ?? [{ code: constraints.code, message: constraints.message }];
+    return normalizeIssues(payload);
+  }
+
+  async function saveWorkflow() {
+    if (!orgId) {
+      toast.error("Organization is required");
+      return;
+    }
+    if (!workflowId) {
+      toast.error("Workflow is required");
+      return;
+    }
+    if (!loaded) {
+      toast.error("Workflow is not loaded");
+      return;
+    }
+    if (loaded.status !== "draft") {
+      toast.error("Only drafts can be edited");
+      return;
+    }
+
+    const { dsl, edgesList, editorState } = buildDraftDsl();
+    const localIssues = validateClient({ dsl, edgesList });
+    if (localIssues.length) {
+      setIssues(localIssues);
+      toast.error("Fix validation errors before saving.");
+      focusIssue(localIssues[0] ?? null);
+      return;
+    }
+
     try {
       setIssues([]);
       await updateDraft.mutateAsync({
@@ -329,37 +456,14 @@ export default function WorkflowGraphEditorPage() {
     } catch (err: any) {
       const code = err?.payload?.code;
       const maybeIssues = err?.payload?.details?.issues;
-      if (Array.isArray(maybeIssues)) {
-        const parsed = maybeIssues
-          .filter((it: any) => it && typeof it === "object")
-          .map((it: any) => ({
-            code: typeof it.code === "string" ? it.code : String(code ?? "VALIDATION_ERROR"),
-            message: typeof it.message === "string" ? it.message : "Validation error",
-            nodeId: typeof it.nodeId === "string" ? it.nodeId : undefined,
-            edgeId: typeof it.edgeId === "string" ? it.edgeId : undefined,
-          }));
-        setIssues(parsed);
+      const serverIssues = normalizeIssues(maybeIssues);
+      if (serverIssues.length) {
+        setIssues(serverIssues);
       }
 
       if (typeof code === "string") {
         toast.error(`${code}: ${err?.payload?.message ?? "Validation error"}`);
-        const first = (maybeIssues && Array.isArray(maybeIssues) ? maybeIssues[0] : null) as any;
-        const focusNodeId = typeof first?.nodeId === "string" ? first.nodeId : null;
-        const focusEdgeId = typeof first?.edgeId === "string" ? first.edgeId : null;
-        if (focusNodeId) {
-          setSelectedNodeId(focusNodeId);
-          setSelectedEdgeId("");
-          const hit = nodes.find((n) => n.id === focusNodeId);
-          if (hit && instance) {
-            instance.setCenter(hit.position.x, hit.position.y, { zoom: 1.2, duration: 250 });
-          }
-          return;
-        }
-        if (focusEdgeId) {
-          setSelectedEdgeId(focusEdgeId);
-          setSelectedNodeId("");
-          return;
-        }
+        focusIssue(serverIssues[0] ?? null);
         return;
       }
 
@@ -377,6 +481,23 @@ export default function WorkflowGraphEditorPage() {
         <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link href={`/${locale}/workflows/${workflowId}`}>Back</Link>
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              const { dsl, edgesList } = buildDraftDsl();
+              const localIssues = validateClient({ dsl, edgesList });
+              setIssues(localIssues);
+              if (localIssues.length) {
+                toast.error(`Validation failed (${localIssues.length})`);
+                focusIssue(localIssues[0] ?? null);
+                return;
+              }
+              toast.success("No validation issues found");
+            }}
+            disabled={workflowQuery.isLoading}
+          >
+            Validate
           </Button>
           <Button variant="accent" onClick={saveWorkflow} disabled={updateDraft.isPending || workflowQuery.isLoading}>
             {updateDraft.isPending ? "Saving..." : "Save"}
@@ -407,8 +528,8 @@ export default function WorkflowGraphEditorPage() {
             </CardHeader>
             <CardContent className="h-[560px]">
               <ReactFlow
-                nodes={nodes}
-                edges={edges}
+                nodes={decoratedNodes}
+                edges={decoratedEdges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
