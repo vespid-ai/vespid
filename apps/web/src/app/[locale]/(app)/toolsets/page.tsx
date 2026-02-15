@@ -61,7 +61,7 @@ function kvToLines(value: Record<string, string> | undefined): string {
 function validatePlaceholderRecord(record: Record<string, string>) {
   for (const [k, v] of Object.entries(record)) {
     if (!ENV_PLACEHOLDER_RE.test(v)) {
-      return `Invalid placeholder for ${k}`;
+      return k;
     }
   }
   return null;
@@ -121,6 +121,7 @@ function ToolsetEditorDialog(props: {
 
   const [skillEditorOpen, setSkillEditorOpen] = useState(false);
   const [skillEditIndex, setSkillEditIndex] = useState<number | null>(null);
+  const [skillActivePath, setSkillActivePath] = useState("SKILL.md");
   const [skillDraft, setSkillDraft] = useState<AgentSkillBundle>({
     format: "agentskills-v1",
     id: "",
@@ -136,7 +137,7 @@ function ToolsetEditorDialog(props: {
 
   async function save() {
     if (draft.name.trim().length === 0) {
-      toast.error("Name is required.");
+      toast.error(t("toolsets.validation.nameRequired"));
       return;
     }
     await props.onSave({
@@ -182,27 +183,27 @@ function ToolsetEditorDialog(props: {
   function saveMcpEditor() {
     const env = parseKvLines(mcpEnvLines);
     const headers = parseKvLines(mcpHeaderLines);
-    const envErr = validatePlaceholderRecord(env);
-    if (envErr) {
-      toast.error(`${envErr}. ${t("toolsets.placeholderEnv")}`);
+    const envErrKey = validatePlaceholderRecord(env);
+    if (envErrKey) {
+      toast.error(`${t("toolsets.validation.invalidPlaceholderFor", { key: envErrKey })} ${t("toolsets.placeholderEnv")}`);
       return;
     }
-    const headerErr = validatePlaceholderRecord(headers);
-    if (headerErr) {
-      toast.error(`${headerErr}. ${t("toolsets.placeholderEnv")}`);
+    const headerErrKey = validatePlaceholderRecord(headers);
+    if (headerErrKey) {
+      toast.error(`${t("toolsets.validation.invalidPlaceholderFor", { key: headerErrKey })} ${t("toolsets.placeholderEnv")}`);
       return;
     }
 
     if (mcpDraft.name.trim().length === 0) {
-      toast.error("MCP name is required.");
+      toast.error(t("toolsets.validation.mcpNameRequired"));
       return;
     }
     if (mcpDraft.transport === "stdio" && (!mcpDraft.command || mcpDraft.command.trim().length === 0)) {
-      toast.error("command is required for stdio transport.");
+      toast.error(t("toolsets.validation.mcpCommandRequired"));
       return;
     }
     if (mcpDraft.transport === "http" && (!mcpDraft.url || mcpDraft.url.trim().length === 0)) {
-      toast.error("url is required for http transport.");
+      toast.error(t("toolsets.validation.mcpUrlRequired"));
       return;
     }
 
@@ -228,6 +229,7 @@ function ToolsetEditorDialog(props: {
 
   function openSkillEditor(index: number | null) {
     setSkillEditIndex(index);
+    setSkillActivePath("SKILL.md");
     const base =
       index === null
         ? ({
@@ -257,12 +259,12 @@ function ToolsetEditorDialog(props: {
 
   function saveSkillEditor() {
     if (skillDraft.id.trim().length === 0 || skillDraft.name.trim().length === 0) {
-      toast.error("Skill id and name are required.");
+      toast.error(t("toolsets.validation.skillIdNameRequired"));
       return;
     }
     const hasSkillMd = (skillDraft.files ?? []).some((f) => f.path === "SKILL.md");
     if (!hasSkillMd) {
-      toast.error("SKILL.md is required.");
+      toast.error(t("toolsets.validation.skillMdRequired"));
       return;
     }
     const next: AgentSkillBundle = {
@@ -309,8 +311,8 @@ function ToolsetEditorDialog(props: {
                 value={draft.visibility}
                 onChange={(e) => setDraft((p) => ({ ...p, visibility: e.target.value as any }))}
               >
-                <option value="private">private</option>
-                <option value="org">org</option>
+                <option value="private">{t("toolsets.visibilityOptions.private")}</option>
+                <option value="org">{t("toolsets.visibilityOptions.org")}</option>
               </select>
             </div>
           </div>
@@ -331,7 +333,7 @@ function ToolsetEditorDialog(props: {
               </div>
             </div>
             {draft.mcpServers.length === 0 ? (
-              <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">No MCP servers.</div>
+              <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">{t("toolsets.noMcpServers")}</div>
             ) : (
               <div className="grid gap-2">
                 {draft.mcpServers.map((s, idx) => (
@@ -374,7 +376,7 @@ function ToolsetEditorDialog(props: {
               </div>
             </div>
             {draft.agentSkills.length === 0 ? (
-              <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">No skills.</div>
+              <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">{t("toolsets.noSkills")}</div>
             ) : (
               <div className="grid gap-2">
                 {draft.agentSkills.map((s, idx) => (
@@ -414,16 +416,16 @@ function ToolsetEditorDialog(props: {
         <Dialog open={mcpEditorOpen} onOpenChange={setMcpEditorOpen}>
           <DialogContent className="max-w-xl">
             <DialogHeader>
-              <DialogTitle>MCP server</DialogTitle>
+              <DialogTitle>{t("toolsets.mcpDialog.title")}</DialogTitle>
               <DialogDescription>{t("toolsets.placeholderEnv")}</DialogDescription>
             </DialogHeader>
             <div className="mt-3 grid gap-3">
               <div className="grid gap-1.5">
-                <Label>Name</Label>
+                <Label>{t("toolsets.mcpDialog.nameLabel")}</Label>
                 <Input value={mcpDraft.name} onChange={(e) => setMcpDraft((p) => ({ ...p, name: e.target.value }))} />
               </div>
               <div className="grid gap-1.5">
-                <Label>Transport</Label>
+                <Label>{t("toolsets.mcpDialog.transportLabel")}</Label>
                 <select
                   className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
                   value={mcpDraft.transport}
@@ -436,11 +438,11 @@ function ToolsetEditorDialog(props: {
               {mcpDraft.transport === "stdio" ? (
                 <>
                   <div className="grid gap-1.5">
-                    <Label>command</Label>
+                    <Label>{t("toolsets.mcpDialog.commandLabel")}</Label>
                     <Input value={mcpDraft.command ?? ""} onChange={(e) => setMcpDraft((p) => ({ ...p, command: e.target.value }))} />
                   </div>
                   <div className="grid gap-1.5">
-                    <Label>args (comma-separated)</Label>
+                    <Label>{t("toolsets.mcpDialog.argsLabel")}</Label>
                     <Input
                       value={(mcpDraft.args ?? []).join(",")}
                       onChange={(e) => setMcpDraft((p) => ({ ...p, args: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) }))}
@@ -449,16 +451,16 @@ function ToolsetEditorDialog(props: {
                 </>
               ) : (
                 <div className="grid gap-1.5">
-                  <Label>url</Label>
+                  <Label>{t("toolsets.mcpDialog.urlLabel")}</Label>
                   <Input value={mcpDraft.url ?? ""} onChange={(e) => setMcpDraft((p) => ({ ...p, url: e.target.value }))} />
                 </div>
               )}
               <div className="grid gap-1.5">
-                <Label>env (one per line: KEY=${"{ENV:VAR}"})</Label>
+                <Label>{t("toolsets.mcpDialog.envLabel")}</Label>
                 <Textarea value={mcpEnvLines} onChange={(e) => setMcpEnvLines(e.target.value)} className="min-h-[110px]" />
               </div>
               <div className="grid gap-1.5">
-                <Label>headers (one per line: KEY=${"{ENV:VAR}"})</Label>
+                <Label>{t("toolsets.mcpDialog.headersLabel")}</Label>
                 <Textarea value={mcpHeaderLines} onChange={(e) => setMcpHeaderLines(e.target.value)} className="min-h-[110px]" />
               </div>
               <div className="flex justify-end gap-2">
@@ -476,38 +478,147 @@ function ToolsetEditorDialog(props: {
         <Dialog open={skillEditorOpen} onOpenChange={setSkillEditorOpen}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Agent Skill bundle</DialogTitle>
-              <DialogDescription>Bundle format: agentskills-v1</DialogDescription>
+              <DialogTitle>{t("toolsets.skillDialog.title")}</DialogTitle>
+              <DialogDescription>{t("toolsets.skillDialog.subtitle")}</DialogDescription>
             </DialogHeader>
-            <div className="mt-3 grid gap-3">
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label>id</Label>
-                  <Input value={skillDraft.id} onChange={(e) => setSkillDraft((p) => ({ ...p, id: e.target.value }))} />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>name</Label>
-                  <Input value={skillDraft.name} onChange={(e) => setSkillDraft((p) => ({ ...p, name: e.target.value }))} />
-                </div>
-              </div>
-              <div className="grid gap-1.5">
-                <Label>SKILL.md</Label>
-                <Textarea
-                  value={(skillDraft.files.find((f) => f.path === "SKILL.md")?.content ?? "") as string}
-                  onChange={(e) =>
-                    setSkillDraft((p) => ({
-                      ...p,
-                      files: p.files.map((f) => (f.path === "SKILL.md" ? { ...f, content: e.target.value } : f)),
-                    }))
-                  }
-                  className="min-h-[220px] font-mono text-xs"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setSkillEditorOpen(false)}>
-                  {t("common.cancel")}
-                </Button>
-                <Button variant="accent" onClick={saveSkillEditor}>
+	            <div className="mt-3 grid gap-3">
+	              <div className="grid gap-3 md:grid-cols-2">
+	                <div className="grid gap-1.5">
+	                  <Label>{t("toolsets.skillDialog.idLabel")}</Label>
+	                  <Input value={skillDraft.id} onChange={(e) => setSkillDraft((p) => ({ ...p, id: e.target.value }))} />
+	                </div>
+	                <div className="grid gap-1.5">
+	                  <Label>{t("toolsets.skillDialog.nameLabel")}</Label>
+	                  <Input value={skillDraft.name} onChange={(e) => setSkillDraft((p) => ({ ...p, name: e.target.value }))} />
+	                </div>
+	              </div>
+	              <div className="grid gap-1.5">
+	                <Label>{t("toolsets.skillDialog.descriptionLabel")}</Label>
+	                <Textarea
+	                  value={skillDraft.description ?? ""}
+	                  onChange={(e) => setSkillDraft((p) => ({ ...p, description: e.target.value }))}
+	                  className="min-h-[90px]"
+	                />
+	              </div>
+	              <div className="grid gap-1.5">
+	                <Label>{t("toolsets.skillDialog.filesLabel")}</Label>
+	                <div className="flex flex-wrap items-center gap-2">
+	                  <select
+	                    className="h-10 flex-1 rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+	                    value={skillActivePath}
+	                    onChange={(e) => setSkillActivePath(e.target.value)}
+	                  >
+	                    {(skillDraft.files ?? [])
+	                      .map((f) => f.path)
+	                      .filter(Boolean)
+	                      .map((p) => (
+	                        <option key={p} value={p}>
+	                          {p}
+	                        </option>
+	                      ))}
+	                  </select>
+	                  <Button
+	                    size="sm"
+	                    variant="outline"
+	                    onClick={() => {
+	                      const existing = new Set((skillDraft.files ?? []).map((f) => f.path));
+	                      let i = 1;
+	                      let nextPath = "file.txt";
+	                      while (existing.has(nextPath)) {
+	                        i += 1;
+	                        nextPath = `file-${i}.txt`;
+	                      }
+	                      setSkillDraft((p) => ({ ...p, files: [...(p.files ?? []), { path: nextPath, content: "", encoding: "utf8" }] }));
+	                      setSkillActivePath(nextPath);
+	                    }}
+	                  >
+	                    {t("toolsets.skillDialog.addFile")}
+	                  </Button>
+	                  <Button
+	                    size="sm"
+	                    variant="danger"
+	                    disabled={skillActivePath === "SKILL.md"}
+	                    onClick={() => {
+	                      if (skillActivePath === "SKILL.md") return;
+	                      setSkillDraft((p) => ({ ...p, files: (p.files ?? []).filter((f) => f.path !== skillActivePath) }));
+	                      setSkillActivePath("SKILL.md");
+	                    }}
+	                  >
+	                    {t("toolsets.skillDialog.removeFile")}
+	                  </Button>
+	                </div>
+	              </div>
+	              {(() => {
+	                const files = skillDraft.files ?? [];
+	                const active =
+	                  files.find((f) => f.path === skillActivePath) ?? files.find((f) => f.path === "SKILL.md") ?? files[0];
+	                if (!active) {
+	                  return null;
+	                }
+	                const activeEncoding = active.encoding ?? "utf8";
+	                const isSkillMd = active.path === "SKILL.md";
+	                return (
+	                  <div className="grid gap-3 rounded-md border border-borderSubtle bg-panel/40 p-3">
+	                    <div className="grid gap-3 md:grid-cols-2">
+	                      <div className="grid gap-1.5">
+	                        <Label>{t("toolsets.skillDialog.filePathLabel")}</Label>
+	                        <Input
+	                          value={active.path}
+	                          disabled={isSkillMd}
+	                          onChange={(e) => {
+	                            const nextPath = e.target.value;
+	                            if (!nextPath) return;
+	                            const exists = files.some((f) => f.path === nextPath && f !== active);
+	                            if (exists) {
+	                              toast.error(t("toolsets.validation.duplicateFilePath", { path: nextPath }));
+	                              return;
+	                            }
+	                            setSkillDraft((p) => ({
+	                              ...p,
+	                              files: (p.files ?? []).map((f) => (f.path === active.path ? { ...f, path: nextPath } : f)),
+	                            }));
+	                            setSkillActivePath(nextPath);
+	                          }}
+	                        />
+	                      </div>
+	                      <div className="grid gap-1.5">
+	                        <Label>{t("toolsets.skillDialog.fileEncodingLabel")}</Label>
+	                        <select
+	                          className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+	                          value={activeEncoding}
+	                          onChange={(e) =>
+	                            setSkillDraft((p) => ({
+	                              ...p,
+	                              files: (p.files ?? []).map((f) => (f.path === active.path ? { ...f, encoding: e.target.value as any } : f)),
+	                            }))
+	                          }
+	                        >
+	                          <option value="utf8">utf8</option>
+	                          <option value="base64">base64</option>
+	                        </select>
+	                      </div>
+	                    </div>
+	                    <div className="grid gap-1.5">
+	                      <Label>{active.path === "SKILL.md" ? t("toolsets.skillDialog.skillMdLabel") : t("toolsets.skillDialog.fileContentLabel")}</Label>
+	                      <Textarea
+	                        value={active.content ?? ""}
+	                        onChange={(e) =>
+	                          setSkillDraft((p) => ({
+	                            ...p,
+	                            files: (p.files ?? []).map((f) => (f.path === active.path ? { ...f, content: e.target.value } : f)),
+	                          }))
+	                        }
+	                        className="min-h-[220px] font-mono text-xs"
+	                      />
+	                    </div>
+	                  </div>
+	                );
+	              })()}
+	              <div className="flex justify-end gap-2">
+	                <Button variant="outline" onClick={() => setSkillEditorOpen(false)}>
+	                  {t("common.cancel")}
+	                </Button>
+	                <Button variant="accent" onClick={saveSkillEditor}>
                   {t("common.save")}
                 </Button>
               </div>
@@ -545,6 +656,8 @@ export default function ToolsetsPage() {
   const [gallerySelectedSlug, setGallerySelectedSlug] = useState<string | null>(null);
   const selectedPublicQuery = usePublicToolset(gallerySelectedSlug);
   const [galleryDetailOpen, setGalleryDetailOpen] = useState(false);
+  const [gallerySearch, setGallerySearch] = useState("");
+  const [galleryShowJson, setGalleryShowJson] = useState(false);
 
   const [adoptSlug, setAdoptSlug] = useState<string | null>(null);
   const [adoptName, setAdoptName] = useState("");
@@ -652,7 +765,7 @@ export default function ToolsetsPage() {
 
               <ConfirmButton
                 title={t("toolsets.delete")}
-                description="This cannot be undone."
+                description={t("toolsets.confirmDeleteDescription")}
                 confirmText={t("common.delete")}
                 onConfirm={async () => {
                   await deleteToolset.mutateAsync(toolset.id);
@@ -669,6 +782,11 @@ export default function ToolsetsPage() {
   }, [defaultToolsetId, deleteToolset, orgId, t, unpublishToolset, updateSettings, updateToolset]);
 
   const galleryItems = galleryQuery.data?.items ?? [];
+  const filteredGalleryItems = useMemo(() => {
+    const q = gallerySearch.trim().toLowerCase();
+    if (!q) return galleryItems;
+    return galleryItems.filter((it) => (it.name ?? "").toLowerCase().includes(q) || (it.publicSlug ?? "").toLowerCase().includes(q));
+  }, [galleryItems, gallerySearch]);
 
   return (
     <div className="grid gap-4">
@@ -687,7 +805,7 @@ export default function ToolsetsPage() {
           <Card>
             <CardHeader>
               <CardTitle>{t("toolsets.tabs.library")}</CardTitle>
-              <CardDescription>{orgId ? `Org: ${orgId}` : t("org.requireActive")}</CardDescription>
+              <CardDescription>{orgId ? t("toolsets.libraryOrgLabel", { orgId }) : t("org.requireActive")}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2">
@@ -729,18 +847,20 @@ export default function ToolsetsPage() {
                     }}
                     disabled={!orgId || updateSettings.isPending}
                   >
-                    Clear default
+                    {t("toolsets.clearDefault")}
                   </Button>
                 ) : null}
 
                 <div className="ml-auto text-xs text-muted">
-                  {toolsetsQuery.isFetching ? t("common.loading") : `${toolsets.length} toolset(s)`}
+                  {toolsetsQuery.isFetching ? t("common.loading") : t("toolsets.libraryCount", { count: toolsets.length })}
                 </div>
               </div>
 
               <div className="mt-4">
                 {toolsetsQuery.isLoading ? (
                   <EmptyState title={t("common.loading")} />
+                ) : toolsetsQuery.isError ? (
+                  <EmptyState title={t("toolsets.accessDeniedTitle")} description={t("toolsets.accessDeniedDescription")} />
                 ) : toolsets.length === 0 ? (
                   <EmptyState title={t("toolsets.emptyLibraryTitle")} description={t("toolsets.emptyLibraryDescription")} />
                 ) : (
@@ -755,13 +875,20 @@ export default function ToolsetsPage() {
           <Card>
             <CardHeader>
               <CardTitle>{t("toolsets.tabs.gallery")}</CardTitle>
-              <CardDescription>Public toolsets</CardDescription>
+              <CardDescription>{t("toolsets.galleryDescription")}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2">
                 <Button onClick={() => galleryQuery.refetch()}>{t("common.refresh")}</Button>
+                <div className="w-full md:ml-2 md:w-[320px]">
+                  <Input
+                    value={gallerySearch}
+                    onChange={(e) => setGallerySearch(e.target.value)}
+                    placeholder={t("toolsets.gallerySearchPlaceholder")}
+                  />
+                </div>
                 <div className="ml-auto text-xs text-muted">
-                  {galleryQuery.isFetching ? t("common.loading") : `${galleryItems.length} item(s)`}
+                  {galleryQuery.isFetching ? t("common.loading") : t("toolsets.galleryCount", { count: filteredGalleryItems.length })}
                 </div>
               </div>
 
@@ -770,9 +897,11 @@ export default function ToolsetsPage() {
                   <EmptyState title={t("common.loading")} />
                 ) : galleryItems.length === 0 ? (
                   <EmptyState title={t("toolsets.emptyGalleryTitle")} description={t("toolsets.emptyGalleryDescription")} />
+                ) : filteredGalleryItems.length === 0 ? (
+                  <EmptyState title={t("toolsets.emptyGallerySearchTitle")} description={t("toolsets.emptyGallerySearchDescription")} />
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2">
-                    {galleryItems.map((it) => (
+                    {filteredGalleryItems.map((it) => (
                       <div key={it.publicSlug} className="rounded-lg border border-borderSubtle bg-panel/40 p-4 shadow-elev1">
                         <div className="flex items-start gap-3">
                           <div className="min-w-0 flex-1">
@@ -780,7 +909,7 @@ export default function ToolsetsPage() {
                             <div className="mt-1 truncate font-mono text-xs text-muted">{it.publicSlug}</div>
                             {it.description ? <div className="mt-2 text-sm text-muted">{it.description}</div> : null}
                             <div className="mt-2 text-xs text-muted">
-                              {it.mcpServerCount} MCP, {it.agentSkillCount} skills
+                              {t("toolsets.galleryCardCounts", { mcp: it.mcpServerCount, skills: it.agentSkillCount })}
                             </div>
                           </div>
                           <div className="flex flex-col gap-2">
@@ -789,6 +918,7 @@ export default function ToolsetsPage() {
                               variant="outline"
                               onClick={() => {
                                 setGallerySelectedSlug(it.publicSlug);
+                                setGalleryShowJson(false);
                                 setGalleryDetailOpen(true);
                               }}
                             >
@@ -800,7 +930,7 @@ export default function ToolsetsPage() {
                               disabled={!orgId}
                               onClick={() => {
                                 setAdoptSlug(it.publicSlug);
-                                setAdoptName(`${it.name} (Adopted)`);
+                                setAdoptName(t("toolsets.adoptDefaultName", { name: it.name }));
                                 setAdoptOpen(true);
                               }}
                             >
@@ -827,7 +957,7 @@ export default function ToolsetsPage() {
           <div className="mt-3 grid gap-3">
             <div className="grid gap-1.5">
               <Label>{t("toolsets.publicSlug")}</Label>
-              <Input value={publishSlug} onChange={(e) => setPublishSlug(e.target.value)} placeholder="e.g. my-toolset" />
+              <Input value={publishSlug} onChange={(e) => setPublishSlug(e.target.value)} placeholder={t("toolsets.publicSlugPlaceholder")} />
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setPublishOpen(false)}>
@@ -853,14 +983,113 @@ export default function ToolsetsPage() {
       <Dialog open={galleryDetailOpen} onOpenChange={setGalleryDetailOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>{t("toolsets.tabs.gallery")}</DialogTitle>
+            <DialogTitle>{t("toolsets.galleryDetailTitle")}</DialogTitle>
             <DialogDescription>{gallerySelectedSlug ?? ""}</DialogDescription>
           </DialogHeader>
           <div className="mt-3">
             {selectedPublicQuery.isLoading ? (
               <EmptyState title={t("common.loading")} />
             ) : selectedPublicQuery.data?.toolset ? (
-              <CodeBlock value={selectedPublicQuery.data.toolset} />
+              <div className="grid gap-4">
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-base font-semibold text-text">{selectedPublicQuery.data.toolset.name}</div>
+                    {selectedPublicQuery.data.toolset.description ? (
+                      <div className="mt-1 text-sm text-muted">{selectedPublicQuery.data.toolset.description}</div>
+                    ) : null}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setGalleryShowJson((v) => !v)}>
+                    {galleryShowJson ? t("toolsets.hideJson") : t("toolsets.viewJson")}
+                  </Button>
+                </div>
+
+                {galleryShowJson ? (
+                  <CodeBlock value={selectedPublicQuery.data.toolset} />
+                ) : (
+                  <div className="grid gap-4">
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium text-text">{t("toolsets.mcpServers")}</div>
+                      {(selectedPublicQuery.data.toolset.mcpServers ?? []).length === 0 ? (
+                        <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">{t("toolsets.noMcpServers")}</div>
+                      ) : (
+                        <div className="grid gap-2">
+                          {(selectedPublicQuery.data.toolset.mcpServers ?? []).map((s, idx) => {
+                            const enabled = (s.enabled ?? true) !== false;
+                            const envKeys = Object.keys(s.env ?? {});
+                            const headerKeys = Object.keys(s.headers ?? {});
+                            return (
+                              <div key={`${s.name}-${idx}`} className="rounded-md border border-borderSubtle bg-panel/40 p-3">
+                                <div className="flex items-start gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-sm font-semibold text-text">
+                                      {s.name}{" "}
+                                      <span className="text-xs text-muted">
+                                        ({s.transport}) {enabled ? t("toolsets.enabled") : t("toolsets.disabled")}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 truncate font-mono text-xs text-muted">
+                                      {s.transport === "stdio"
+                                        ? `${s.command ?? ""}${Array.isArray(s.args) && s.args.length > 0 ? " " + s.args.join(" ") : ""}`
+                                        : (s.url ?? "")}
+                                    </div>
+                                    {envKeys.length > 0 ? (
+                                      <div className="mt-2 text-xs text-muted">
+                                        {t("toolsets.details.envKeys")}: <span className="font-mono">{envKeys.join(", ")}</span>
+                                      </div>
+                                    ) : (
+                                      <div className="mt-2 text-xs text-muted">{t("toolsets.details.envKeys")}: {t("toolsets.details.none")}</div>
+                                    )}
+                                    {headerKeys.length > 0 ? (
+                                      <div className="mt-1 text-xs text-muted">
+                                        {t("toolsets.details.headerKeys")}: <span className="font-mono">{headerKeys.join(", ")}</span>
+                                      </div>
+                                    ) : (
+                                      <div className="mt-1 text-xs text-muted">{t("toolsets.details.headerKeys")}: {t("toolsets.details.none")}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium text-text">{t("toolsets.agentSkills")}</div>
+                      {(selectedPublicQuery.data.toolset.agentSkills ?? []).length === 0 ? (
+                        <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">{t("toolsets.noSkills")}</div>
+                      ) : (
+                        <div className="grid gap-2">
+                          {(selectedPublicQuery.data.toolset.agentSkills ?? []).map((b, idx) => {
+                            const enabled = (b.enabled ?? true) !== false;
+                            const files = Array.isArray(b.files) ? b.files : [];
+                            return (
+                              <div key={`${b.id}-${idx}`} className="rounded-md border border-borderSubtle bg-panel/40 p-3">
+                                <div className="flex items-start gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-sm font-semibold text-text">
+                                      {b.name}{" "}
+                                      <span className="text-xs text-muted">
+                                        ({b.id}) {enabled ? t("toolsets.enabled") : t("toolsets.disabled")}
+                                      </span>
+                                    </div>
+                                    {b.description ? <div className="mt-1 text-sm text-muted">{b.description}</div> : null}
+                                    <div className="mt-2 text-xs text-muted">
+                                      {t("toolsets.details.fileCount", { count: files.length })}:{" "}
+                                      <span className="font-mono">{files.map((f) => f.path).join(", ")}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <EmptyState title={t("common.notFound")} />
             )}

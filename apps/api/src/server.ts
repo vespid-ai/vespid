@@ -1570,6 +1570,9 @@ export async function buildServer(input?: {
       throw badRequest("Missing orgId");
     }
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage toolsets");
+    }
     const toolsets = await store.listAgentToolsetsByOrg({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
     return { toolsets };
   });

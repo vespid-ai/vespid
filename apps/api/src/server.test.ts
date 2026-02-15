@@ -517,6 +517,35 @@ describe("api hardening foundation", () => {
     const publicSlug = (publish.json() as any).toolset.publicSlug as string;
     expect(typeof publicSlug).toBe("string");
 
+    const create2 = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "My Toolset 2",
+        visibility: "private",
+        mcpServers: [],
+        agentSkills: [],
+      },
+    });
+    expect(create2.statusCode).toBe(201);
+    const toolsetId2 = (create2.json() as any).toolset.id as string;
+
+    const publishConflict = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets/${toolsetId2}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: { publicSlug },
+    });
+    expect(publishConflict.statusCode).toBe(409);
+    expect((publishConflict.json() as any).code).toBe("PUBLIC_SLUG_CONFLICT");
+
     const gallery = await server.inject({
       method: "GET",
       url: "/v1/toolset-gallery",
@@ -548,6 +577,60 @@ describe("api hardening foundation", () => {
     });
     expect(adopt.statusCode).toBe(201);
     expect((adopt.json() as any).toolset.name).toBe("Adopted Toolset");
+  });
+
+  it("requires owner|admin role to list toolsets", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `toolset-list-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const memberEmail = `toolset-list-member-${Date.now()}@example.com`;
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: memberEmail, password: "Password123" },
+    });
+    expect(memberSignup.statusCode).toBe(201);
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Toolsets Org", slug: `toolsets-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as any).organization.id as string;
+
+    const invite = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { email: memberEmail, roleKey: "member" },
+    });
+    expect(invite.statusCode).toBe(201);
+    const inviteToken = (invite.json() as any).invitation.token as string;
+
+    const accept = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(accept.statusCode).toBe(200);
+
+    const listDenied = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/toolsets`,
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+    });
+    expect(listDenied.statusCode).toBe(403);
   });
 
   it("requires X-Org-Id and blocks cross-org access", async () => {

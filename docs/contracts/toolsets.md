@@ -43,3 +43,16 @@ Resolution order:
 - Any authenticated user can browse public toolsets via the gallery API.
 - Org owners/admins can adopt a public toolset into their org, creating a new toolset copy with `adoptedFrom` metadata.
 
+## Manual Validation (Optional)
+
+This MVP is validated primarily via unit/integration tests. If you want to verify end-to-end behavior with a real node-agent and Claude Code:
+
+1. Create a toolset with an external MCP server config using placeholder values (for example `env: { TOKEN: "${ENV:MY_TOKEN}" }`).
+2. Ensure the referenced environment variables are set in the node-agent environment (`MY_TOKEN` in this example).
+3. Attach the toolset to an `agent.run` node via `config.toolsetId` (or set an org default toolset).
+4. Run the workflow with `execution.mode="node"` and `engine.id="claude.agent-sdk.v1"`.
+
+Expected results:
+- Node execution fails fast with `MCP_ENV_NOT_SET:VAR` when a placeholder env var is missing.
+- Enabled Agent Skills are staged to the run workdir under `.claude/skills/<skillId>/...`.
+- Enabled MCP servers are passed to the Claude Agent SDK under `mcpServers` and their tools become callable as `mcp__<server>__*`.

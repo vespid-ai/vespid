@@ -8,6 +8,7 @@ import Ajv from "ajv";
 import type { ValidateFunction } from "ajv";
 import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
+import type { McpServerConfig as SdkMcpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 
 type SandboxBackendLike = {
   executeShellTask: (ctx: any) => Promise<{ status: "succeeded"; output?: any } | { status: "failed"; error: string; output?: any }>;
@@ -1081,7 +1082,7 @@ export function createEngineRunner() {
         );
       });
 
-      const mcpServer = createSdkMcpServer({ name: "vespid-tools", tools: mcpTools });
+      const vespidSdkServerInstance = createSdkMcpServer({ name: "vespid-tools", tools: mcpTools });
       const allowedMcpToolNames = allowedToolIds
         .map((toolId) => mcpToolNameByToolId.get(toolId))
         .filter((v): v is string => Boolean(v))
@@ -1147,7 +1148,7 @@ export function createEngineRunner() {
         return { ok: false as const, error };
       }
 
-      const externalMcpServers: Record<string, any> = {};
+      const externalMcpServers: Record<string, SdkMcpServerConfig> = {};
       const externalAllowedTools: string[] = [];
       if (Array.isArray(mcpServersRaw)) {
         for (const server of mcpServersRaw) {
@@ -1182,7 +1183,7 @@ export function createEngineRunner() {
               command,
               args,
               env: envResolved,
-            };
+            } satisfies SdkMcpServerConfig;
           } else if (transport === "http") {
             const url = typeof (server as any).url === "string" ? String((server as any).url) : "";
             if (!url || url.trim().length === 0) {
@@ -1193,7 +1194,7 @@ export function createEngineRunner() {
               type: "http",
               url,
               headers: headersResolved,
-            };
+            } satisfies SdkMcpServerConfig;
           } else {
             return { ok: false as const, error: `MCP_SERVER_INVALID:${name}` };
           }
@@ -1202,7 +1203,10 @@ export function createEngineRunner() {
         }
       }
 
-      const mcpServers = { "vespid-tools": mcpServer, ...externalMcpServers };
+      const mcpServers: Record<string, SdkMcpServerConfig> = {
+        "vespid-tools": { type: "sdk", name: "vespid-tools", instance: vespidSdkServerInstance as any } satisfies SdkMcpServerConfig,
+        ...externalMcpServers,
+      };
       const allowedTools = [...allowedMcpToolNames, ...externalAllowedTools, ...(skillsEnabled ? ["Skill"] : [])];
 
       const queryIterator = query({

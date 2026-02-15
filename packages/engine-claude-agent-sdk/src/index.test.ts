@@ -18,7 +18,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
   function query(input: any) {
     const options = input.options ?? {};
     const servers = options.mcpServers ?? {};
-    const server = servers["vespid-tools"];
+    const serverCfg = servers["vespid-tools"];
+    const server = serverCfg && typeof serverCfg === "object" && "instance" in serverCfg ? (serverCfg as any).instance : serverCfg;
 
     return (async function* () {
       // Exercise a tool call to ensure wiring works.
