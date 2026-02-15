@@ -28,7 +28,7 @@ describe("agent.run executor", () => {
   it("blocks and dispatches agent.run to node-agent when execution.mode=node, then consumes remote result on resume", async () => {
     const loadSecretValue = vi.fn(async () => "sk-secret");
     const executor = createAgentRunExecutor({
-      githubApiBaseUrl: "https://api.github.com",
+      getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue,
       fetchImpl: vi.fn() as any,
     });
@@ -104,7 +104,7 @@ describe("agent.run executor", () => {
     }));
 
     const executor = createAgentRunExecutor({
-      githubApiBaseUrl: "https://api.github.com",
+      getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue,
       loadToolsetById,
       fetchImpl: vi.fn() as any,
@@ -204,7 +204,7 @@ describe("agent.run executor", () => {
     });
 
     const executor = createAgentRunExecutor({
-      githubApiBaseUrl: "https://api.github.com",
+      getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue: vi.fn(async () => "secret"),
       fetchImpl: vi.fn() as any,
     });
@@ -286,7 +286,7 @@ describe("agent.run executor", () => {
     });
 
     const executor = createAgentRunExecutor({
-      githubApiBaseUrl: "https://api.github.com",
+      getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue: vi.fn(async () => "secret"),
     });
 
@@ -328,7 +328,7 @@ describe("agent.run executor", () => {
     });
 
     const executor = createAgentRunExecutor({
-      githubApiBaseUrl: "https://api.github.com",
+      getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue: vi.fn(async () => "secret"),
     });
 
@@ -376,7 +376,7 @@ describe("agent.run executor", () => {
     });
 
     const executor = createAgentRunExecutor({
-      githubApiBaseUrl: "https://api.github.com",
+      getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue: vi.fn(async () => "secret"),
     });
 

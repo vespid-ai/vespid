@@ -28,7 +28,7 @@ const connectorActionNodeSchema = z.object({
 });
 
 export function createConnectorActionExecutor(input: {
-  githubApiBaseUrl: string;
+  getGithubApiBaseUrl: () => string;
   loadConnectorSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor {
@@ -43,6 +43,7 @@ export function createConnectorActionExecutor(input: {
       }
 
       const { connectorId, actionId } = nodeParsed.data.config;
+      const githubApiBaseUrl = input.getGithubApiBaseUrl();
 
       const action = getCommunityConnectorAction({ connectorId, actionId });
       if (!action) {
@@ -101,7 +102,7 @@ export function createConnectorActionExecutor(input: {
               actionId,
               input: actionInputParsed.data,
               env: {
-                githubApiBaseUrl: input.githubApiBaseUrl,
+                githubApiBaseUrl,
               },
             },
             ...(selector?.tag ? { selectorTag: selector.tag } : {}),
@@ -128,7 +129,7 @@ export function createConnectorActionExecutor(input: {
         input: actionInputParsed.data,
         secret,
         env: {
-          githubApiBaseUrl: input.githubApiBaseUrl,
+          githubApiBaseUrl,
         },
         fetchImpl,
       });

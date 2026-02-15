@@ -47,6 +47,25 @@ export function createRedisResultsStore(redisUrl: string): ResultsStore {
     lazyConnect: false,
   });
 
+  async function safeCloseRedis() {
+    // quit() can hang if the connection is unhealthy; disconnect() is best-effort.
+    const timeoutMs = 2000;
+    try {
+      await Promise.race([
+        redis.quit(),
+        new Promise<void>((resolve) => {
+          setTimeout(() => resolve(), timeoutMs).unref?.();
+        }),
+      ]);
+    } finally {
+      try {
+        redis.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   return {
     async get(requestId) {
       const raw = await redis.get(keyFor(requestId));
@@ -63,7 +82,7 @@ export function createRedisResultsStore(redisUrl: string): ResultsStore {
       await redis.set(keyFor(requestId), JSON.stringify(value), "EX", ttlSec);
     },
     async close() {
-      await redis.quit();
+      await safeCloseRedis();
     },
   };
 }

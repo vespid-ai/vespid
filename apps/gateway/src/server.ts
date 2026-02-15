@@ -1,16 +1,19 @@
 import crypto from "node:crypto";
+import type { Socket } from "node:net";
 import Fastify from "fastify";
 import { z } from "zod";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { Queue, type ConnectionOptions } from "bullmq";
 import { Redis } from "ioredis";
 import { createPool, withTenantContext, getOrganizationAgentByTokenHash, touchOrganizationAgentLastSeen } from "@vespid/db";
 import type {
   GatewayAgentHelloMessage,
   GatewayAgentPingMessage,
+  GatewayAgentExecuteReceivedMessage,
   GatewayAgentExecuteResultMessage,
   GatewayAgentExecuteEventMessage,
   GatewayServerExecuteMessage,
+  GatewayServerExecuteAckMessage,
   GatewayDispatchRequest,
   GatewayDispatchResponse,
 } from "@vespid/shared";
@@ -155,6 +158,18 @@ function parseOrgIdPrefix(value: string): string | null {
   return parsed.success ? parsed.data : null;
 }
 
+function safeWsSend(ws: WebSocket, message: unknown): boolean {
+  try {
+    if (ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    ws.send(JSON.stringify(message));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function safeJsonParse(input: string): unknown {
   try {
     return JSON.parse(input) as unknown;
@@ -175,6 +190,8 @@ export async function buildGatewayServer(input?: {
 
   const server = Fastify({
     disableRequestLogging: true,
+    // Ensure server.close() does not hang forever on upgraded sockets in tests/dev.
+    forceCloseConnections: true,
     logger: {
       level: process.env.GATEWAY_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info"),
       redact: {
@@ -222,6 +239,45 @@ export async function buildGatewayServer(input?: {
   const dispatchedByRequestId = new Map<string, string>();
   const asyncTimeoutByRequestId = new Map<string, NodeJS.Timeout>();
   const metaByRequestId = new Map<string, z.infer<typeof gatewayDispatchMetaSchema>>();
+
+  const httpSockets = new Set<Socket>();
+  server.server.on("connection", (socket) => {
+    httpSockets.add(socket);
+    socket.on("close", () => {
+      httpSockets.delete(socket);
+    });
+  });
+
+  function terminateSessions() {
+    for (const agents of agentsByOrg.values()) {
+      for (const agent of agents) {
+        try {
+          agent.ws.terminate();
+        } catch {
+          // ignore
+        }
+      }
+    }
+    agentsByOrg.clear();
+    rrCursorByOrg.clear();
+    inFlightByAgentId.clear();
+
+    for (const socket of httpSockets) {
+      try {
+        socket.destroy();
+      } catch {
+        // ignore
+      }
+    }
+    httpSockets.clear();
+  }
+
+  // Fastify's close can wait on upgraded sockets; force termination before shutdown begins.
+  const originalClose = server.close.bind(server);
+  (server as any).close = async () => {
+    terminateSessions();
+    return await originalClose();
+  };
 
   function getInFlight(agentId: string): number {
     return inFlightByAgentId.get(agentId) ?? 0;
@@ -374,7 +430,7 @@ export async function buildGatewayServer(input?: {
         break;
       }
 
-      if (selected.ws.readyState !== selected.ws.OPEN) {
+      if (selected.ws.readyState !== WebSocket.OPEN) {
         removeAgent(selected.organizationId, selected.agentId);
         server.log.warn({
           event: "gateway_agent_disconnected",
@@ -636,6 +692,7 @@ export async function buildGatewayServer(input?: {
     agent.lastUsedAtMs = Date.now();
     incInFlight(agent.agentId);
     dispatchedByRequestId.set(requestId, agent.agentId);
+
     try {
       agent.ws.send(JSON.stringify(message));
     } catch (error) {
@@ -759,6 +816,29 @@ export async function buildGatewayServer(input?: {
         return;
       }
 
+      if (type === "execute_received") {
+        const parsed = z
+          .object({
+            type: z.literal("execute_received"),
+            requestId: z.string().min(1),
+          })
+          .safeParse(message) as { success: boolean; data?: GatewayAgentExecuteReceivedMessage };
+
+        if (!parsed.success || !parsed.data) {
+          return;
+        }
+
+        agent.lastSeenAtMs = Date.now();
+        await touchAgent(agent.organizationId, agent.agentId);
+        server.log.info({
+          event: "gateway_execute_received",
+          orgId: agent.organizationId,
+          agentId: agent.agentId,
+          requestId: parsed.data.requestId,
+        });
+        return;
+      }
+
       if (type === "execute_result") {
         const parsed = z
           .object({
@@ -784,6 +864,17 @@ export async function buildGatewayServer(input?: {
           ...(parsed.data.error ? { error: parsed.data.error } : {}),
         };
         await resultsStore.set(parsed.data.requestId, result, resultsTtlSec);
+        server.log.info({
+          event: "gateway_execute_result_received",
+          orgId: agent.organizationId,
+          agentId: agent.agentId,
+          requestId: parsed.data.requestId,
+          status: parsed.data.status,
+        });
+
+        // Ack so agents can safely garbage-collect buffered results across reconnects.
+        const ack: GatewayServerExecuteAckMessage = { type: "execute_ack", requestId: parsed.data.requestId };
+        safeWsSend(ws, ack);
 
         if (continuationQueue) {
           try {
@@ -1051,6 +1142,8 @@ export async function buildGatewayServer(input?: {
   });
 
   server.addHook("onClose", async () => {
+    terminateSessions();
+
     wss.close();
     for (const timeout of asyncTimeoutByRequestId.values()) {
       clearTimeout(timeout);
@@ -1062,14 +1155,50 @@ export async function buildGatewayServer(input?: {
     }
     pendingByRequestId.clear();
     if (continuationQueue) {
-      await continuationQueue.close();
+      const timeoutMs = 2000;
+      try {
+        await Promise.race([
+          continuationQueue.close(),
+          new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), timeoutMs).unref?.();
+          }),
+        ]);
+      } catch {
+        // ignore
+      }
     }
     if (metaRedis) {
-      await metaRedis.quit();
+      const timeoutMs = 2000;
+      try {
+        await Promise.race([
+          metaRedis.quit(),
+          new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), timeoutMs).unref?.();
+          }),
+        ]);
+      } catch {
+        // ignore
+      } finally {
+        try {
+          metaRedis.disconnect();
+        } catch {
+          // ignore
+        }
+      }
     }
     await resultsStore.close();
     if (ownsPool) {
-      await pool.end();
+      const timeoutMs = 2000;
+      try {
+        await Promise.race([
+          pool.end(),
+          new Promise<void>((resolve) => {
+            setTimeout(() => resolve(), timeoutMs).unref?.();
+          }),
+        ]);
+      } catch {
+        // ignore
+      }
     }
   });
 

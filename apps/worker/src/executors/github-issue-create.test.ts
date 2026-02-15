@@ -48,7 +48,7 @@ describe("github issue create executor", () => {
   it("calls GitHub API with bearer token and returns issue metadata", async () => {
     const token = "ghp_unit_test_token";
     const executor = createConnectorActionExecutor({
-      githubApiBaseUrl: baseUrl,
+      getGithubApiBaseUrl: () => baseUrl,
       async loadConnectorSecretValue(input) {
         expect(input).toEqual(
           expect.objectContaining({

@@ -3,7 +3,14 @@ import fs from "node:fs/promises";
 import WebSocket from "ws";
 import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
-import { REMOTE_EXEC_ERROR, isRemoteExecErrorCode, type GatewayAgentHelloMessage, type GatewayAgentPingMessage, type GatewayServerExecuteMessage } from "@vespid/shared";
+import {
+  REMOTE_EXEC_ERROR,
+  isRemoteExecErrorCode,
+  type GatewayAgentHelloMessage,
+  type GatewayAgentPingMessage,
+  type GatewayServerExecuteAckMessage,
+  type GatewayServerExecuteMessage,
+} from "@vespid/shared";
 import { resolveSandboxBackend, type SandboxBackend } from "./sandbox/index.js";
 import { executeAgentRun } from "./agent-run/execute-agent-run.js";
 
@@ -109,17 +116,20 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
   };
 
   const pingIntervalMs = 15_000;
-  const pendingResults = new Map<string, unknown>();
+  // Buffer execute_result frames until the gateway explicitly acks them.
+  // This makes result delivery resilient to gateway restarts and WS churn.
+  const pendingResults = new Map<string, { createdAtMs: number; message: unknown }>();
   const abort = new AbortController();
+  let activeWs: WebSocket | null = null;
 
   let readyResolve: (() => void) | null = null;
   const ready = new Promise<void>((resolve) => {
     readyResolve = resolve;
   });
 
-  function safeSend(ws: WebSocket, message: unknown) {
+  function safeSend(ws: WebSocket | null, message: unknown) {
     try {
-      if (ws.readyState !== ws.OPEN) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
         return false;
       }
       ws.send(JSON.stringify(message));
@@ -127,6 +137,28 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
     } catch {
       return false;
     }
+  }
+
+  function flushPendingResults() {
+    const ws = activeWs;
+    if (!ws) return;
+
+    const now = Date.now();
+    for (const [requestId, entry] of pendingResults.entries()) {
+      if (now - entry.createdAtMs > pendingTtlMs) {
+        pendingResults.delete(requestId);
+        continue;
+      }
+      const sent = safeSend(ws, entry.message);
+      if (sent) {
+        jsonLog("info", { event: "node_agent_execute_result_sent", requestId });
+      }
+    }
+  }
+
+  function bufferResult(requestId: string, message: unknown) {
+    pendingResults.set(requestId, { createdAtMs: Date.now(), message });
+    flushPendingResults();
   }
 
   async function handleExecute(ws: WebSocket, incoming: GatewayServerExecuteMessage, sandbox: SandboxBackend) {
@@ -156,10 +188,12 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           sandbox,
           emitEvent,
         });
-        pendingResults.set(requestId, result);
-        if (safeSend(ws, result)) {
-          pendingResults.delete(requestId);
-        }
+        bufferResult(requestId, result);
+        jsonLog("info", {
+          event: "node_agent_execute_result_ready",
+          requestId,
+          status: (result as any)?.status ?? "unknown",
+        });
         return;
       }
 
@@ -185,10 +219,8 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
             status: "succeeded",
             output: { accepted: true, taskId: `${nodeId}-remote-task` },
           };
-          pendingResults.set(requestId, result);
-          if (safeSend(ws, result)) {
-            pendingResults.delete(requestId);
-          }
+          bufferResult(requestId, result);
+          jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
           return;
         }
 
@@ -219,10 +251,8 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           ...(execResult.output !== undefined ? { output: execResult.output } : {}),
           ...(execResult.status === "failed" ? { error: execResult.error } : {}),
         };
-        pendingResults.set(requestId, result);
-        if (safeSend(ws, result)) {
-          pendingResults.delete(requestId);
-        }
+        bufferResult(requestId, result);
+        jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
         return;
       }
 
@@ -237,10 +267,8 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
 
       if (!actionPayload.success) {
         const result = { type: "execute_result", requestId, status: "failed", error: "INVALID_ACTION_PAYLOAD" };
-        pendingResults.set(requestId, result);
-        if (safeSend(ws, result)) {
-          pendingResults.delete(requestId);
-        }
+        bufferResult(requestId, result);
+        jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
         return;
       }
 
@@ -255,30 +283,24 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           status: "failed",
           error: `ACTION_NOT_SUPPORTED:${actionPayload.data.connectorId}:${actionPayload.data.actionId}`,
         };
-        pendingResults.set(requestId, result);
-        if (safeSend(ws, result)) {
-          pendingResults.delete(requestId);
-        }
+        bufferResult(requestId, result);
+        jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
         return;
       }
 
       const actionInputParsed = action.inputSchema.safeParse(actionPayload.data.input);
       if (!actionInputParsed.success) {
         const result = { type: "execute_result", requestId, status: "failed", error: "INVALID_ACTION_INPUT" };
-        pendingResults.set(requestId, result);
-        if (safeSend(ws, result)) {
-          pendingResults.delete(requestId);
-        }
+        bufferResult(requestId, result);
+        jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
         return;
       }
 
       const secret = action.requiresSecret ? incoming.secret ?? null : null;
       if (action.requiresSecret && !secret) {
         const result = { type: "execute_result", requestId, status: "failed", error: "SECRET_REQUIRED" };
-        pendingResults.set(requestId, result);
-        if (safeSend(ws, result)) {
-          pendingResults.delete(requestId);
-        }
+        bufferResult(requestId, result);
+        jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
         return;
       }
 
@@ -300,18 +322,14 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
         ...(execResult.output !== undefined ? { output: execResult.output } : {}),
         ...(execResult.status === "failed" ? { error: execResult.error } : {}),
       };
-      pendingResults.set(requestId, result);
-      if (safeSend(ws, result)) {
-        pendingResults.delete(requestId);
-      }
+      bufferResult(requestId, result);
+      jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
     } catch (error) {
       const message = error instanceof Error ? error.message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
       const safeError = isRemoteExecErrorCode(message) ? message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
       const result = { type: "execute_result", requestId, status: "failed", error: safeError };
-      pendingResults.set(requestId, result);
-      if (safeSend(ws, result)) {
-        pendingResults.delete(requestId);
-      }
+      bufferResult(requestId, result);
+      jsonLog("info", { event: "node_agent_execute_result_ready", requestId, status: result.status });
     }
   }
 
@@ -323,6 +341,7 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
 
   const sandbox = resolveSandboxBackend();
   const tlsCa = await loadTlsCaFromEnv(config.gatewayWsUrl);
+  const pendingTtlMs = Math.max(60_000, (Number(process.env.GATEWAY_RESULTS_TTL_SEC ?? "900") || 900) * 1000);
 
   const loop = (async () => {
     let attempt = 0;
@@ -345,10 +364,9 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
 
       ws.on("open", () => {
         attempt = 0;
+        activeWs = ws;
         safeSend(ws, hello);
-        for (const result of pendingResults.values()) {
-          safeSend(ws, result);
-        }
+        flushPendingResults();
         pingTimer = setInterval(() => {
           const ping: GatewayAgentPingMessage = { type: "ping", ts: Date.now() };
           safeSend(ws, ping);
@@ -370,26 +388,40 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           return;
         }
         const type = (message as { type?: unknown }).type;
+        if (type === "execute_ack") {
+          const parsed = z
+            .object({
+              type: z.literal("execute_ack"),
+              requestId: z.string().min(1),
+            })
+            .safeParse(message) as { success: boolean; data?: GatewayServerExecuteAckMessage };
+          if (!parsed.success || !parsed.data) {
+            return;
+          }
+          pendingResults.delete(parsed.data.requestId);
+          return;
+        }
         if (type !== "execute") {
           return;
         }
 
-      const parsed = z
-        .object({
-          type: z.literal("execute"),
-          requestId: z.string().min(1),
-          organizationId: z.string().uuid(),
-          userId: z.string().uuid(),
-          kind: z.enum(["connector.action", "agent.execute", "agent.run"]),
-          payload: z.unknown(),
-          secret: z.string().min(1).optional(),
-        })
-        .safeParse(message) as { success: boolean; data?: GatewayServerExecuteMessage };
+        const parsed = z
+          .object({
+            type: z.literal("execute"),
+            requestId: z.string().min(1),
+            organizationId: z.string().uuid(),
+            userId: z.string().uuid(),
+            kind: z.enum(["connector.action", "agent.execute", "agent.run"]),
+            payload: z.unknown(),
+            secret: z.string().min(1).optional(),
+          })
+          .safeParse(message) as { success: boolean; data?: GatewayServerExecuteMessage };
 
         if (!parsed.success || !parsed.data) {
           return;
         }
 
+        safeSend(ws, { type: "execute_received", requestId: parsed.data.requestId });
         await handleExecute(ws, parsed.data, sandbox);
       });
 
@@ -406,6 +438,9 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
         // ignore
       }
 
+      if (activeWs === ws) {
+        activeWs = null;
+      }
       if (pingTimer) {
         clearInterval(pingTimer);
       }
