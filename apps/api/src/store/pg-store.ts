@@ -41,6 +41,11 @@ import {
   listPublicAgentToolsets as dbListPublicAgentToolsets,
   getPublicAgentToolsetBySlug as dbGetPublicAgentToolsetBySlug,
   adoptPublicAgentToolset as dbAdoptPublicAgentToolset,
+  createAgentSession as dbCreateAgentSession,
+  getAgentSessionById as dbGetAgentSessionById,
+  listAgentSessions as dbListAgentSessions,
+  appendAgentSessionEvent as dbAppendAgentSessionEvent,
+  listAgentSessionEvents as dbListAgentSessionEvents,
   createToolsetBuilderSession as dbCreateToolsetBuilderSession,
   appendToolsetBuilderTurn as dbAppendToolsetBuilderTurn,
   getToolsetBuilderSessionById as dbGetToolsetBuilderSessionById,
@@ -78,6 +83,8 @@ import {
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type {
+  AgentSessionEventRecord,
+  AgentSessionRecord,
   AgentToolsetRecord,
   AppStore,
   OrganizationCreditLedgerEntryRecord,
@@ -162,6 +169,43 @@ export class PgAppStore implements AppStore {
       sessionId: row.sessionId,
       role: row.role,
       messageText: row.messageText,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toAgentSessionRecord(row: any): AgentSessionRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      createdByUserId: row.createdByUserId,
+      title: row.title ?? "",
+      status: row.status === "archived" ? "archived" : "active",
+      pinnedAgentId: row.pinnedAgentId ?? null,
+      selectorTag: row.selectorTag ?? null,
+      selectorGroup: row.selectorGroup ?? null,
+      engineId: row.engineId,
+      toolsetId: row.toolsetId ?? null,
+      llmProvider: row.llmProvider,
+      llmModel: row.llmModel,
+      toolsAllow: row.toolsAllow ?? [],
+      limits: row.limits ?? {},
+      promptSystem: row.promptSystem ?? null,
+      promptInstructions: row.promptInstructions ?? "",
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+      lastActivityAt: toIso(row.lastActivityAt),
+    };
+  }
+
+  private toAgentSessionEventRecord(row: any): AgentSessionEventRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      sessionId: row.sessionId,
+      seq: row.seq,
+      eventType: row.eventType,
+      level: row.level,
+      payload: row.payload ?? null,
       createdAt: toIso(row.createdAt),
     };
   }
@@ -1810,5 +1854,114 @@ export class PgAppStore implements AppStore {
         })
     );
     return row ? this.toToolsetBuilderSessionRecord(row) : null;
+  }
+
+  async createAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    title?: string | null;
+    engineId: string;
+    toolsetId?: string | null;
+    llm: { provider: string; model: string };
+    prompt: { system?: string | null; instructions: string };
+    tools: { allow: string[] };
+    limits?: unknown;
+    selector?: { tag?: string; group?: string } | null;
+  }): Promise<AgentSessionRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateAgentSession(db, {
+          organizationId: input.organizationId,
+          createdByUserId: input.actorUserId,
+          title: input.title ?? "",
+          status: "active",
+          selectorTag: input.selector?.tag ?? null,
+          selectorGroup: input.selector?.group ?? null,
+          engineId: input.engineId,
+          toolsetId: input.toolsetId ?? null,
+          llmProvider: input.llm.provider,
+          llmModel: input.llm.model,
+          toolsAllow: input.tools.allow,
+          limits: input.limits ?? {},
+          promptSystem: input.prompt.system ?? null,
+          promptInstructions: input.prompt.instructions,
+        })
+    );
+    return this.toAgentSessionRecord(row);
+  }
+
+  async listAgentSessions(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { updatedAt: string; id: string } | null;
+  }): Promise<{ sessions: AgentSessionRecord[]; nextCursor: { updatedAt: string; id: string } | null }> {
+    const out = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListAgentSessions(db, {
+          organizationId: input.organizationId,
+          limit: input.limit,
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+        })
+    );
+    return {
+      sessions: out.sessions.map((r) => this.toAgentSessionRecord(r)),
+      nextCursor: out.nextCursor,
+    };
+  }
+
+  async getAgentSessionById(input: { organizationId: string; actorUserId: string; sessionId: string }): Promise<AgentSessionRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbGetAgentSessionById(db, { organizationId: input.organizationId, sessionId: input.sessionId })
+    );
+    return row ? this.toAgentSessionRecord(row) : null;
+  }
+
+  async appendAgentSessionEvent(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    eventType: string;
+    level: "info" | "warn" | "error";
+    payload: unknown;
+  }): Promise<AgentSessionEventRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbAppendAgentSessionEvent(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+          eventType: input.eventType,
+          level: input.level,
+          payload: input.payload ?? null,
+        })
+    );
+    return this.toAgentSessionEventRecord(row);
+  }
+
+  async listAgentSessionEvents(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    limit: number;
+    cursor?: { seq: number } | null;
+  }): Promise<{ events: AgentSessionEventRecord[]; nextCursor: { seq: number } | null }> {
+    const out = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListAgentSessionEvents(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+          limit: input.limit,
+          ...(input.cursor ? { cursor: input.cursor } : {}),
+        })
+    );
+    return {
+      events: out.events.map((r) => this.toAgentSessionEventRecord(r)),
+      nextCursor: out.nextCursor,
+    };
   }
 }

@@ -4,6 +4,8 @@ import type { Db } from "./client.js";
 import {
   authSessions,
   agentPairingTokens,
+  agentSessionEvents,
+  agentSessions,
   agentToolsets,
   connectorSecrets,
   organizationBillingAccounts,
@@ -1849,4 +1851,211 @@ export async function listToolsetBuilderTurnsBySession(
     .where(eq(toolsetBuilderTurns.sessionId, input.sessionId))
     .orderBy(asc(toolsetBuilderTurns.createdAt), asc(toolsetBuilderTurns.id))
     .limit(limit);
+}
+
+export async function createAgentSession(
+  db: Db,
+  input: {
+    organizationId: string;
+    createdByUserId: string;
+    title?: string | null;
+    status?: "active" | "archived";
+    selectorTag?: string | null;
+    selectorGroup?: string | null;
+    engineId: string;
+    toolsetId?: string | null;
+    llmProvider: string;
+    llmModel: string;
+    toolsAllow: unknown;
+    limits: unknown;
+    promptSystem?: string | null;
+    promptInstructions: string;
+  }
+) {
+  const [row] = await db
+    .insert(agentSessions)
+    .values({
+      organizationId: input.organizationId,
+      createdByUserId: input.createdByUserId,
+      title: input.title ?? "",
+      status: input.status ?? "active",
+      selectorTag: input.selectorTag ?? null,
+      selectorGroup: input.selectorGroup ?? null,
+      engineId: input.engineId,
+      toolsetId: input.toolsetId ?? null,
+      llmProvider: input.llmProvider,
+      llmModel: input.llmModel,
+      toolsAllow: input.toolsAllow as any,
+      limits: input.limits as any,
+      promptSystem: input.promptSystem ?? null,
+      promptInstructions: input.promptInstructions,
+      lastActivityAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create agent session");
+  }
+  return row;
+}
+
+export async function getAgentSessionById(db: Db, input: { organizationId: string; sessionId: string }) {
+  const [row] = await db
+    .select()
+    .from(agentSessions)
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)));
+  return row ?? null;
+}
+
+export async function listAgentSessions(
+  db: Db,
+  input: { organizationId: string; limit: number; cursor?: { updatedAt: string; id: string } | null }
+) {
+  const limit = Math.max(1, Math.min(200, Math.floor(input.limit)));
+  const cursor = input.cursor ?? null;
+
+  const where = cursor
+    ? and(
+        eq(agentSessions.organizationId, input.organizationId),
+        or(
+          lt(agentSessions.updatedAt, new Date(cursor.updatedAt)),
+          and(eq(agentSessions.updatedAt, new Date(cursor.updatedAt)), lt(agentSessions.id, cursor.id))
+        )
+      )
+    : eq(agentSessions.organizationId, input.organizationId);
+
+  const rows = await db
+    .select()
+    .from(agentSessions)
+    .where(where)
+    .orderBy(desc(agentSessions.updatedAt), desc(agentSessions.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const sessions = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor =
+    hasMore && sessions.length > 0
+      ? { updatedAt: sessions[sessions.length - 1]!.updatedAt.toISOString(), id: sessions[sessions.length - 1]!.id }
+      : null;
+
+  return { sessions, nextCursor };
+}
+
+export async function setAgentSessionPinnedAgent(
+  db: Db,
+  input: { organizationId: string; sessionId: string; pinnedAgentId: string | null }
+) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ pinnedAgentId: input.pinnedAgentId, updatedAt: new Date() })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function touchAgentSessionActivity(db: Db, input: { organizationId: string; sessionId: string }) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ lastActivityAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function appendAgentSessionEvent(
+  db: Db,
+  input: {
+    organizationId: string;
+    sessionId: string;
+    eventType: string;
+    level?: "info" | "warn" | "error";
+    payload?: unknown;
+  }
+) {
+  return await db.transaction(async (tx) => {
+    // Serialize seq allocation per session.
+    const [locked] = await tx
+      .select({ id: agentSessions.id })
+      .from(agentSessions)
+      .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+      .for("update");
+    if (!locked) {
+      throw new Error("AGENT_SESSION_NOT_FOUND");
+    }
+
+    const [last] = await tx
+      .select({ seq: agentSessionEvents.seq })
+      .from(agentSessionEvents)
+      .where(and(eq(agentSessionEvents.organizationId, input.organizationId), eq(agentSessionEvents.sessionId, input.sessionId)))
+      .orderBy(desc(agentSessionEvents.seq))
+      .limit(1);
+
+    const nextSeq = typeof last?.seq === "number" ? last.seq + 1 : 0;
+
+    const [row] = await tx
+      .insert(agentSessionEvents)
+      .values({
+        organizationId: input.organizationId,
+        sessionId: input.sessionId,
+        seq: nextSeq,
+        eventType: input.eventType,
+        level: input.level ?? "info",
+        payload: input.payload as any,
+      })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to append agent session event");
+    }
+
+    await tx
+      .update(agentSessions)
+      .set({ lastActivityAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)));
+
+    return row;
+  });
+}
+
+export async function listAgentSessionEvents(
+  db: Db,
+  input: { organizationId: string; sessionId: string; limit: number; cursor?: { seq: number } | null }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit)));
+  const cursor = input.cursor ?? null;
+
+  const where = cursor
+    ? and(
+        eq(agentSessionEvents.organizationId, input.organizationId),
+        eq(agentSessionEvents.sessionId, input.sessionId),
+        gt(agentSessionEvents.seq, cursor.seq)
+      )
+    : and(eq(agentSessionEvents.organizationId, input.organizationId), eq(agentSessionEvents.sessionId, input.sessionId));
+
+  const rows = await db
+    .select()
+    .from(agentSessionEvents)
+    .where(where)
+    .orderBy(asc(agentSessionEvents.seq))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const events = hasMore ? rows.slice(0, limit) : rows;
+  const nextCursor = hasMore && events.length > 0 ? { seq: events[events.length - 1]!.seq } : null;
+
+  return { events, nextCursor };
+}
+
+export async function listAgentSessionEventsTail(
+  db: Db,
+  input: { organizationId: string; sessionId: string; limit: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit)));
+  const rows = await db
+    .select()
+    .from(agentSessionEvents)
+    .where(and(eq(agentSessionEvents.organizationId, input.organizationId), eq(agentSessionEvents.sessionId, input.sessionId)))
+    .orderBy(desc(agentSessionEvents.seq))
+    .limit(limit);
+  // Return ascending (seq) for client playback.
+  return [...rows].reverse();
 }

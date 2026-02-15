@@ -16,13 +16,14 @@ export const vespidLoopV1Runner: AgentRunEngineRunner = {
       node: input.node,
       policyToolsAllow: input.policyToolsAllow,
       effectiveToolsAllow: input.effectiveToolsAllow,
+      toolset: input.toolset ?? null,
       runInput: input.runInput,
       steps: input.steps,
       organizationSettings: input.organizationSettings,
       githubApiBaseUrl: input.githubApiBaseUrl,
       secrets: input.secrets,
       sandbox: input.sandbox as SandboxBackend,
+      ...(typeof input.emitEvent === "function" ? { emitEvent: input.emitEvent } : {}),
     });
   },
 };
-

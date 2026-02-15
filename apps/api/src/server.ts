@@ -2339,6 +2339,150 @@ export async function buildServer(input?: {
     return { ok: true };
   });
 
+  server.post("/v1/orgs/:orgId/sessions", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+
+    const body = z
+      .object({
+        title: z.string().max(200).optional(),
+        engineId: z.enum(["vespid.loop.v1", "codex.sdk.v1", "claude.agent-sdk.v1"]).optional(),
+        toolsetId: z.string().uuid().optional(),
+        llm: z.object({
+          provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
+          model: z.string().min(1).max(120),
+        }),
+        prompt: z.object({
+          system: z.string().max(200_000).optional(),
+          instructions: z.string().min(1).max(200_000),
+        }),
+        tools: z.object({
+          allow: z.array(z.string().min(1).max(120)).max(200).default([]),
+        }),
+        limits: z.unknown().optional(),
+        selector: z
+          .union([
+            z.object({ tag: z.string().min(1).max(64) }),
+            z.object({ group: z.string().min(1).max(64) }),
+          ])
+          .optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      throw badRequest("Invalid session payload", body.error.flatten());
+    }
+
+    const engineId = body.data.engineId ?? "vespid.loop.v1";
+    if (engineId !== "vespid.loop.v1" && engineId !== "codex.sdk.v1") {
+      throw badRequest("Only vespid.loop.v1 and codex.sdk.v1 are supported for sessions in this edition.");
+    }
+
+    const session = await store.createAgentSession({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      title: body.data.title ?? "",
+      engineId,
+      toolsetId: body.data.toolsetId ?? null,
+      llm: body.data.llm,
+      prompt: { system: body.data.prompt.system ?? null, instructions: body.data.prompt.instructions },
+      tools: body.data.tools,
+      limits: body.data.limits ?? {},
+      selector: body.data.selector ?? null,
+    });
+
+    await store.appendAgentSessionEvent({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: session.id,
+      eventType: "session_created",
+      level: "info",
+      payload: { engineId, llm: body.data.llm },
+    });
+
+    return reply.status(201).send({ session });
+  });
+
+  server.get("/v1/orgs/:orgId/sessions", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+
+    const query = request.query as { limit?: string; cursor?: string };
+    const limitRaw = query.limit ? Number(query.limit) : 50;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
+    const cursor = typeof query.cursor === "string" && query.cursor.length > 0
+      ? decodeCursor<{ updatedAt: string; id: string }>(query.cursor)
+      : null;
+
+    const out = await store.listAgentSessions({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      limit,
+      ...(cursor ? { cursor } : {}),
+    });
+
+    return {
+      sessions: out.sessions,
+      nextCursor: out.nextCursor ? encodeCursor(out.nextCursor) : null,
+    };
+  });
+
+  server.get("/v1/orgs/:orgId/sessions/:sessionId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const session = await store.getAgentSessionById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+    });
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    return { session };
+  });
+
+  server.get("/v1/orgs/:orgId/sessions/:sessionId/events", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+
+    const query = request.query as { limit?: string; cursor?: string };
+    const limitRaw = query.limit ? Number(query.limit) : 200;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
+    const cursor = typeof query.cursor === "string" && query.cursor.length > 0
+      ? decodeCursor<{ seq: number }>(query.cursor)
+      : null;
+
+    const out = await store.listAgentSessionEvents({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+      limit,
+      ...(cursor ? { cursor } : {}),
+    });
+
+    return {
+      events: out.events,
+      nextCursor: out.nextCursor ? encodeCursor(out.nextCursor) : null,
+    };
+  });
+
   server.get("/v1/orgs/:orgId/toolsets", async (request) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string };

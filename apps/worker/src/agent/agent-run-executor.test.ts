@@ -152,6 +152,63 @@ describe("agent.run executor", () => {
     expect(events.some((e) => e.eventType === "agent_toolset_applied")).toBe(true);
   });
 
+  it("includes resolved toolset payload for vespid.loop.v1 remote agent.run (skills-only context on node) and emits agent_toolset_applied", async () => {
+    const loadSecretValue = vi.fn(async () => "sk-secret");
+    const loadToolsetById = vi.fn(async () => ({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      name: "My Toolset",
+      mcpServers: [],
+      agentSkills: [{ format: "agentskills-v1", id: "hello", name: "Hello", files: [{ path: "SKILL.md", content: "# hi" }] }],
+    }));
+
+    const executor = createAgentRunExecutor({
+      getGithubApiBaseUrl: () => "https://api.github.com",
+      loadSecretValue,
+      loadToolsetById,
+      fetchImpl: vi.fn() as any,
+    });
+
+    const events: any[] = [];
+    const node = {
+      id: "n1",
+      type: "agent.run",
+      config: {
+        toolsetId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+        execution: { mode: "node" },
+        prompt: { instructions: "Use toolset docs." },
+        tools: { allow: [], execution: "cloud" },
+        limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 200_000 },
+        output: { mode: "text" },
+      },
+    };
+
+    const blocked = await executor.execute({
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      runId: "run-1",
+      attemptCount: 1,
+      requestedByUserId: "user-1",
+      nodeId: "n1",
+      nodeType: "agent.run",
+      node,
+      runInput: {},
+      steps: [],
+      runtime: {},
+      organizationSettings: { tools: { shellRunEnabled: true } },
+      emitEvent: async (e) => {
+        events.push(e);
+      },
+    });
+
+    expect(loadToolsetById).toHaveBeenCalled();
+    expect(blocked.status).toBe("blocked");
+    expect((blocked.block as any).payload.toolset).toEqual(
+      expect.objectContaining({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "My Toolset" })
+    );
+    expect(events.some((e) => e.eventType === "agent_toolset_applied")).toBe(true);
+  });
+
   it("persists tool history across remote blocks and rebuilds context on resume", async () => {
     openAiMocks.openAiChatCompletion
       .mockResolvedValueOnce({

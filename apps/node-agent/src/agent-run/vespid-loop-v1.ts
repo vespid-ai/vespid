@@ -7,6 +7,7 @@ import { loadSkillsRegistry } from "../skills/loader.js";
 import { executeSkill } from "../skills/execute-skill.js";
 import { openAiChatCompletion, type ChatMessage } from "./llm/openai.js";
 import { anthropicChatCompletion } from "./llm/anthropic.js";
+import { buildToolsetSkillsContext } from "./toolset-skills.js";
 
 type AgentEnvelope =
   | { type: "final"; output: unknown }
@@ -221,6 +222,7 @@ export async function runVespidLoopV1(input: {
   node: any; // workflowNodeSchema already validated
   policyToolsAllow: string[] | null;
   effectiveToolsAllow: string[] | null;
+  toolset?: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null;
   runInput?: unknown;
   steps?: unknown;
   organizationSettings?: unknown;
@@ -230,6 +232,7 @@ export async function runVespidLoopV1(input: {
     connectorSecretsByConnectorId?: Record<string, string> | undefined;
   };
   sandbox: SandboxBackend;
+  emitEvent?: (event: { ts: number; kind: string; level: "info" | "warn" | "error"; message?: string; payload?: unknown }) => void;
 }): Promise<{ ok: true; output: unknown } | { ok: false; error: string }> {
   const deadline = Date.now() + Math.max(1000, input.node.config.limits.timeoutMs);
   const allowedTools = new Set<string>(input.effectiveToolsAllow ?? input.node.config.tools.allow ?? []);
@@ -237,6 +240,23 @@ export async function runVespidLoopV1(input: {
   const shellRunEnabled = parseShellRunEnabled(input.organizationSettings);
   const skillsRegistry = await loadSkillsRegistry();
   const skillsById = skillsRegistry.skills;
+
+  const emit = (e: { kind: string; level?: "info" | "warn" | "error"; message?: string; payload?: unknown }) => {
+    if (typeof input.emitEvent !== "function") {
+      return;
+    }
+    try {
+      input.emitEvent({
+        ts: Date.now(),
+        kind: e.kind,
+        level: e.level ?? "info",
+        ...(typeof e.message === "string" ? { message: e.message } : {}),
+        ...(e.payload !== undefined ? { payload: e.payload } : {}),
+      });
+    } catch {
+      // ignore
+    }
+  };
 
   const provider: "openai" | "anthropic" = input.node.config.llm.provider;
   const model: string = input.node.config.llm.model;
@@ -248,6 +268,17 @@ export async function runVespidLoopV1(input: {
         : (process.env.OPENAI_API_KEY ?? null);
   if (!apiKey || apiKey.trim().length === 0) {
     return { ok: false, error: "LLM_AUTH_NOT_CONFIGURED" };
+  }
+
+  const toolsetSkills = input.toolset?.id
+    ? buildToolsetSkillsContext({
+        toolsetId: input.toolset.id,
+        toolsetName: input.toolset.name,
+        agentSkills: input.toolset.agentSkills,
+      })
+    : null;
+  if (toolsetSkills) {
+    emit({ kind: "toolset_skills_applied", payload: { toolsetId: input.toolset!.id, count: toolsetSkills.count } });
   }
 
   const baseSystem = [
@@ -264,6 +295,7 @@ export async function runVespidLoopV1(input: {
         .filter((s) => allowedTools.has(s.toolId));
       return allowedSkillInfos.length > 0 ? `Allowed local skills on this node: ${JSON.stringify(allowedSkillInfos)}` : null;
     })(),
+    toolsetSkills ? toolsetSkills.text : null,
   ]
     .filter(Boolean)
     .join("\n");

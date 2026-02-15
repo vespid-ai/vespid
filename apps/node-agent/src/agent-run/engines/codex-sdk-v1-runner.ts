@@ -13,6 +13,7 @@ import type { SandboxBackend } from "../../sandbox/index.js";
 import { resolveRunWorkdirHostPath } from "../../sandbox/workdir.js";
 import { loadSkillsRegistry } from "../../skills/loader.js";
 import { executeSkill } from "../../skills/execute-skill.js";
+import { buildToolsetSkillsContext } from "../toolset-skills.js";
 import type { ChatMessage } from "../llm/openai.js";
 
 const execFileAsync = promisify(execFile);
@@ -513,6 +514,14 @@ export const codexSdkV1Runner: AgentRunEngineRunner = {
     const skillsRegistry = await loadSkillsRegistry();
     const skillsById = skillsRegistry.skills;
 
+    const toolsetSkills = input.toolset?.id
+      ? buildToolsetSkillsContext({
+          toolsetId: input.toolset.id,
+          toolsetName: input.toolset.name,
+          agentSkills: input.toolset.agentSkills,
+        })
+      : null;
+
     const steps = Array.isArray(input.steps) ? (input.steps as unknown[]) : [];
     const renderedTemplate = input.node.config.prompt.inputTemplate
       ? renderTemplate(input.node.config.prompt.inputTemplate, {
@@ -529,6 +538,7 @@ export const codexSdkV1Runner: AgentRunEngineRunner = {
       '1) {\"type\":\"final\",\"output\":<any>}',
       '2) {\"type\":\"tool_call\",\"toolId\":\"<toolId>\",\"input\":<object>}',
       `Allowed toolIds: ${JSON.stringify([...allowedTools.values()])}`,
+      toolsetSkills ? toolsetSkills.text : null,
     ]
       .filter(Boolean)
       .join("\n");
@@ -767,6 +777,10 @@ export const codexSdkV1Runner: AgentRunEngineRunner = {
         // ignore
       }
     };
+
+    if (toolsetSkills) {
+      emit({ kind: "toolset_skills_applied", payload: { toolsetId: input.toolset!.id, count: toolsetSkills.count } });
+    }
 
     emit({
       kind: "agent.start",

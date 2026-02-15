@@ -300,6 +300,44 @@ export const toolsetBuilderTurns = pgTable("toolset_builder_turns", {
   toolsetBuilderTurnsSessionCreatedAtIdx: index("toolset_builder_turns_session_created_at_idx").on(table.sessionId, table.createdAt),
 }));
 
+export const agentSessions = pgTable("agent_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  status: text("status").notNull().default("active"),
+  pinnedAgentId: uuid("pinned_agent_id").references(() => organizationAgents.id, { onDelete: "set null" }),
+  selectorTag: text("selector_tag"),
+  selectorGroup: text("selector_group"),
+  engineId: text("engine_id").notNull().default("vespid.loop.v1"),
+  toolsetId: uuid("toolset_id").references(() => agentToolsets.id, { onDelete: "set null" }),
+  llmProvider: text("llm_provider").notNull().default("openai"),
+  llmModel: text("llm_model").notNull().default("gpt-4.1-mini"),
+  toolsAllow: jsonb("tools_allow").notNull().default(sql`'[]'::jsonb`),
+  limits: jsonb("limits").notNull().default(sql`'{}'::jsonb`),
+  promptSystem: text("prompt_system"),
+  promptInstructions: text("prompt_instructions").notNull().default(""),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentSessionsOrgUpdatedIdx: index("agent_sessions_org_updated_idx").on(table.organizationId, table.updatedAt, table.id),
+}));
+
+export const agentSessionEvents = pgTable("agent_session_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  sessionId: uuid("session_id").notNull().references(() => agentSessions.id, { onDelete: "cascade" }),
+  seq: integer("seq").notNull(),
+  eventType: text("event_type").notNull(),
+  level: text("level").notNull().default("info"),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentSessionEventsSessionSeqUnique: uniqueIndex("agent_session_events_session_seq_unique").on(table.sessionId, table.seq),
+  agentSessionEventsOrgSessionSeqIdx: index("agent_session_events_org_session_seq_idx").on(table.organizationId, table.sessionId, table.seq),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
@@ -311,6 +349,8 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   agentPairingTokens: many(agentPairingTokens),
   toolsets: many(agentToolsets),
   toolsetBuilderSessions: many(toolsetBuilderSessions),
+  agentSessions: many(agentSessions),
+  agentSessionEvents: many(agentSessionEvents),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -319,6 +359,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(authSessions),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
+  agentSessions: many(agentSessions),
 }));
 
 export const toolsetBuilderSessionsRelations = relations(toolsetBuilderSessions, ({ one, many }) => ({
@@ -420,6 +461,37 @@ export const workflowRunEventsRelations = relations(workflowRunEvents, ({ one })
   }),
 }));
 
+export const agentSessionsRelations = relations(agentSessions, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [agentSessions.organizationId],
+    references: [organizations.id],
+  }),
+  createdByUser: one(users, {
+    fields: [agentSessions.createdByUserId],
+    references: [users.id],
+  }),
+  toolset: one(agentToolsets, {
+    fields: [agentSessions.toolsetId],
+    references: [agentToolsets.id],
+  }),
+  pinnedAgent: one(organizationAgents, {
+    fields: [agentSessions.pinnedAgentId],
+    references: [organizationAgents.id],
+  }),
+  events: many(agentSessionEvents),
+}));
+
+export const agentSessionEventsRelations = relations(agentSessionEvents, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [agentSessionEvents.organizationId],
+    references: [organizations.id],
+  }),
+  session: one(agentSessions, {
+    fields: [agentSessionEvents.sessionId],
+    references: [agentSessions.id],
+  }),
+}));
+
 export type DbRole = typeof roles.$inferSelect;
 export type DbUser = typeof users.$inferSelect;
 export type DbOrganization = typeof organizations.$inferSelect;
@@ -435,3 +507,5 @@ export type DbAgentPairingToken = typeof agentPairingTokens.$inferSelect;
 export type DbAgentToolset = typeof agentToolsets.$inferSelect;
 export type DbToolsetBuilderSession = typeof toolsetBuilderSessions.$inferSelect;
 export type DbToolsetBuilderTurn = typeof toolsetBuilderTurns.$inferSelect;
+export type DbAgentSession = typeof agentSessions.$inferSelect;
+export type DbAgentSessionEvent = typeof agentSessionEvents.$inferSelect;

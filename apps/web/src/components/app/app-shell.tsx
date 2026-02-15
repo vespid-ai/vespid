@@ -180,6 +180,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const nav: NavItem[] = useMemo(
     () => [
       { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
+      { href: (l) => `/${l}/sessions`, labelKey: "nav.sessions", icon: <Monitor className="h-4 w-4" /> },
       { href: (l) => `/${l}/secrets`, labelKey: "nav.secrets", icon: <KeyRound className="h-4 w-4" /> },
       { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
       { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },

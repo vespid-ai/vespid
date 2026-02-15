@@ -207,6 +207,39 @@ export type ToolsetBuilderTurnRecord = {
   createdAt: string;
 };
 
+export type AgentSessionRecord = {
+  id: string;
+  organizationId: string;
+  createdByUserId: string;
+  title: string;
+  status: "active" | "archived";
+  pinnedAgentId: string | null;
+  selectorTag: string | null;
+  selectorGroup: string | null;
+  engineId: string;
+  toolsetId: string | null;
+  llmProvider: string;
+  llmModel: string;
+  toolsAllow: unknown;
+  limits: unknown;
+  promptSystem: string | null;
+  promptInstructions: string;
+  createdAt: string;
+  updatedAt: string;
+  lastActivityAt: string;
+};
+
+export type AgentSessionEventRecord = {
+  id: string;
+  organizationId: string;
+  sessionId: string;
+  seq: number;
+  eventType: string;
+  level: "info" | "warn" | "error";
+  payload: unknown;
+  createdAt: string;
+};
+
 export interface AppStore {
   ensureDefaultRoles(): Promise<void>;
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
@@ -565,4 +598,43 @@ export interface AppStore {
     selectedComponentKeys: string[];
     finalDraft: unknown;
   }): Promise<ToolsetBuilderSessionRecord | null>;
+
+  createAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    title?: string | null;
+    engineId: string;
+    toolsetId?: string | null;
+    llm: { provider: string; model: string };
+    prompt: { system?: string | null; instructions: string };
+    tools: { allow: string[] };
+    limits?: unknown;
+    selector?: { tag?: string; group?: string } | null;
+  }): Promise<AgentSessionRecord>;
+  listAgentSessions(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { updatedAt: string; id: string } | null;
+  }): Promise<{ sessions: AgentSessionRecord[]; nextCursor: { updatedAt: string; id: string } | null }>;
+  getAgentSessionById(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null>;
+  appendAgentSessionEvent(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    eventType: string;
+    level: "info" | "warn" | "error";
+    payload?: unknown;
+  }): Promise<AgentSessionEventRecord>;
+  listAgentSessionEvents(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    limit: number;
+    cursor?: { seq: number } | null;
+  }): Promise<{ events: AgentSessionEventRecord[]; nextCursor: { seq: number } | null }>;
 }

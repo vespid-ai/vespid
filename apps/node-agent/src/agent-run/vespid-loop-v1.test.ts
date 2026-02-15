@@ -128,5 +128,81 @@ describe("vespid.loop.v1 (node-agent)", () => {
       expect(out.output).toEqual(expect.objectContaining({ ok: true }));
     }
   });
-});
 
+  it("injects toolset skills as read-only system context without leaking content in events", async () => {
+    const tmp = await mkTmpDir();
+    process.env.VESPID_AGENT_WORKDIR_ROOT = path.join(tmp, "workdir");
+
+    const toolsetSkillMd = "# Hello Skill\n\nDo not leak this.";
+    const toolsetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    let capturedSystem: string | null = null;
+    globalThis.fetch = vi.fn(async (_url: any, init: any) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      capturedSystem =
+        Array.isArray(body?.messages) && typeof body.messages?.[0]?.content === "string" ? body.messages[0].content : null;
+
+      return mockResponse({
+        ok: true,
+        status: 200,
+        body: { choices: [{ message: { content: JSON.stringify({ type: "final", output: { ok: true } }) } }] },
+      });
+    }) as any;
+
+    const events: any[] = [];
+    const out = await runVespidLoopV1({
+      requestId: "req-1",
+      organizationId: "11111111-1111-4111-8111-111111111111",
+      userId: "22222222-2222-4222-8222-222222222222",
+      runId: "33333333-3333-4333-8333-333333333333",
+      workflowId: "44444444-4444-4444-8444-444444444444",
+      attemptCount: 1,
+      nodeId: "n1",
+      node: {
+        id: "n1",
+        type: "agent.run",
+        config: {
+          llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+          execution: { mode: "node" },
+          prompt: { instructions: "Use toolset docs." },
+          tools: { allow: [], execution: "node" },
+          limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 200_000 },
+          output: { mode: "text" },
+        },
+      },
+      policyToolsAllow: null,
+      effectiveToolsAllow: [],
+      toolset: {
+        id: toolsetId,
+        name: "My Toolset",
+        mcpServers: [],
+        agentSkills: [
+          {
+            format: "agentskills-v1",
+            id: "hello",
+            name: "Hello",
+            files: [{ path: "SKILL.md", content: toolsetSkillMd }],
+          },
+        ],
+      },
+      runInput: null,
+      steps: [],
+      organizationSettings: { tools: { shellRunEnabled: false } },
+      githubApiBaseUrl: "https://api.github.com",
+      secrets: { llmApiKey: "sk-test" },
+      sandbox: { async executeShellTask() { return { status: "failed", error: "nope" }; } } as any,
+      emitEvent: (e) => events.push(e),
+    });
+
+    expect(out.ok).toBe(true);
+    expect(typeof capturedSystem).toBe("string");
+    expect(capturedSystem).toContain("Toolset Skills (read-only context)");
+    expect(capturedSystem).toContain("Toolset: My Toolset");
+    expect(capturedSystem).toContain(toolsetSkillMd);
+
+    const toolsetEvent = events.find((e) => e.kind === "toolset_skills_applied") ?? null;
+    expect(toolsetEvent).toBeTruthy();
+    expect(toolsetEvent?.payload).toEqual({ toolsetId, count: 1 });
+    expect(JSON.stringify(toolsetEvent)).not.toContain(toolsetSkillMd);
+  });
+});
