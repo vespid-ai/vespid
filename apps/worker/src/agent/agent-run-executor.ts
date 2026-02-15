@@ -52,7 +52,7 @@ const agentRunNodeSchema = z.object({
   config: z.object({
     toolsetId: z.string().uuid().optional(),
     llm: z.object({
-      provider: z.enum(["openai", "anthropic"]).default("openai"),
+      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
       model: z.string().min(1).max(120),
       auth: z.object({
         secretId: z.string().uuid().optional(),
@@ -152,7 +152,7 @@ export function createAgentRunExecutor(input: {
       runId: string;
       nodeId: string;
       attemptCount: number;
-      provider: "openai" | "anthropic";
+      provider: "openai" | "anthropic" | "gemini" | "vertex";
       model: string;
       turn: number;
       credits: number;

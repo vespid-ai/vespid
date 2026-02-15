@@ -69,7 +69,7 @@ const teamConfigSchema = z.object({
   parent: z.object({
     nodeId: z.string().min(1),
     llm: z.object({
-      provider: z.enum(["openai", "anthropic"]).default("openai"),
+      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
       model: z.string().min(1).max(120),
       auth: z.object({ secretId: z.string().uuid().optional(), fallbackToEnv: z.literal(true).optional() }),
     }),

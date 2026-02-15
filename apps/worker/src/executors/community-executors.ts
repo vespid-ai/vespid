@@ -16,7 +16,7 @@ export function getCommunityWorkflowNodeExecutors(input?: {
       runId: string;
       nodeId: string;
       attemptCount: number;
-      provider: "openai" | "anthropic";
+      provider: "openai" | "anthropic" | "gemini" | "vertex";
       model: string;
       turn: number;
       credits: number;

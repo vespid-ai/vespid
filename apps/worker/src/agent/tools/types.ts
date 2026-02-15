@@ -17,7 +17,7 @@ export type AgentToolContext = {
       credits: number;
       inputTokens: number;
       outputTokens: number;
-      provider: "openai" | "anthropic";
+      provider: "openai" | "anthropic" | "gemini" | "vertex";
       model: string;
       turn: number;
     }) => Promise<void>;

@@ -1,9 +1,12 @@
 import Ajv from "ajv";
 import type { ValidateFunction } from "ajv";
 import type { WorkflowNodeExecutorResult } from "@vespid/shared";
+import { z } from "zod";
 import type { OpenAiChatMessage } from "./openai.js";
 import { openAiChatCompletion } from "./openai.js";
 import { anthropicChatCompletion } from "./anthropic.js";
+import { geminiGenerateContent } from "./gemini.js";
+import { vertexGenerateContent } from "./vertex.js";
 import { resolveAgentTool } from "./tools/index.js";
 import type { AgentToolExecutionMode } from "./tools/types.js";
 
@@ -51,7 +54,7 @@ export type AgentTeamMeta = {
 };
 
 export type AgentLoopConfig = {
-  llm: { provider: "openai" | "anthropic"; model: string; auth: { secretId?: string; fallbackToEnv?: true } };
+  llm: { provider: "openai" | "anthropic" | "gemini" | "vertex"; model: string; auth: { secretId?: string; fallbackToEnv?: true } };
   prompt: { system?: string; instructions: string; inputTemplate?: string };
   tools: {
     allow: string[];
@@ -306,25 +309,65 @@ function compileJsonSchema(schema: unknown): { ok: true; validate: ValidateFunct
   }
 }
 
-async function resolveOpenAiApiKey(input: {
+type ResolvedLlmAuth =
+  | { kind: "api_key"; apiKey: string }
+  | { kind: "vertex_oauth"; refreshToken: string; projectId: string; location: string };
+
+async function resolveLlmAuth(input: {
   llm: AgentLoopConfig["llm"];
   organizationId: string;
   userId: string;
   loadSecretValue: AgentLoopInput["loadSecretValue"];
-}): Promise<string | null> {
+}): Promise<ResolvedLlmAuth | null> {
+  if (input.llm.provider === "vertex") {
+    if (!input.llm.auth.secretId) {
+      return null;
+    }
+    const raw = await input.loadSecretValue({
+      organizationId: input.organizationId,
+      userId: input.userId,
+      secretId: input.llm.auth.secretId,
+    });
+    try {
+      const parsed = z
+        .object({
+          refreshToken: z.string().min(1),
+          projectId: z.string().min(1),
+          location: z.string().min(1),
+        })
+        .safeParse(JSON.parse(raw));
+      if (!parsed.success) {
+        return null;
+      }
+      return {
+        kind: "vertex_oauth",
+        refreshToken: parsed.data.refreshToken,
+        projectId: parsed.data.projectId,
+        location: parsed.data.location,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   if (input.llm.auth.secretId) {
     const value = await input.loadSecretValue({
       organizationId: input.organizationId,
       userId: input.userId,
       secretId: input.llm.auth.secretId,
     });
-    return value && value.trim().length > 0 ? value : null;
+    const apiKey = value && value.trim().length > 0 ? value : null;
+    return apiKey ? { kind: "api_key", apiKey } : null;
   }
+
   const env =
     input.llm.provider === "anthropic"
       ? (process.env.ANTHROPIC_API_KEY ?? null)
-      : (process.env.OPENAI_API_KEY ?? null);
-  return env && env.trim().length > 0 ? env : null;
+      : input.llm.provider === "gemini"
+        ? (process.env.GEMINI_API_KEY ?? null)
+        : (process.env.OPENAI_API_KEY ?? null);
+  const apiKey = env && env.trim().length > 0 ? env : null;
+  return apiKey ? { kind: "api_key", apiKey } : null;
 }
 
 export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeExecutorResult> {
@@ -499,17 +542,17 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     await persistState({ checkpoint: true });
   }
 
-  const apiKey = await resolveOpenAiApiKey({
+  const llmAuth = await resolveLlmAuth({
     llm: input.config.llm,
     organizationId: input.organizationId,
     userId: input.requestedByUserId,
     loadSecretValue: input.loadSecretValue,
   });
-  if (!apiKey) {
+  if (!llmAuth) {
     return { status: "failed", error: "LLM_AUTH_NOT_CONFIGURED" };
   }
 
-  const usesManagedCredits = !input.config.llm.auth.secretId && Boolean(input.managedCredits);
+  const usesManagedCredits = input.config.llm.provider !== "vertex" && !input.config.llm.auth.secretId && Boolean(input.managedCredits);
 
   for (;;) {
     if (Date.now() >= deadline) {
@@ -557,24 +600,60 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       },
       });
 
-    const llm =
-      input.config.llm.provider === "anthropic"
-        ? await anthropicChatCompletion({
-            apiKey,
-            model: input.config.llm.model,
-            messages,
-            timeoutMs: Math.max(1000, deadline - Date.now()),
-            maxOutputChars: input.config.limits.maxOutputChars,
-            fetchImpl: input.fetchImpl,
-          })
-        : await openAiChatCompletion({
-            apiKey,
-            model: input.config.llm.model,
-            messages,
-            timeoutMs: Math.max(1000, deadline - Date.now()),
-            maxOutputChars: input.config.limits.maxOutputChars,
-            fetchImpl: input.fetchImpl,
-          });
+    const llm = await (async () => {
+      const timeoutMs = Math.max(1000, deadline - Date.now());
+
+      if (input.config.llm.provider === "vertex") {
+        if (llmAuth.kind !== "vertex_oauth") {
+          return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
+        }
+        return vertexGenerateContent({
+          refreshToken: llmAuth.refreshToken,
+          projectId: llmAuth.projectId,
+          location: llmAuth.location,
+          model: input.config.llm.model,
+          messages: messages as any,
+          timeoutMs,
+          maxOutputChars: input.config.limits.maxOutputChars,
+          fetchImpl: input.fetchImpl,
+        });
+      }
+
+      if (llmAuth.kind !== "api_key") {
+        return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
+      }
+
+      if (input.config.llm.provider === "anthropic") {
+        return anthropicChatCompletion({
+          apiKey: llmAuth.apiKey,
+          model: input.config.llm.model,
+          messages,
+          timeoutMs,
+          maxOutputChars: input.config.limits.maxOutputChars,
+          fetchImpl: input.fetchImpl,
+        });
+      }
+
+      if (input.config.llm.provider === "gemini") {
+        return geminiGenerateContent({
+          apiKey: llmAuth.apiKey,
+          model: input.config.llm.model,
+          messages: messages as any,
+          timeoutMs,
+          maxOutputChars: input.config.limits.maxOutputChars,
+          fetchImpl: input.fetchImpl,
+        });
+      }
+
+      return openAiChatCompletion({
+        apiKey: llmAuth.apiKey,
+        model: input.config.llm.model,
+        messages,
+        timeoutMs,
+        maxOutputChars: input.config.limits.maxOutputChars,
+        fetchImpl: input.fetchImpl,
+      });
+    })();
 
     if (!llm.ok) {
       await persistState();

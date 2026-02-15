@@ -65,7 +65,7 @@ const agentRunNodeSchema = z.object({
   config: z.object({
     toolsetId: z.string().uuid().optional(),
     llm: z.object({
-      provider: z.enum(["openai", "anthropic"]).default(defaultAgentLlmProvider),
+      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default(defaultAgentLlmProvider),
       model: z.string().min(1).max(120).default("gpt-4.1-mini"),
       auth: z
         .object({
