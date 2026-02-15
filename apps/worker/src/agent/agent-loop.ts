@@ -85,6 +85,17 @@ export type AgentLoopInput = {
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   fetchImpl: typeof fetch;
   config: AgentLoopConfig;
+  managedCredits?: {
+    ensureAvailable: (input: { minCredits: number }) => Promise<boolean>;
+    charge: (input: {
+      credits: number;
+      inputTokens: number;
+      outputTokens: number;
+      provider: AgentLoopConfig["llm"]["provider"];
+      model: string;
+      turn: number;
+    }) => Promise<void>;
+  } | null;
   // When set, the loop persists state under runtime.agentRuns[persistNodeId].
   persistNodeId?: string | null;
   // When false, any tool that returns status:"blocked" fails the loop.
@@ -498,6 +509,8 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     return { status: "failed", error: "LLM_AUTH_NOT_CONFIGURED" };
   }
 
+  const usesManagedCredits = !input.config.llm.auth.secretId && Boolean(input.managedCredits);
+
   for (;;) {
     if (Date.now() >= deadline) {
       await persistState();
@@ -519,6 +532,18 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       payload: { turn: state.turns, ...(input.teamMeta ? { team: input.teamMeta } : {}) },
     });
 
+    if (usesManagedCredits && input.managedCredits) {
+      const ok = await input.managedCredits.ensureAvailable({ minCredits: 1 });
+      if (!ok) {
+        await persistState();
+        return {
+          status: "failed",
+          error: "CREDITS_EXHAUSTED",
+          runtime: persistedNodeId ? setAgentRunState(nextRuntime, persistedNodeId, { ...state }) : undefined,
+        };
+      }
+    }
+
     await input.emitEvent?.({
       eventType: "agent_llm_request",
       level: "info",
@@ -530,7 +555,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
         messageSizes: messages.map((m) => m.content.length),
         ...(input.teamMeta ? { team: input.teamMeta } : {}),
       },
-    });
+      });
 
     const llm =
       input.config.llm.provider === "anthropic"
@@ -554,6 +579,28 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     if (!llm.ok) {
       await persistState();
       return { status: "failed", error: llm.error };
+    }
+
+    if (usesManagedCredits && input.managedCredits) {
+      const inputTokens = llm.usage?.inputTokens ?? 0;
+      const outputTokens = llm.usage?.outputTokens ?? 0;
+      const credits = Math.max(1, Math.ceil((inputTokens + outputTokens) / 1000));
+      try {
+        await input.managedCredits.charge({
+          credits,
+          inputTokens,
+          outputTokens,
+          provider: input.config.llm.provider,
+          model: input.config.llm.model,
+          turn: state.turns,
+        });
+      } catch {
+        await input.emitEvent?.({
+          eventType: "agent_credits_charge_failed",
+          level: "warn",
+          payload: { turn: state.turns, credits, ...(input.teamMeta ? { team: input.teamMeta } : {}) },
+        });
+      }
     }
 
     const content = safeTruncate(llm.content.trim(), input.config.limits.maxOutputChars);
@@ -713,6 +760,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       fetchImpl: input.fetchImpl,
       emitEvent: input.emitEvent,
       teamConfig: input.teamConfig ?? null,
+      managedCredits: input.managedCredits ?? null,
     };
 
     const toolResult = await resolved.tool.execute(toolCtx as any, { mode: toolMode, args: mergedArgs });

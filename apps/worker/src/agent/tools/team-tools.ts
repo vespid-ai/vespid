@@ -158,6 +158,7 @@ async function runDelegate(input: {
     githubApiBaseUrl: input.ctx.githubApiBaseUrl,
     loadSecretValue: input.ctx.loadSecretValue,
     fetchImpl: input.ctx.fetchImpl,
+    managedCredits: input.ctx.managedCredits ?? null,
     config: {
       llm: {
         provider: input.team.parent.llm.provider,

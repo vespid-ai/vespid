@@ -10,6 +10,12 @@ const anthropicResponseSchema = z.object({
       })
     )
     .min(1),
+  usage: z
+    .object({
+      input_tokens: z.number().int().nonnegative().optional(),
+      output_tokens: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
 function toAnthropic(input: { messages: OpenAiChatMessage[] }): { system: string | undefined; messages: Array<{ role: "user" | "assistant"; content: string }> } {
@@ -40,7 +46,10 @@ export async function anthropicChatCompletion(input: {
   maxOutputChars?: number;
   maxTokens?: number;
   fetchImpl?: typeof fetch;
-}): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; content: string; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }
+  | { ok: false; error: string }
+> {
   const fetchImpl = input.fetchImpl ?? fetch;
 
   const deadline = Date.now() + Math.max(1000, input.timeoutMs);
@@ -101,7 +110,18 @@ export async function anthropicChatCompletion(input: {
         return { ok: false, error: "ANTHROPIC_RESPONSE_EMPTY" };
       }
 
-      return { ok: true, content: text };
+      const inputTokens = parsed.data.usage?.input_tokens ?? 0;
+      const outputTokens = parsed.data.usage?.output_tokens ?? 0;
+
+      return {
+        ok: true,
+        content: text,
+        usage: {
+          inputTokens: Math.max(0, Math.floor(inputTokens)),
+          outputTokens: Math.max(0, Math.floor(outputTokens)),
+          totalTokens: Math.max(0, Math.floor(inputTokens + outputTokens)),
+        },
+      };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return { ok: false, error: "LLM_TIMEOUT" };
@@ -118,4 +138,3 @@ export async function anthropicChatCompletion(input: {
     }
   }
 }
-

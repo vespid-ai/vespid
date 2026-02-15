@@ -6,6 +6,9 @@ import {
   getConnectorSecretById,
   getAgentToolsetById,
   getOrganizationById,
+  ensureOrganizationCreditBalanceRow,
+  getOrganizationCreditBalance,
+  tryDebitOrganizationCredits,
   getWorkflowById,
   getWorkflowRunById,
   markWorkflowRunBlocked,
@@ -258,6 +261,66 @@ export async function processWorkflowRunJob(
     };
   };
 
+  const managedCredits = {
+    ensureAvailable: async (creditsInput: { organizationId: string; userId: string; minCredits: number }) => {
+      const minCredits = Math.max(0, Math.floor(creditsInput.minCredits));
+      const row = await withTenantContext(
+        pool,
+        { userId: creditsInput.userId, organizationId: creditsInput.organizationId },
+        async (tenantDb) => {
+          const existing = await getOrganizationCreditBalance(tenantDb, { organizationId: creditsInput.organizationId });
+          return existing ?? (await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: creditsInput.organizationId }));
+        }
+      );
+      return row.balanceCredits >= minCredits;
+    },
+    charge: async (chargeInput: {
+      organizationId: string;
+      userId: string;
+      workflowId: string;
+      runId: string;
+      nodeId: string;
+      attemptCount: number;
+      provider: "openai" | "anthropic";
+      model: string;
+      turn: number;
+      credits: number;
+      inputTokens: number;
+      outputTokens: number;
+    }) => {
+      const credits = Math.max(0, Math.floor(chargeInput.credits));
+      if (credits <= 0) {
+        return;
+      }
+
+      await withTenantContext(
+        pool,
+        { userId: chargeInput.userId, organizationId: chargeInput.organizationId },
+        async (tenantDb) => {
+          await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: chargeInput.organizationId });
+          await tryDebitOrganizationCredits(tenantDb, {
+            organizationId: chargeInput.organizationId,
+            credits,
+            reason: "llm_usage",
+            workflowRunId: chargeInput.runId,
+            createdByUserId: null,
+            metadata: {
+              provider: chargeInput.provider,
+              model: chargeInput.model,
+              nodeId: chargeInput.nodeId,
+              workflowId: chargeInput.workflowId,
+              runId: chargeInput.runId,
+              attemptCount: chargeInput.attemptCount,
+              turn: chargeInput.turn,
+              inputTokens: chargeInput.inputTokens,
+              outputTokens: chargeInput.outputTokens,
+            },
+          });
+        }
+      );
+    },
+  };
+
   const executorRegistry =
     input?.executorRegistry ??
     (() => {
@@ -269,6 +332,7 @@ export async function processWorkflowRunJob(
         getGithubApiBaseUrl,
         loadConnectorSecretValue,
         loadToolsetById,
+        managedCredits,
       });
 
       return buildExecutorRegistry({
@@ -1175,10 +1239,71 @@ export async function startWorkflowWorker(input?: {
     };
   };
 
+  const managedCredits = {
+    ensureAvailable: async (creditsInput: { organizationId: string; userId: string; minCredits: number }) => {
+      const minCredits = Math.max(0, Math.floor(creditsInput.minCredits));
+      const row = await withTenantContext(
+        pool,
+        { userId: creditsInput.userId, organizationId: creditsInput.organizationId },
+        async (tenantDb) => {
+          const existing = await getOrganizationCreditBalance(tenantDb, { organizationId: creditsInput.organizationId });
+          return existing ?? (await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: creditsInput.organizationId }));
+        }
+      );
+      return row.balanceCredits >= minCredits;
+    },
+    charge: async (chargeInput: {
+      organizationId: string;
+      userId: string;
+      workflowId: string;
+      runId: string;
+      nodeId: string;
+      attemptCount: number;
+      provider: "openai" | "anthropic";
+      model: string;
+      turn: number;
+      credits: number;
+      inputTokens: number;
+      outputTokens: number;
+    }) => {
+      const credits = Math.max(0, Math.floor(chargeInput.credits));
+      if (credits <= 0) {
+        return;
+      }
+
+      await withTenantContext(
+        pool,
+        { userId: chargeInput.userId, organizationId: chargeInput.organizationId },
+        async (tenantDb) => {
+          await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: chargeInput.organizationId });
+          await tryDebitOrganizationCredits(tenantDb, {
+            organizationId: chargeInput.organizationId,
+            credits,
+            reason: "llm_usage",
+            workflowRunId: chargeInput.runId,
+            createdByUserId: null,
+            metadata: {
+              provider: chargeInput.provider,
+              model: chargeInput.model,
+              nodeId: chargeInput.nodeId,
+              workflowId: chargeInput.workflowId,
+              runId: chargeInput.runId,
+              attemptCount: chargeInput.attemptCount,
+              turn: chargeInput.turn,
+              inputTokens: chargeInput.inputTokens,
+              outputTokens: chargeInput.outputTokens,
+            },
+          });
+        }
+      );
+    },
+  };
+
   const communityExecutors = getCommunityWorkflowNodeExecutors({
     getGithubApiBaseUrl,
     loadConnectorSecretValue,
     loadToolsetById,
+    managedCredits,
   });
 
   const executorRegistry = buildExecutorRegistry({ communityExecutors, enterpriseExecutors });

@@ -11,6 +11,17 @@ export type AgentToolContext = {
   nodeId: string;
   // The 1-based tool call index within the current agent loop.
   callIndex: number;
+  managedCredits?: {
+    ensureAvailable: (input: { minCredits: number }) => Promise<boolean>;
+    charge: (input: {
+      credits: number;
+      inputTokens: number;
+      outputTokens: number;
+      provider: "openai" | "anthropic";
+      model: string;
+      turn: number;
+    }) => Promise<void>;
+  } | null;
   toolAuthDefaults?: {
     connectors?: Record<string, { secretId: string }>;
   } | null;

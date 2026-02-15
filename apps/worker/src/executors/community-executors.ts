@@ -7,6 +7,23 @@ import { createAgentRunExecutor } from "../agent/agent-run-executor.js";
 export function getCommunityWorkflowNodeExecutors(input?: {
   getGithubApiBaseUrl?: () => string;
   loadConnectorSecretValue?: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
+  managedCredits?: {
+    ensureAvailable: (input: { organizationId: string; userId: string; minCredits: number }) => Promise<boolean>;
+    charge: (input: {
+      organizationId: string;
+      userId: string;
+      workflowId: string;
+      runId: string;
+      nodeId: string;
+      attemptCount: number;
+      provider: "openai" | "anthropic";
+      model: string;
+      turn: number;
+      credits: number;
+      inputTokens: number;
+      outputTokens: number;
+    }) => Promise<void>;
+  } | null;
   loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
     id: string;
     name: string;
@@ -33,6 +50,7 @@ export function getCommunityWorkflowNodeExecutors(input?: {
           createAgentRunExecutor({
             getGithubApiBaseUrl: input.getGithubApiBaseUrl,
             loadSecretValue: input.loadConnectorSecretValue,
+            ...(input.managedCredits ? { managedCredits: input.managedCredits } : {}),
             ...(input.loadToolsetById ? { loadToolsetById: input.loadToolsetById } : {}),
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),

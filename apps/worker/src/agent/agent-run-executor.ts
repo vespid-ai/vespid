@@ -143,6 +143,23 @@ function parseDefaultToolsetId(settings: unknown): string | null {
 export function createAgentRunExecutor(input: {
   getGithubApiBaseUrl: () => string;
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
+  managedCredits?: {
+    ensureAvailable: (input: { organizationId: string; userId: string; minCredits: number }) => Promise<boolean>;
+    charge: (input: {
+      organizationId: string;
+      userId: string;
+      workflowId: string;
+      runId: string;
+      nodeId: string;
+      attemptCount: number;
+      provider: "openai" | "anthropic";
+      model: string;
+      turn: number;
+      credits: number;
+      inputTokens: number;
+      outputTokens: number;
+    }) => Promise<void>;
+  } | null;
   loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
     id: string;
     name: string;
@@ -322,6 +339,32 @@ export function createAgentRunExecutor(input: {
         githubApiBaseUrl: input.getGithubApiBaseUrl(),
         loadSecretValue: input.loadSecretValue,
         fetchImpl,
+        managedCredits:
+          !node.config.llm.auth.secretId && input.managedCredits
+            ? {
+                ensureAvailable: ({ minCredits }) =>
+                  input.managedCredits!.ensureAvailable({
+                    organizationId: context.organizationId,
+                    userId: context.requestedByUserId,
+                    minCredits,
+                  }),
+                charge: ({ credits, inputTokens, outputTokens, provider, model, turn }) =>
+                  input.managedCredits!.charge({
+                    organizationId: context.organizationId,
+                    userId: context.requestedByUserId,
+                    workflowId: context.workflowId,
+                    runId: context.runId,
+                    nodeId: node.id,
+                    attemptCount: context.attemptCount,
+                    provider,
+                    model,
+                    turn,
+                    credits,
+                    inputTokens,
+                    outputTokens,
+                  }),
+              }
+            : null,
         config: {
           llm: { provider: node.config.llm.provider, model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
           prompt: normalizePrompt(node.config.prompt),
