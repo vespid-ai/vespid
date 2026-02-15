@@ -17,7 +17,7 @@ const legacyGithubIssueCreateNodeSchema = z.object({
 });
 
 export function createLegacyGithubIssueCreateExecutor(input: {
-  githubApiBaseUrl: string;
+  getGithubApiBaseUrl: () => string;
   loadConnectorSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor {
@@ -52,4 +52,3 @@ export function createLegacyGithubIssueCreateExecutor(input: {
     },
   };
 }
-

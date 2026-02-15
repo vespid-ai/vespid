@@ -266,7 +266,7 @@ export async function processWorkflowRunJob(
         : null;
 
       const communityExecutors = getCommunityWorkflowNodeExecutors({
-        githubApiBaseUrl: getGithubApiBaseUrl(),
+        getGithubApiBaseUrl,
         loadConnectorSecretValue,
         loadToolsetById,
       });
@@ -1048,7 +1048,7 @@ export async function startWorkflowWorker(input?: {
   };
 
   const communityExecutors = getCommunityWorkflowNodeExecutors({
-    githubApiBaseUrl: getGithubApiBaseUrl(),
+    getGithubApiBaseUrl,
     loadConnectorSecretValue,
     loadToolsetById,
   });

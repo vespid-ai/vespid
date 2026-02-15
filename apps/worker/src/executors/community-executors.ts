@@ -5,7 +5,7 @@ import { createAgentExecuteExecutor } from "./agent-execute.js";
 import { createAgentRunExecutor } from "../agent/agent-run-executor.js";
 
 export function getCommunityWorkflowNodeExecutors(input?: {
-  githubApiBaseUrl?: string;
+  getGithubApiBaseUrl?: () => string;
   loadConnectorSecretValue?: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
     id: string;
@@ -28,21 +28,21 @@ export function getCommunityWorkflowNodeExecutors(input?: {
         };
       },
     },
-    ...(input?.githubApiBaseUrl && input.loadConnectorSecretValue
+    ...(input?.getGithubApiBaseUrl && input.loadConnectorSecretValue
       ? [
           createAgentRunExecutor({
-            githubApiBaseUrl: input.githubApiBaseUrl,
+            getGithubApiBaseUrl: input.getGithubApiBaseUrl,
             loadSecretValue: input.loadConnectorSecretValue,
             ...(input.loadToolsetById ? { loadToolsetById: input.loadToolsetById } : {}),
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),
           createConnectorActionExecutor({
-            githubApiBaseUrl: input.githubApiBaseUrl,
+            getGithubApiBaseUrl: input.getGithubApiBaseUrl,
             loadConnectorSecretValue: input.loadConnectorSecretValue,
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),
           createLegacyGithubIssueCreateExecutor({
-            githubApiBaseUrl: input.githubApiBaseUrl,
+            getGithubApiBaseUrl: input.getGithubApiBaseUrl,
             loadConnectorSecretValue: input.loadConnectorSecretValue,
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),

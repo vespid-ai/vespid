@@ -141,7 +141,7 @@ function parseDefaultToolsetId(settings: unknown): string | null {
 }
 
 export function createAgentRunExecutor(input: {
-  githubApiBaseUrl: string;
+  getGithubApiBaseUrl: () => string;
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
     id: string;
@@ -182,6 +182,7 @@ export function createAgentRunExecutor(input: {
       }
 
       if (execution.mode === "node") {
+        const githubApiBaseUrl = input.getGithubApiBaseUrl();
         // Resume path: the continuation worker stores the remote result under runtime.pendingRemoteResult.
         if (context.pendingRemoteResult) {
           const pending = context.pendingRemoteResult as any;
@@ -289,7 +290,7 @@ export function createAgentRunExecutor(input: {
               ...(context.steps !== undefined ? { steps: context.steps } : {}),
               ...(context.organizationSettings !== undefined ? { organizationSettings: context.organizationSettings } : {}),
               ...(toolsetPayload ? { toolset: toolsetPayload } : {}),
-              env: { githubApiBaseUrl: input.githubApiBaseUrl },
+              env: { githubApiBaseUrl },
               secrets: {
                 ...(llmApiKey && llmApiKey.trim().length > 0 ? { llmApiKey } : {}),
                 ...(Object.keys(connectorSecretsByConnectorId).length > 0
@@ -318,7 +319,7 @@ export function createAgentRunExecutor(input: {
         organizationSettings: context.organizationSettings,
         runtime: context.runtime,
         pendingRemoteResult: context.pendingRemoteResult,
-        githubApiBaseUrl: input.githubApiBaseUrl,
+        githubApiBaseUrl: input.getGithubApiBaseUrl(),
         loadSecretValue: input.loadSecretValue,
         fetchImpl,
         config: {

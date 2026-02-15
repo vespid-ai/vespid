@@ -141,6 +141,11 @@ export type GatewayAgentExecuteResultMessage = {
   error?: string;
 };
 
+export type GatewayAgentExecuteReceivedMessage = {
+  type: "execute_received";
+  requestId: string;
+};
+
 export type GatewayAgentExecuteEventMessage = {
   type: "execute_event";
   requestId: string;
@@ -155,4 +160,11 @@ export type GatewayServerExecuteMessage = {
   kind: GatewayExecutionKind;
   payload: unknown;
   secret?: string;
+};
+
+// Gateway -> agent acknowledgement for at-least-once result delivery.
+// Agents may resend execute_result frames on reconnect until acked.
+export type GatewayServerExecuteAckMessage = {
+  type: "execute_ack";
+  requestId: string;
 };

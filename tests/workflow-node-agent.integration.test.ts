@@ -337,7 +337,6 @@ describe("workflow node-agent integration", () => {
   let gateway: Awaited<ReturnType<typeof buildGatewayServer>> | null = null;
   let workerRuntime: Awaited<ReturnType<typeof startWorkflowWorker>> | null = null;
   let githubStub: Awaited<ReturnType<typeof startGithubStub>> | null = null;
-  let stubAgent: Awaited<ReturnType<typeof startStubAgent>> | null = null;
   let gatewayBaseUrl: string | null = null;
   let gatewayWsUrl: string | null = null;
 
@@ -375,9 +374,6 @@ describe("workflow node-agent integration", () => {
   });
 
   afterAll(async () => {
-    if (stubAgent) {
-      await stubAgent.close();
-    }
     if (workerRuntime) {
       await workerRuntime.close();
     }
@@ -397,6 +393,7 @@ describe("workflow node-agent integration", () => {
       return;
     }
 
+    let stubAgent: Awaited<ReturnType<typeof startStubAgent>> | null = null;
     const signup = await api.inject({
       method: "POST",
       url: "/v1/auth/signup",
@@ -590,6 +587,8 @@ describe("workflow node-agent integration", () => {
     const agentPayload = agentSuccess?.payload as { taskId?: unknown } | undefined;
     expect(typeof agentPayload?.taskId).toBe("string");
     expect(String(agentPayload?.taskId)).toContain("-remote-task");
+
+    await stubAgent.close();
   });
 
   it("completes remote execution across a gateway restart", async () => {
