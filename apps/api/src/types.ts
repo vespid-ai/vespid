@@ -255,6 +255,12 @@ export interface AppStore {
     limit: number;
     cursor?: { createdAt: string; id: string } | null;
   }): Promise<{ workflows: WorkflowRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
+  listWorkflowRevisions(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    limit: number;
+  }): Promise<{ workflows: WorkflowRecord[] }>;
   getWorkflowById(input: {
     organizationId: string;
     workflowId: string;

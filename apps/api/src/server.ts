@@ -2591,6 +2591,31 @@ export async function buildServer(input?: {
     return { workflow };
   });
 
+  server.get("/v1/orgs/:orgId/workflows/:workflowId/revisions", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const queryParsed = z
+      .object({ limit: z.coerce.number().int().min(1).max(200).optional() })
+      .safeParse(request.query ?? {});
+    if (!queryParsed.success) {
+      throw badRequest("Invalid query", queryParsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const workflows = await store.listWorkflowRevisions({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+      limit: queryParsed.data.limit ?? 50,
+    });
+
+    return workflows;
+  });
+
   server.put("/v1/orgs/:orgId/workflows/:workflowId", async (request) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string; workflowId?: string };

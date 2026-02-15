@@ -1325,6 +1325,16 @@ describe("api hardening foundation", () => {
     expect(cloneRes.statusCode).toBe(201);
     const clonedWorkflowId = (cloneRes.json() as { workflow: { id: string; status: string } }).workflow.id;
 
+    const revisionsRes = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/revisions?limit=50`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(revisionsRes.statusCode).toBe(200);
+    const revisionsBody = revisionsRes.json() as { workflows: Array<{ id: string; status: string; revision: number }> };
+    expect(revisionsBody.workflows.some((wf) => wf.id === workflowId)).toBe(true);
+    expect(revisionsBody.workflows.some((wf) => wf.id === clonedWorkflowId)).toBe(true);
+
     const updateClone = await server.inject({
       method: "PUT",
       url: `/v1/orgs/${orgId}/workflows/${clonedWorkflowId}`,

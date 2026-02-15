@@ -261,6 +261,7 @@
     "detail": {
       "tabOverview": "概览",
       "tabEditor": "编辑器",
+      "tabRevisions": "版本历史",
       "runsTitle": "运行",
       "runsHint": "该工作流的最近运行记录。",
       "noRunsTitle": "暂无运行",
@@ -275,6 +276,9 @@
       "familyId": "Family ID",
       "revision": "Revision",
       "sourceWorkflowId": "来源工作流 ID",
+      "revisionsTitle": "版本历史",
+      "revisionsHint": "发布版本不可修改。可从任意已发布版本创建新草稿。",
+      "revisionsEmpty": "暂无版本记录。",
       "queueRunTitle": "排队运行",
       "queueRunHint": "只有成功入队时 /runs 才应返回成功。",
       "runInputLabel": "运行输入 (JSON)",

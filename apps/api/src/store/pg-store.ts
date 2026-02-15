@@ -51,6 +51,7 @@ import {
   createWorkflow as dbCreateWorkflow,
   createWorkflowDraftFromWorkflow as dbCreateWorkflowDraftFromWorkflow,
   listWorkflows as dbListWorkflows,
+  listWorkflowRevisions as dbListWorkflowRevisions,
   getWorkflowById as dbGetWorkflowById,
   updateWorkflowDraft as dbUpdateWorkflowDraft,
   publishWorkflow as dbPublishWorkflow,
@@ -562,6 +563,51 @@ export class PgAppStore implements AppStore {
       nextCursor: result.nextCursor
         ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id }
         : null,
+    };
+  }
+
+  async listWorkflowRevisions(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    limit: number;
+  }) {
+    const existing = await this.getWorkflowById({
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      actorUserId: input.actorUserId,
+    });
+    if (!existing) {
+      return { workflows: [] };
+    }
+
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowRevisions(db, {
+          organizationId: input.organizationId,
+          familyId: existing.familyId,
+          limit: input.limit,
+        })
+    );
+
+    return {
+      workflows: rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        familyId: (row as any).familyId,
+        revision: (row as any).revision,
+        sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
+        name: row.name,
+        status: row.status as "draft" | "published",
+        version: row.version,
+        dsl: row.dsl,
+        editorState: (row as any).editorState ?? null,
+        createdByUserId: row.createdByUserId,
+        publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
+        createdAt: toIso(row.createdAt),
+        updatedAt: toIso(row.updatedAt),
+      })),
     };
   }
 

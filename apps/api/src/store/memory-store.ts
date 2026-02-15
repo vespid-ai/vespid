@@ -427,6 +427,32 @@ export class MemoryAppStore implements AppStore {
     return { workflows, nextCursor };
   }
 
+  async listWorkflowRevisions(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    limit: number;
+  }): Promise<{ workflows: WorkflowRecord[] }> {
+    const existing = this.workflows.get(input.workflowId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return { workflows: [] };
+    }
+    const familyId = existing.familyId ?? existing.id;
+    const limit = Math.min(200, Math.max(1, input.limit));
+    const workflows = [...this.workflows.values()]
+      .filter((wf) => wf.organizationId === input.organizationId && (wf.familyId ?? wf.id) === familyId)
+      .sort((a, b) => {
+        const ar = typeof a.revision === "number" ? a.revision : 0;
+        const br = typeof b.revision === "number" ? b.revision : 0;
+        if (ar !== br) {
+          return br - ar;
+        }
+        return (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+      })
+      .slice(0, limit);
+    return { workflows };
+  }
+
   async getWorkflowById(input: {
     organizationId: string;
     workflowId: string;

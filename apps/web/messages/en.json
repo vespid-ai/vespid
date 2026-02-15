@@ -261,6 +261,7 @@
     "detail": {
       "tabOverview": "Overview",
       "tabEditor": "Editor",
+      "tabRevisions": "Revisions",
       "runsTitle": "Runs",
       "runsHint": "Latest runs for this workflow.",
       "noRunsTitle": "No runs yet",
@@ -275,6 +276,9 @@
       "familyId": "Family ID",
       "revision": "Revision",
       "sourceWorkflowId": "Source workflow ID",
+      "revisionsTitle": "Revision history",
+      "revisionsHint": "Published revisions are immutable. Create a new draft from any published revision.",
+      "revisionsEmpty": "No revisions found.",
       "queueRunTitle": "Queue run",
       "queueRunHint": "POST /runs must succeed only when enqueue succeeds.",
       "runInputLabel": "Run input (JSON)",

@@ -19,11 +19,13 @@ import { Textarea } from "../../../../../components/ui/textarea";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import {
   type WorkflowRun,
+  useClonePublishedWorkflowToDraft,
   useCreateWorkflowDraftFromWorkflow,
   usePublishWorkflow,
   useRunWorkflow,
   useRuns,
   useWorkflow,
+  useWorkflowRevisions,
 } from "../../../../../lib/hooks/use-workflows";
 import { addRecentRunId, addRecentWorkflowId, getRecentRunIds } from "../../../../../lib/recents";
 
@@ -50,9 +52,11 @@ export default function WorkflowDetailPage() {
 
   const workflowQuery = useWorkflow(orgId, workflowId);
   const runsQuery = useRuns(orgId, workflowId);
+  const revisionsQuery = useWorkflowRevisions(orgId, workflowId);
 
   const publish = usePublishWorkflow(orgId, workflowId);
   const createDraft = useCreateWorkflowDraftFromWorkflow(orgId, workflowId);
+  const clonePublished = useClonePublishedWorkflowToDraft(orgId);
   const run = useRunWorkflow(orgId, workflowId);
 
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
@@ -100,6 +104,65 @@ export default function WorkflowDetailPage() {
       },
     ] as const;
   }, [locale, t, workflowId]);
+
+  const revisionColumns = useMemo(() => {
+    return [
+      {
+        header: t("workflows.detail.revision"),
+        accessorKey: "revision",
+        cell: ({ row }: any) => <span className="font-mono text-xs">{String(row.original.revision ?? "-")}</span>,
+      },
+      {
+        header: t("workflows.detail.table.status"),
+        accessorKey: "status",
+        cell: ({ row }: any) => {
+          const status = String(row.original.status ?? "");
+          const variant = status === "published" ? "ok" : "neutral";
+          return <Badge variant={variant as any}>{status}</Badge>;
+        },
+      },
+      {
+        header: "Updated",
+        accessorKey: "updatedAt",
+        cell: ({ row }: any) => (
+          <span className="font-mono text-xs text-muted">{String(row.original.updatedAt ?? "").slice(0, 19)}</span>
+        ),
+      },
+      {
+        header: "ID",
+        accessorKey: "id",
+        cell: ({ row }: any) => <span className="font-mono text-xs text-muted">{String(row.original.id ?? "").slice(0, 8)}</span>,
+      },
+      {
+        header: t("workflows.detail.table.open"),
+        id: "open",
+        cell: ({ row }: any) => (
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/workflows/${row.original.id}`)}>
+              {t("workflows.list.open")}
+            </Button>
+            {row.original.status === "published" ? (
+              <Button
+                size="sm"
+                variant="accent"
+                onClick={async () => {
+                  try {
+                    const payload = await clonePublished.mutateAsync({ workflowId: row.original.id });
+                    toast.success(t("workflows.detail.draftCreated"));
+                    router.push(`/${locale}/workflows/${payload.workflow.id}`);
+                  } catch {
+                    toast.error(t("workflows.detail.draftCreateFailed"));
+                  }
+                }}
+              >
+                {t("workflows.detail.createDraft")}
+              </Button>
+            ) : null}
+          </div>
+        ),
+      },
+    ] as const;
+  }, [clonePublished, locale, router, t]);
 
   async function doPublish() {
     if (!orgId) {
@@ -205,6 +268,7 @@ export default function WorkflowDetailPage() {
           <TabsTrigger value="runs">{t("workflows.runs")}</TabsTrigger>
           <TabsTrigger value="overview">{t("workflows.detail.tabOverview")}</TabsTrigger>
           <TabsTrigger value="editor">{t("workflows.detail.tabEditor")}</TabsTrigger>
+          <TabsTrigger value="revisions">{t("workflows.detail.tabRevisions")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="runs" className="mt-4">
@@ -321,6 +385,24 @@ export default function WorkflowDetailPage() {
                   <Link href={`/${locale}/workflows/${workflowId}/graph`}>Open Graph Editor</Link>
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="revisions" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("workflows.detail.revisionsTitle")}</CardTitle>
+              <CardDescription>{t("workflows.detail.revisionsHint")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {revisionsQuery.isLoading ? (
+                <div className="text-sm text-muted">{t("common.loading")}</div>
+              ) : (revisionsQuery.data?.workflows ?? []).length === 0 ? (
+                <div className="text-sm text-muted">{t("workflows.detail.revisionsEmpty")}</div>
+              ) : (
+                <DataTable<any> data={revisionsQuery.data?.workflows ?? []} columns={revisionColumns as any} />
+              )}
             </CardContent>
           </Card>
         </TabsContent>

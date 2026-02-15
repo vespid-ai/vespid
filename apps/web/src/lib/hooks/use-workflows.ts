@@ -45,6 +45,21 @@ export function useWorkflow(orgId: string | null, workflowId: string | null) {
   });
 }
 
+export function useWorkflowRevisions(orgId: string | null, workflowId: string | null) {
+  return useQuery({
+    queryKey: ["workflowRevisions", orgId, workflowId],
+    enabled: Boolean(orgId && workflowId),
+    queryFn: async () => {
+      return apiFetchJson<{ workflows: Workflow[] }>(
+        `/v1/orgs/${orgId}/workflows/${workflowId}/revisions?limit=200`,
+        { method: "GET" },
+        { orgScoped: true }
+      );
+    },
+    refetchInterval: 10_000,
+  });
+}
+
 export function useWorkflows(orgId: string | null) {
   return useQuery({
     queryKey: ["workflows", orgId],
@@ -147,6 +162,27 @@ export function useCreateWorkflowDraftFromWorkflow(orgId: string | null, workflo
     mutationFn: async () => {
       return apiFetchJson<{ workflow: Workflow }>(
         `/v1/orgs/${orgId}/workflows/${workflowId}/drafts`,
+        { method: "POST" },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async (data) => {
+      const newId = data.workflow?.id ?? null;
+      await queryClient.invalidateQueries({ queryKey: ["workflows", orgId] });
+      if (newId) {
+        await queryClient.invalidateQueries({ queryKey: ["workflow", orgId, newId] });
+      }
+    },
+  });
+}
+
+export function useClonePublishedWorkflowToDraft(orgId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { workflowId: string }) => {
+      return apiFetchJson<{ workflow: Workflow }>(
+        `/v1/orgs/${orgId}/workflows/${input.workflowId}/drafts`,
         { method: "POST" },
         { orgScoped: true }
       );

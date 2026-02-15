@@ -477,6 +477,24 @@ export async function listWorkflows(
   return { rows, nextCursor };
 }
 
+export async function listWorkflowRevisions(
+  db: Db,
+  input: {
+    organizationId: string;
+    familyId: string;
+    limit: number;
+  }
+) {
+  const limit = Math.min(200, Math.max(1, input.limit));
+  const rows = await db
+    .select()
+    .from(workflows)
+    .where(and(eq(workflows.organizationId, input.organizationId), eq(workflows.familyId, input.familyId)))
+    .orderBy(desc(workflows.revision), desc(workflows.createdAt), desc(workflows.id))
+    .limit(limit);
+  return rows;
+}
+
 export async function createWorkflowRun(
   db: Db,
   input: {
