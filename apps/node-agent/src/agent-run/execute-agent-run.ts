@@ -10,6 +10,14 @@ const agentRunRemotePayloadSchema = z.object({
   node: z.unknown(),
   policyToolsAllow: z.array(z.string().min(1).max(120)).optional(),
   effectiveToolsAllow: z.array(z.string().min(1).max(120)).optional(),
+  toolset: z
+    .object({
+      id: z.string().uuid(),
+      name: z.string().min(1).max(120),
+      mcpServers: z.unknown(),
+      agentSkills: z.unknown(),
+    })
+    .optional(),
   runId: z.string().uuid(),
   workflowId: z.string().uuid(),
   attemptCount: z.number().int().min(1).max(1000),
@@ -61,6 +69,7 @@ export async function executeAgentRun(input: {
     node,
     policyToolsAllow: payloadParsed.data.policyToolsAllow ?? null,
     effectiveToolsAllow: payloadParsed.data.effectiveToolsAllow ?? null,
+    toolset: payloadParsed.data.toolset ?? null,
     runInput: payloadParsed.data.runInput,
     steps: payloadParsed.data.steps,
     organizationSettings: payloadParsed.data.organizationSettings,

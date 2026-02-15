@@ -50,6 +50,7 @@ const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
   config: z.object({
+    toolsetId: z.string().uuid().optional(),
     llm: z.object({
       provider: z.enum(["openai", "anthropic"]).default("openai"),
       model: z.string().min(1).max(120),
@@ -131,9 +132,23 @@ function normalizePrompt(prompt: { system?: string | undefined; instructions: st
   };
 }
 
+function parseDefaultToolsetId(settings: unknown): string | null {
+  if (!settings || typeof settings !== "object") return null;
+  const toolsets = (settings as any).toolsets;
+  if (!toolsets || typeof toolsets !== "object") return null;
+  const id = (toolsets as any).defaultToolsetId;
+  return typeof id === "string" && id.trim().length > 0 ? id : null;
+}
+
 export function createAgentRunExecutor(input: {
   githubApiBaseUrl: string;
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
+  loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
+    id: string;
+    name: string;
+    mcpServers: unknown;
+    agentSkills: unknown;
+  } | null>;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor {
   const fetchImpl = input.fetchImpl ?? fetch;
@@ -220,6 +235,33 @@ export function createAgentRunExecutor(input: {
         const selector = execution.selector ?? null;
         const timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, node.config.limits.timeoutMs));
 
+        let toolsetPayload: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null = null;
+        if (engineId === "claude.agent-sdk.v1") {
+          const effectiveToolsetId = node.config.toolsetId ?? parseDefaultToolsetId(context.organizationSettings);
+          if (effectiveToolsetId) {
+            if (!input.loadToolsetById) {
+              return { status: "failed", error: "TOOLSET_LOADER_NOT_CONFIGURED" };
+            }
+            const loaded = await input.loadToolsetById({ organizationId: context.organizationId, toolsetId: effectiveToolsetId });
+            if (!loaded) {
+              return { status: "failed", error: "TOOLSET_NOT_FOUND" };
+            }
+            toolsetPayload = {
+              id: loaded.id,
+              name: loaded.name,
+              mcpServers: loaded.mcpServers ?? [],
+              agentSkills: loaded.agentSkills ?? [],
+            };
+            if (context.emitEvent) {
+              await context.emitEvent({
+                eventType: "agent_toolset_applied",
+                level: "info",
+                payload: { toolsetId: loaded.id, toolsetName: loaded.name },
+              });
+            }
+          }
+        }
+
         const nodeForRemote = {
           ...node,
           config: {
@@ -246,6 +288,7 @@ export function createAgentRunExecutor(input: {
               ...(context.runInput !== undefined ? { runInput: context.runInput } : {}),
               ...(context.steps !== undefined ? { steps: context.steps } : {}),
               ...(context.organizationSettings !== undefined ? { organizationSettings: context.organizationSettings } : {}),
+              ...(toolsetPayload ? { toolset: toolsetPayload } : {}),
               env: { githubApiBaseUrl: input.githubApiBaseUrl },
               secrets: {
                 ...(llmApiKey && llmApiKey.trim().length > 0 ? { llmApiKey } : {}),

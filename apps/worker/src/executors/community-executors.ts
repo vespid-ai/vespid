@@ -7,6 +7,12 @@ import { createAgentRunExecutor } from "../agent/agent-run-executor.js";
 export function getCommunityWorkflowNodeExecutors(input?: {
   githubApiBaseUrl?: string;
   loadConnectorSecretValue?: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
+  loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
+    id: string;
+    name: string;
+    mcpServers: unknown;
+    agentSkills: unknown;
+  } | null>;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor[] {
   return [
@@ -27,6 +33,7 @@ export function getCommunityWorkflowNodeExecutors(input?: {
           createAgentRunExecutor({
             githubApiBaseUrl: input.githubApiBaseUrl,
             loadSecretValue: input.loadConnectorSecretValue,
+            ...(input.loadToolsetById ? { loadToolsetById: input.loadToolsetById } : {}),
             ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
           }),
           createConnectorActionExecutor({

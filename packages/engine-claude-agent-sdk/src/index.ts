@@ -533,6 +533,128 @@ function sanitizeMcpToolName(toolId: string): string {
   return base.length > 64 ? base.slice(0, 64) : base;
 }
 
+const ENV_PLACEHOLDER_RE = /^\$\{ENV:([A-Z0-9_]{1,128})\}$/;
+const TOOLSET_ID_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/;
+
+function parseEnvPlaceholder(value: string): string | null {
+  const m = ENV_PLACEHOLDER_RE.exec(value);
+  return m ? (m[1] ?? null) : null;
+}
+
+function assertSafeRelativePath(p: string): void {
+  if (!p || typeof p !== "string") {
+    throw new Error("INVALID_SKILL_FILE_PATH");
+  }
+  if (p.includes("\0")) {
+    throw new Error("INVALID_SKILL_FILE_PATH");
+  }
+  if (p.startsWith("/") || p.startsWith("\\")) {
+    throw new Error("INVALID_SKILL_FILE_PATH");
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(p)) {
+    throw new Error("INVALID_SKILL_FILE_PATH");
+  }
+  if (p.includes("\\")) {
+    throw new Error("INVALID_SKILL_FILE_PATH");
+  }
+  const parts = p.split("/").filter(Boolean);
+  if (parts.some((part) => part === "." || part === "..")) {
+    throw new Error("INVALID_SKILL_FILE_PATH");
+  }
+}
+
+function resolvePlaceholderRecordOrThrow(record: Record<string, unknown> | null | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(record ?? {})) {
+    const raw = typeof v === "string" ? v : "";
+    const envName = parseEnvPlaceholder(raw);
+    if (!envName) {
+      throw new Error(`INVALID_MCP_PLACEHOLDER:${k}`);
+    }
+    const resolved = process.env[envName];
+    if (!resolved || resolved.trim().length === 0) {
+      throw new Error(`MCP_ENV_NOT_SET:${envName}`);
+    }
+    out[k] = resolved;
+  }
+  return out;
+}
+
+async function stageAgentSkillBundles(input: {
+  cwd: string;
+  toolsetId: string;
+  bundles: any[];
+}): Promise<{ skillsEnabled: boolean }> {
+  const bundles = Array.isArray(input.bundles) ? input.bundles : [];
+  const enabled = bundles.filter((b) => b && typeof b === "object" && (b.enabled ?? true) !== false);
+  if (enabled.length === 0) {
+    return { skillsEnabled: false };
+  }
+
+  const base = path.join(input.cwd, ".claude", "skills");
+  await ensureDir(base);
+  const resolvedBase = path.resolve(base);
+
+  let totalBytes = 0;
+  const maxTotalBytes = 2_000_000;
+  const maxUtf8Chars = 200_000;
+  const maxDecodedBytes = 500_000;
+
+  for (const bundle of enabled) {
+    if (bundle.format !== "agentskills-v1") {
+      throw new Error("INVALID_SKILL_BUNDLE");
+    }
+    const id = typeof bundle.id === "string" ? bundle.id : "";
+    if (!TOOLSET_ID_RE.test(id)) {
+      throw new Error("INVALID_SKILL_BUNDLE");
+    }
+    const files = Array.isArray(bundle.files) ? bundle.files : [];
+    const hasSkillMd = files.some((f: any) => f && typeof f === "object" && f.path === "SKILL.md");
+    if (!hasSkillMd) {
+      throw new Error("INVALID_SKILL_BUNDLE");
+    }
+
+    const skillDir = path.join(base, id);
+    await ensureDir(skillDir);
+    const resolvedSkillDir = path.resolve(skillDir);
+    assertSubpath(resolvedBase, resolvedSkillDir);
+
+    for (const file of files) {
+      const p = file && typeof file === "object" ? String(file.path ?? "") : "";
+      assertSafeRelativePath(p);
+
+      const resolvedFilePath = path.resolve(skillDir, p);
+      assertSubpath(resolvedSkillDir, resolvedFilePath);
+
+      const content = file && typeof file === "object" ? String(file.content ?? "") : "";
+      const encoding = file && typeof file === "object" && typeof file.encoding === "string" ? file.encoding : "utf8";
+
+      let bytes: Buffer;
+      if (encoding === "base64") {
+        bytes = Buffer.from(content, "base64");
+        if (bytes.length > maxDecodedBytes) {
+          throw new Error("SKILL_FILE_TOO_LARGE");
+        }
+      } else {
+        if (content.length > maxUtf8Chars) {
+          throw new Error("SKILL_FILE_TOO_LARGE");
+        }
+        bytes = Buffer.from(content, "utf8");
+      }
+
+      totalBytes += bytes.length;
+      if (totalBytes > maxTotalBytes) {
+        throw new Error("SKILL_BUNDLE_TOO_LARGE");
+      }
+
+      await ensureDir(path.dirname(resolvedFilePath));
+      await fs.writeFile(resolvedFilePath, bytes);
+    }
+  }
+
+  return { skillsEnabled: true };
+}
+
 function renderTemplate(template: string, vars: Record<string, unknown>): string {
   return template.replace(/\\{\\{\\s*([a-zA-Z0-9_]+)\\s*\\}\\}/g, (_m, key) => {
     const value = vars[key];
@@ -1007,6 +1129,82 @@ export function createEngineRunner() {
         attemptCount: input.attemptCount,
       });
 
+      const toolset = input && typeof input === "object" ? ((input as any).toolset ?? null) : null;
+      const toolsetId = toolset && typeof toolset === "object" && typeof (toolset as any).id === "string" ? String((toolset as any).id) : "toolset";
+      const mcpServersRaw = toolset && typeof toolset === "object" ? (toolset as any).mcpServers : null;
+      const agentSkillsRaw = toolset && typeof toolset === "object" ? (toolset as any).agentSkills : null;
+
+      let skillsEnabled = false;
+      try {
+        const staged = await stageAgentSkillBundles({
+          cwd,
+          toolsetId,
+          bundles: Array.isArray(agentSkillsRaw) ? agentSkillsRaw : [],
+        });
+        skillsEnabled = staged.skillsEnabled;
+      } catch (err) {
+        const error = err instanceof Error && err.message ? err.message : "SKILL_STAGING_FAILED";
+        return { ok: false as const, error };
+      }
+
+      const externalMcpServers: Record<string, any> = {};
+      const externalAllowedTools: string[] = [];
+      if (Array.isArray(mcpServersRaw)) {
+        for (const server of mcpServersRaw) {
+          if (!server || typeof server !== "object") {
+            continue;
+          }
+          if ((server as any).enabled === false) {
+            continue;
+          }
+
+          const name = typeof (server as any).name === "string" ? String((server as any).name) : "";
+          if (!name || name.trim().length === 0) {
+            continue;
+          }
+          if (name === "vespid-tools") {
+            return { ok: false as const, error: "MCP_SERVER_NAME_RESERVED" };
+          }
+          if (externalMcpServers[name]) {
+            return { ok: false as const, error: "MCP_SERVER_NAME_CONFLICT" };
+          }
+
+          const transport = typeof (server as any).transport === "string" ? String((server as any).transport) : "";
+          if (transport === "stdio") {
+            const command = typeof (server as any).command === "string" ? String((server as any).command) : "";
+            if (!command || command.trim().length === 0) {
+              return { ok: false as const, error: `MCP_SERVER_INVALID:${name}` };
+            }
+            const args = Array.isArray((server as any).args) ? (server as any).args.map((a: any) => String(a)) : [];
+            const envResolved = resolvePlaceholderRecordOrThrow((server as any).env ?? null);
+            externalMcpServers[name] = {
+              type: "stdio",
+              command,
+              args,
+              env: envResolved,
+            };
+          } else if (transport === "http") {
+            const url = typeof (server as any).url === "string" ? String((server as any).url) : "";
+            if (!url || url.trim().length === 0) {
+              return { ok: false as const, error: `MCP_SERVER_INVALID:${name}` };
+            }
+            const headersResolved = resolvePlaceholderRecordOrThrow((server as any).headers ?? null);
+            externalMcpServers[name] = {
+              type: "http",
+              url,
+              headers: headersResolved,
+            };
+          } else {
+            return { ok: false as const, error: `MCP_SERVER_INVALID:${name}` };
+          }
+
+          externalAllowedTools.push(`mcp__${name}__*`);
+        }
+      }
+
+      const mcpServers = { "vespid-tools": mcpServer, ...externalMcpServers };
+      const allowedTools = [...allowedMcpToolNames, ...externalAllowedTools, ...(skillsEnabled ? ["Skill"] : [])];
+
       const queryIterator = query({
         prompt: (async function* () {
           // Use streaming input mode (required for MCP servers).
@@ -1021,8 +1219,9 @@ export function createEngineRunner() {
           systemPrompt,
           tools: [],
           pathToClaudeCodeExecutable: claudePath,
-          mcpServers: { "vespid-tools": mcpServer },
-          allowedTools: allowedMcpToolNames,
+          ...(skillsEnabled ? { settingSources: ["project"] } : {}),
+          mcpServers,
+          allowedTools,
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
         } as any,

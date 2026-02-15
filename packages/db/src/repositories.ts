@@ -4,6 +4,7 @@ import type { Db } from "./client.js";
 import {
   authSessions,
   agentPairingTokens,
+  agentToolsets,
   connectorSecrets,
   organizationAgents,
   memberships,
@@ -1147,6 +1148,206 @@ export async function revokeOrganizationAgent(
     .update(organizationAgents)
     .set({ revokedAt: new Date() })
     .where(and(eq(organizationAgents.organizationId, input.organizationId), eq(organizationAgents.id, input.agentId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function createAgentToolset(
+  db: Db,
+  input: {
+    organizationId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org" | "public";
+    publicSlug?: string | null;
+    publishedAt?: Date | null;
+    mcpServers: unknown;
+    agentSkills: unknown;
+    adoptedFrom?: unknown;
+    createdByUserId: string;
+    updatedByUserId: string;
+  }
+) {
+  const [row] = await db
+    .insert(agentToolsets)
+    .values({
+      organizationId: input.organizationId,
+      name: input.name,
+      description: input.description ?? null,
+      visibility: input.visibility,
+      publicSlug: input.publicSlug ?? null,
+      publishedAt: input.publishedAt ?? null,
+      mcpServers: input.mcpServers as any,
+      agentSkills: input.agentSkills as any,
+      adoptedFrom: (input.adoptedFrom ?? null) as any,
+      createdByUserId: input.createdByUserId,
+      updatedByUserId: input.updatedByUserId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create toolset");
+  }
+  return row;
+}
+
+export async function listAgentToolsetsByOrg(db: Db, input: { organizationId: string }) {
+  return await db
+    .select()
+    .from(agentToolsets)
+    .where(eq(agentToolsets.organizationId, input.organizationId))
+    .orderBy(desc(agentToolsets.updatedAt));
+}
+
+export async function getAgentToolsetById(db: Db, input: { organizationId: string; toolsetId: string }) {
+  const [row] = await db
+    .select()
+    .from(agentToolsets)
+    .where(and(eq(agentToolsets.organizationId, input.organizationId), eq(agentToolsets.id, input.toolsetId)));
+  return row ?? null;
+}
+
+export async function updateAgentToolset(
+  db: Db,
+  input: {
+    organizationId: string;
+    toolsetId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org" | "public";
+    publicSlug?: string | null;
+    publishedAt?: Date | null;
+    mcpServers: unknown;
+    agentSkills: unknown;
+    adoptedFrom?: unknown;
+    updatedByUserId: string;
+  }
+) {
+  const [row] = await db
+    .update(agentToolsets)
+    .set({
+      name: input.name,
+      description: input.description ?? null,
+      visibility: input.visibility,
+      publicSlug: input.publicSlug ?? null,
+      publishedAt: input.publishedAt ?? null,
+      mcpServers: input.mcpServers as any,
+      agentSkills: input.agentSkills as any,
+      adoptedFrom: (input.adoptedFrom ?? null) as any,
+      updatedByUserId: input.updatedByUserId,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agentToolsets.organizationId, input.organizationId), eq(agentToolsets.id, input.toolsetId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function deleteAgentToolset(db: Db, input: { organizationId: string; toolsetId: string }) {
+  const [row] = await db
+    .delete(agentToolsets)
+    .where(and(eq(agentToolsets.organizationId, input.organizationId), eq(agentToolsets.id, input.toolsetId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function publishAgentToolset(
+  db: Db,
+  input: { organizationId: string; toolsetId: string; publicSlug: string; updatedByUserId: string }
+) {
+  try {
+    const [row] = await db
+      .update(agentToolsets)
+      .set({
+        visibility: "public",
+        publicSlug: input.publicSlug,
+        publishedAt: new Date(),
+        updatedByUserId: input.updatedByUserId,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(agentToolsets.organizationId, input.organizationId), eq(agentToolsets.id, input.toolsetId)))
+      .returning();
+    return row ?? null;
+  } catch (err) {
+    if (isPgUniqueViolation(err)) {
+      throw new Error("PUBLIC_SLUG_CONFLICT");
+    }
+    throw err;
+  }
+}
+
+export async function unpublishAgentToolset(
+  db: Db,
+  input: { organizationId: string; toolsetId: string; visibility: "private" | "org"; updatedByUserId: string }
+) {
+  const [row] = await db
+    .update(agentToolsets)
+    .set({
+      visibility: input.visibility,
+      publicSlug: null,
+      publishedAt: null,
+      updatedByUserId: input.updatedByUserId,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agentToolsets.organizationId, input.organizationId), eq(agentToolsets.id, input.toolsetId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function listPublicAgentToolsets(db: Db) {
+  return await db
+    .select()
+    .from(agentToolsets)
+    .where(eq(agentToolsets.visibility, "public"))
+    .orderBy(desc(agentToolsets.publishedAt));
+}
+
+export async function getPublicAgentToolsetBySlug(db: Db, input: { publicSlug: string }) {
+  const [row] = await db
+    .select()
+    .from(agentToolsets)
+    .where(and(eq(agentToolsets.visibility, "public"), eq(agentToolsets.publicSlug, input.publicSlug)));
+  return row ?? null;
+}
+
+export async function adoptPublicAgentToolset(
+  db: Db,
+  input: {
+    organizationId: string;
+    publicSlug: string;
+    nameOverride?: string | null;
+    descriptionOverride?: string | null;
+    actorUserId: string;
+  }
+) {
+  const source = await getPublicAgentToolsetBySlug(db, { publicSlug: input.publicSlug });
+  if (!source) {
+    return null;
+  }
+
+  const adoptedFrom = {
+    toolsetId: source.id,
+    publicSlug: source.publicSlug ?? null,
+  };
+
+  const [row] = await db
+    .insert(agentToolsets)
+    .values({
+      organizationId: input.organizationId,
+      name: input.nameOverride && input.nameOverride.trim().length > 0 ? input.nameOverride : source.name,
+      description:
+        input.descriptionOverride !== undefined && input.descriptionOverride !== null ? input.descriptionOverride : (source.description ?? null),
+      visibility: "org",
+      publicSlug: null,
+      publishedAt: null,
+      mcpServers: source.mcpServers as any,
+      agentSkills: source.agentSkills as any,
+      adoptedFrom: adoptedFrom as any,
+      createdByUserId: input.actorUserId,
+      updatedByUserId: input.actorUserId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
     .returning();
   return row ?? null;
 }

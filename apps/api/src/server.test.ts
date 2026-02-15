@@ -380,6 +380,176 @@ describe("api hardening foundation", () => {
     expect((pairingReuse.json() as { code?: string }).code).toBe("PAIRING_TOKEN_INVALID");
   });
 
+  it("supports toolsets library + public gallery + adopt flow", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `toolset-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = bearerToken(signup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+      payload: {
+        name: "Toolset Org",
+        slug: `toolset-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const badPlaceholder = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Bad MCP",
+        visibility: "private",
+        mcpServers: [{ name: "m1", transport: "http", url: "https://example.com", headers: { Authorization: "plain-token" } }],
+        agentSkills: [],
+      },
+    });
+    expect(badPlaceholder.statusCode).toBe(400);
+    expect((badPlaceholder.json() as any).code).toBe("INVALID_MCP_PLACEHOLDER");
+
+    const badSkill = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Bad Skill",
+        visibility: "private",
+        mcpServers: [],
+        agentSkills: [
+          {
+            format: "agentskills-v1",
+            id: "s1",
+            name: "Skill 1",
+            entry: "SKILL.md",
+            files: [{ path: "README.md", content: "x" }],
+          },
+        ],
+      },
+    });
+    expect(badSkill.statusCode).toBe(400);
+    expect((badSkill.json() as any).code).toBe("INVALID_SKILL_BUNDLE");
+
+    const create = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "My Toolset",
+        description: "Test toolset",
+        visibility: "org",
+        mcpServers: [
+          {
+            name: "mcp-a",
+            transport: "stdio",
+            command: "echo",
+            args: ["hello"],
+            env: { TOKEN: "${ENV:TEST_TOKEN}" },
+          },
+        ],
+        agentSkills: [
+          {
+            format: "agentskills-v1",
+            id: "hello-skill",
+            name: "Hello Skill",
+            entry: "SKILL.md",
+            files: [{ path: "SKILL.md", content: "# Hello\\n" }],
+          },
+        ],
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const toolsetId = (create.json() as any).toolset.id as string;
+
+    const list = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/toolsets`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(((list.json() as any).toolsets as any[]).some((t) => t.id === toolsetId)).toBe(true);
+
+    const get = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/toolsets/${toolsetId}`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(get.statusCode).toBe(200);
+    expect((get.json() as any).toolset.id).toBe(toolsetId);
+
+    const publish = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets/${toolsetId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: { publicSlug: `my-toolset-${Date.now()}` },
+    });
+    expect(publish.statusCode).toBe(200);
+    const publicSlug = (publish.json() as any).toolset.publicSlug as string;
+    expect(typeof publicSlug).toBe("string");
+
+    const gallery = await server.inject({
+      method: "GET",
+      url: "/v1/toolset-gallery",
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+    });
+    expect(gallery.statusCode).toBe(200);
+    expect(((gallery.json() as any).items as any[]).some((it) => it.publicSlug === publicSlug)).toBe(true);
+
+    const galleryGet = await server.inject({
+      method: "GET",
+      url: `/v1/toolset-gallery/${publicSlug}`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+      },
+    });
+    expect(galleryGet.statusCode).toBe(200);
+    expect((galleryGet.json() as any).toolset.publicSlug).toBe(publicSlug);
+
+    const adopt = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolset-gallery/${publicSlug}/adopt`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: { name: "Adopted Toolset" },
+    });
+    expect(adopt.statusCode).toBe(201);
+    expect((adopt.json() as any).toolset.name).toBe("Adopted Toolset");
+  });
+
   it("requires X-Org-Id and blocks cross-org access", async () => {
     const owner = await server.inject({
       method: "POST",

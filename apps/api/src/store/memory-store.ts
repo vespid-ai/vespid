@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type {
   AppStore,
+  AgentToolsetRecord,
   AgentPairingTokenRecord,
   ConnectorSecretRecord,
   InvitationAcceptResultRecord,
@@ -49,6 +50,7 @@ export class MemoryAppStore implements AppStore {
     })
   >();
   private organizationAgentIdByTokenHash = new Map<string, string>();
+  private toolsets = new Map<string, AgentToolsetRecord>();
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -959,6 +961,183 @@ export class MemoryAppStore implements AppStore {
     const updated = { ...existing, revokedAt: nowIso() };
     this.organizationAgents.set(updated.id, updated);
     return true;
+  }
+
+  async listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }): Promise<AgentToolsetRecord[]> {
+    return [...this.toolsets.values()]
+      .filter((t) => t.organizationId === input.organizationId)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  async createAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org";
+    mcpServers: unknown;
+    agentSkills: unknown;
+  }): Promise<AgentToolsetRecord> {
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const toolset: AgentToolsetRecord = {
+      id,
+      organizationId: input.organizationId,
+      name: input.name,
+      description: input.description ?? null,
+      visibility: input.visibility,
+      publicSlug: null,
+      publishedAt: null,
+      mcpServers: Array.isArray(input.mcpServers) ? (input.mcpServers as any) : [],
+      agentSkills: Array.isArray(input.agentSkills) ? (input.agentSkills as any) : [],
+      adoptedFrom: null,
+      createdByUserId: input.actorUserId,
+      updatedByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.toolsets.set(id, toolset);
+    return toolset;
+  }
+
+  async getAgentToolsetById(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+  }): Promise<AgentToolsetRecord | null> {
+    const row = this.toolsets.get(input.toolsetId) ?? null;
+    if (!row || row.organizationId !== input.organizationId) return null;
+    return row;
+  }
+
+  async updateAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org";
+    mcpServers: unknown;
+    agentSkills: unknown;
+  }): Promise<AgentToolsetRecord | null> {
+    const existing = this.toolsets.get(input.toolsetId) ?? null;
+    if (!existing || existing.organizationId !== input.organizationId) return null;
+    const next: AgentToolsetRecord = {
+      ...existing,
+      name: input.name,
+      description: input.description ?? null,
+      visibility: input.visibility,
+      mcpServers: Array.isArray(input.mcpServers) ? (input.mcpServers as any) : [],
+      agentSkills: Array.isArray(input.agentSkills) ? (input.agentSkills as any) : [],
+      updatedByUserId: input.actorUserId,
+      updatedAt: nowIso(),
+    };
+    this.toolsets.set(existing.id, next);
+    return next;
+  }
+
+  async deleteAgentToolset(input: { organizationId: string; actorUserId: string; toolsetId: string }): Promise<boolean> {
+    const existing = this.toolsets.get(input.toolsetId) ?? null;
+    if (!existing || existing.organizationId !== input.organizationId) return false;
+    this.toolsets.delete(existing.id);
+    return true;
+  }
+
+  async publishAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    publicSlug: string;
+  }): Promise<AgentToolsetRecord | null> {
+    const existing = this.toolsets.get(input.toolsetId) ?? null;
+    if (!existing || existing.organizationId !== input.organizationId) return null;
+
+    for (const t of this.toolsets.values()) {
+      if (t.id !== existing.id && t.visibility === "public" && t.publicSlug === input.publicSlug) {
+        throw new Error("PUBLIC_SLUG_CONFLICT");
+      }
+    }
+
+    const now = nowIso();
+    const next: AgentToolsetRecord = {
+      ...existing,
+      visibility: "public",
+      publicSlug: input.publicSlug,
+      publishedAt: now,
+      updatedByUserId: input.actorUserId,
+      updatedAt: now,
+    };
+    this.toolsets.set(existing.id, next);
+    return next;
+  }
+
+  async unpublishAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    visibility: "private" | "org";
+  }): Promise<AgentToolsetRecord | null> {
+    const existing = this.toolsets.get(input.toolsetId) ?? null;
+    if (!existing || existing.organizationId !== input.organizationId) return null;
+    const now = nowIso();
+    const next: AgentToolsetRecord = {
+      ...existing,
+      visibility: input.visibility,
+      publicSlug: null,
+      publishedAt: null,
+      updatedByUserId: input.actorUserId,
+      updatedAt: now,
+    };
+    this.toolsets.set(existing.id, next);
+    return next;
+  }
+
+  async listPublicToolsetGallery(input: { actorUserId: string }): Promise<AgentToolsetRecord[]> {
+    return [...this.toolsets.values()]
+      .filter((t) => t.visibility === "public" && typeof t.publicSlug === "string" && t.publicSlug.length > 0)
+      .sort((a, b) => ((a.publishedAt ?? "") < (b.publishedAt ?? "") ? 1 : -1));
+  }
+
+  async getPublicToolsetBySlug(input: { actorUserId: string; publicSlug: string }): Promise<AgentToolsetRecord | null> {
+    for (const t of this.toolsets.values()) {
+      if (t.visibility === "public" && t.publicSlug === input.publicSlug) {
+        return t;
+      }
+    }
+    return null;
+  }
+
+  async adoptPublicToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    publicSlug: string;
+    nameOverride?: string | null;
+    descriptionOverride?: string | null;
+  }): Promise<AgentToolsetRecord | null> {
+    const source = await this.getPublicToolsetBySlug({ actorUserId: input.actorUserId, publicSlug: input.publicSlug });
+    if (!source) return null;
+
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    const toolset: AgentToolsetRecord = {
+      id,
+      organizationId: input.organizationId,
+      name: input.nameOverride && input.nameOverride.trim().length > 0 ? input.nameOverride : source.name,
+      description:
+        input.descriptionOverride !== undefined && input.descriptionOverride !== null ? input.descriptionOverride : source.description ?? null,
+      visibility: "org",
+      publicSlug: null,
+      publishedAt: null,
+      mcpServers: source.mcpServers,
+      agentSkills: source.agentSkills,
+      adoptedFrom: { toolsetId: source.id, publicSlug: source.publicSlug },
+      createdByUserId: input.actorUserId,
+      updatedByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.toolsets.set(id, toolset);
+    return toolset;
   }
 
   async attachMembership(input: {

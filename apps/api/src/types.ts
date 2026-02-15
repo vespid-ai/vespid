@@ -1,3 +1,5 @@
+import type { AgentSkillBundle, McpServerConfig, ToolsetVisibility } from "@vespid/shared";
+
 export type UserRecord = {
   id: string;
   email: string;
@@ -16,6 +18,9 @@ export type OrganizationRecord = {
 export type OrganizationSettings = {
   tools?: {
     shellRunEnabled?: boolean;
+  };
+  toolsets?: {
+    defaultToolsetId?: string | null;
   };
 };
 
@@ -136,6 +141,23 @@ export type AgentPairingTokenRecord = {
   usedAt: string | null;
   createdByUserId: string;
   createdAt: string;
+};
+
+export type AgentToolsetRecord = {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string | null;
+  visibility: ToolsetVisibility;
+  publicSlug: string | null;
+  publishedAt: string | null;
+  mcpServers: McpServerConfig[];
+  agentSkills: AgentSkillBundle[];
+  adoptedFrom?: { toolsetId: string; publicSlug: string | null } | null;
+  createdByUserId: string;
+  updatedByUserId: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export interface AppStore {
@@ -360,4 +382,49 @@ export interface AppStore {
     actorUserId: string;
     agentId: string;
   }): Promise<boolean>;
+
+  listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }): Promise<AgentToolsetRecord[]>;
+  createAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org";
+    mcpServers: unknown;
+    agentSkills: unknown;
+  }): Promise<AgentToolsetRecord>;
+  getAgentToolsetById(input: { organizationId: string; actorUserId: string; toolsetId: string }): Promise<AgentToolsetRecord | null>;
+  updateAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    name: string;
+    description?: string | null;
+    visibility: "private" | "org";
+    mcpServers: unknown;
+    agentSkills: unknown;
+  }): Promise<AgentToolsetRecord | null>;
+  deleteAgentToolset(input: { organizationId: string; actorUserId: string; toolsetId: string }): Promise<boolean>;
+  publishAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    publicSlug: string;
+  }): Promise<AgentToolsetRecord | null>;
+  unpublishAgentToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    toolsetId: string;
+    visibility: "private" | "org";
+  }): Promise<AgentToolsetRecord | null>;
+
+  listPublicToolsetGallery(input: { actorUserId: string }): Promise<AgentToolsetRecord[]>;
+  getPublicToolsetBySlug(input: { actorUserId: string; publicSlug: string }): Promise<AgentToolsetRecord | null>;
+  adoptPublicToolset(input: {
+    organizationId: string;
+    actorUserId: string;
+    publicSlug: string;
+    nameOverride?: string | null;
+    descriptionOverride?: string | null;
+  }): Promise<AgentToolsetRecord | null>;
 }
