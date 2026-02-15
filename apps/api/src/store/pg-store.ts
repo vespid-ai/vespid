@@ -42,6 +42,7 @@ import {
   adoptPublicAgentToolset as dbAdoptPublicAgentToolset,
   withTenantContext,
   createWorkflow as dbCreateWorkflow,
+  createWorkflowDraftFromWorkflow as dbCreateWorkflowDraftFromWorkflow,
   listWorkflows as dbListWorkflows,
   getWorkflowById as dbGetWorkflowById,
   updateWorkflowDraft as dbUpdateWorkflowDraft,
@@ -436,6 +437,44 @@ export class PgAppStore implements AppStore {
     return {
       id: row.id,
       organizationId: row.organizationId,
+      familyId: (row as any).familyId,
+      revision: (row as any).revision,
+      sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
+      name: row.name,
+      status: row.status as "draft" | "published",
+      version: row.version,
+      dsl: row.dsl,
+      editorState: (row as any).editorState ?? null,
+      createdByUserId: row.createdByUserId,
+      publishedAt: row.publishedAt ? toIso(row.publishedAt) : null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async createWorkflowDraftFromWorkflow(input: {
+    organizationId: string;
+    sourceWorkflowId: string;
+    actorUserId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateWorkflowDraftFromWorkflow(db, {
+          organizationId: input.organizationId,
+          sourceWorkflowId: input.sourceWorkflowId,
+          createdByUserId: input.actorUserId,
+        })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      familyId: (row as any).familyId,
+      revision: (row as any).revision,
+      sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
       name: row.name,
       status: row.status as "draft" | "published",
       version: row.version,
@@ -475,6 +514,9 @@ export class PgAppStore implements AppStore {
       workflows: result.rows.map((row) => ({
         id: row.id,
         organizationId: row.organizationId,
+        familyId: (row as any).familyId,
+        revision: (row as any).revision,
+        sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
         name: row.name,
         status: row.status as "draft" | "published",
         version: row.version,
@@ -502,6 +544,9 @@ export class PgAppStore implements AppStore {
     return {
       id: row.id,
       organizationId: row.organizationId,
+      familyId: (row as any).familyId,
+      revision: (row as any).revision,
+      sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
       name: row.name,
       status: row.status as "draft" | "published",
       version: row.version,
@@ -539,6 +584,9 @@ export class PgAppStore implements AppStore {
     return {
       id: row.id,
       organizationId: row.organizationId,
+      familyId: (row as any).familyId,
+      revision: (row as any).revision,
+      sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
       name: row.name,
       status: row.status as "draft" | "published",
       version: row.version,
@@ -562,6 +610,9 @@ export class PgAppStore implements AppStore {
     return {
       id: row.id,
       organizationId: row.organizationId,
+      familyId: (row as any).familyId,
+      revision: (row as any).revision,
+      sourceWorkflowId: ((row as any).sourceWorkflowId ?? null) as string | null,
       name: row.name,
       status: row.status as "draft" | "published",
       version: row.version,

@@ -66,6 +66,9 @@ export type InvitationAcceptResultRecord = {
 export type WorkflowRecord = {
   id: string;
   organizationId: string;
+  familyId: string;
+  revision: number;
+  sourceWorkflowId: string | null;
   name: string;
   status: "draft" | "published";
   version: number;
@@ -220,6 +223,11 @@ export interface AppStore {
     dsl: unknown;
     createdByUserId: string;
   }): Promise<WorkflowRecord>;
+  createWorkflowDraftFromWorkflow(input: {
+    organizationId: string;
+    sourceWorkflowId: string;
+    actorUserId: string;
+  }): Promise<WorkflowRecord | null>;
   listWorkflows(input: {
     organizationId: string;
     actorUserId: string;

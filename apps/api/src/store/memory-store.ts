@@ -326,9 +326,13 @@ export class MemoryAppStore implements AppStore {
     createdByUserId: string;
   }): Promise<WorkflowRecord> {
     const now = nowIso();
+    const workflowId = crypto.randomUUID();
     const workflow: WorkflowRecord = {
-      id: crypto.randomUUID(),
+      id: workflowId,
       organizationId: input.organizationId,
+      familyId: workflowId,
+      revision: 1,
+      sourceWorkflowId: null,
       name: input.name,
       status: "draft",
       version: 1,
@@ -341,6 +345,47 @@ export class MemoryAppStore implements AppStore {
     };
     this.workflows.set(workflow.id, workflow);
     return workflow;
+  }
+
+  async createWorkflowDraftFromWorkflow(input: {
+    organizationId: string;
+    sourceWorkflowId: string;
+    actorUserId: string;
+  }): Promise<WorkflowRecord | null> {
+    const source = this.workflows.get(input.sourceWorkflowId);
+    if (!source || source.organizationId !== input.organizationId) {
+      return null;
+    }
+    const now = nowIso();
+
+    const familyId = source.familyId ?? source.id;
+    let maxRevision = 0;
+    for (const wf of this.workflows.values()) {
+      if (wf.organizationId === input.organizationId && wf.familyId === familyId) {
+        maxRevision = Math.max(maxRevision, wf.revision ?? 0);
+      }
+    }
+
+    const draftId = crypto.randomUUID();
+    const draft: WorkflowRecord = {
+      id: draftId,
+      organizationId: input.organizationId,
+      familyId,
+      revision: maxRevision + 1,
+      sourceWorkflowId: source.id,
+      name: source.name,
+      status: "draft",
+      version: 1,
+      dsl: source.dsl,
+      editorState: source.editorState ?? null,
+      createdByUserId: input.actorUserId,
+      publishedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.workflows.set(draft.id, draft);
+    return draft;
   }
 
   async listWorkflows(input: {

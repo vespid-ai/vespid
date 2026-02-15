@@ -60,6 +60,24 @@ async function waitForRun(input: {
   throw new Error("RUN_TIMEOUT");
 }
 
+async function listRunEvents(input: {
+  server: Awaited<ReturnType<typeof buildServer>>;
+  orgId: string;
+  workflowId: string;
+  runId: string;
+  token: string;
+}) {
+  const res = await input.server.inject({
+    method: "GET",
+    url: `/v1/orgs/${input.orgId}/workflows/${input.workflowId}/runs/${input.runId}/events?limit=200`,
+    headers: { authorization: `Bearer ${input.token}`, "x-org-id": input.orgId },
+  });
+  if (res.statusCode !== 200) {
+    throw new Error(`LIST_EVENTS_FAILED:${res.statusCode}`);
+  }
+  return (res.json() as any).events as Array<any>;
+}
+
 function bearerToken(body: { session: { token: string } }) {
   return body.session.token;
 }
@@ -173,6 +191,12 @@ describe("workflow v3 integration", () => {
     const steps = (run.output?.steps ?? []) as Array<{ nodeId: string }>;
     expect(steps.some((s) => s.nodeId === "yes")).toBe(true);
     expect(steps.some((s) => s.nodeId === "no")).toBe(false);
+
+    const events = await listRunEvents({ server, orgId, workflowId, runId, token });
+    expect(events.some((e) => e.eventType === "node_skipped" && e.nodeId === "no")).toBe(true);
+    const condSucceeded = events.find((e) => e.eventType === "node_succeeded" && e.nodeId === "cond");
+    expect(condSucceeded?.payload?.result).toBe(true);
+    expect(condSucceeded?.payload?.explain?.path).toBe("flag");
   });
 
   it("executes a v3 parallel fan-out and join (sequential execution, correct barrier)", async () => {
@@ -252,6 +276,11 @@ describe("workflow v3 integration", () => {
     for (const id of ["root", "a", "b", "join", "end"]) {
       expect(steps.some((s) => s.nodeId === id)).toBe(true);
     }
+
+    const events = await listRunEvents({ server, orgId, workflowId, runId, token });
+    const joinSucceeded = events.find((e) => e.eventType === "node_succeeded" && e.nodeId === "join");
+    expect(joinSucceeded?.payload?.joined).toBe(true);
+    expect(joinSucceeded?.payload?.requiredIncoming).toBe(2);
+    expect(joinSucceeded?.payload?.satisfiedIncoming).toBe(2);
   });
 });
-

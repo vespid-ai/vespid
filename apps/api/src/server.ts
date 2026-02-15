@@ -2065,6 +2065,43 @@ export async function buildServer(input?: {
     return { workflow };
   });
 
+  // Creates a new draft revision cloned from an existing workflow (typically a published revision).
+  server.post("/v1/orgs/:orgId/workflows/:workflowId/drafts", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to create workflow drafts");
+    }
+
+    const existing = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!existing) {
+      throw notFound("Workflow not found");
+    }
+    if (existing.status !== "published") {
+      throw conflict("Only published workflows can be cloned into a new draft");
+    }
+
+    const draft = await store.createWorkflowDraftFromWorkflow({
+      organizationId: orgContext.organizationId,
+      sourceWorkflowId: existing.id,
+      actorUserId: auth.userId,
+    });
+    if (!draft) {
+      throw conflict("Failed to create workflow draft");
+    }
+
+    return reply.status(201).send({ workflow: draft });
+  });
+
   server.post("/v1/orgs/:orgId/workflows/:workflowId/runs", async (request, reply) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string; workflowId?: string };

@@ -1202,6 +1202,31 @@ describe("api hardening foundation", () => {
     });
     expect(editPublished.statusCode).toBe(409);
 
+    const cloneRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/drafts`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(cloneRes.statusCode).toBe(201);
+    const clonedWorkflowId = (cloneRes.json() as { workflow: { id: string; status: string } }).workflow.id;
+
+    const updateClone = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/workflows/${clonedWorkflowId}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { name: "Draft B (From Published)" },
+    });
+    expect(updateClone.statusCode).toBe(200);
+    expect((updateClone.json() as { workflow: { name: string; status: string } }).workflow.status).toBe("draft");
+
+    const original = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(original.statusCode).toBe(200);
+    expect((original.json() as { workflow: { status: string; name: string } }).workflow.status).toBe("published");
+
     const invalidParallelRemote = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/workflows`,
