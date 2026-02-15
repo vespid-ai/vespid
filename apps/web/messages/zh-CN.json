@@ -360,7 +360,7 @@
     "updatedAt": "更新时间",
     "mcpServers": "MCP 服务",
     "agentSkills": "Agent Skills",
-    "placeholderEnv": "值必须为 ${ENV:VAR_NAME}",
+    "placeholderEnv": "值必须为 $'{'ENV:VAR_NAME'}'",
     "publicSlugPlaceholder": "例如 my-toolset",
     "confirmDeleteDescription": "此操作无法撤销。",
     "visibilityOptions": {
@@ -397,7 +397,7 @@
       "generate": "AI 生成",
       "title": "AI 生成工具集",
       "subtitle": "描述你的需求，生成草稿后再审核和编辑。",
-      "guardrail": "不要粘贴密钥。请使用 ${ENV:...} 占位符，并在「密钥」页面管理 key。",
+      "guardrail": "不要粘贴密钥。请使用 $'{'ENV:...'}' 占位符，并在「密钥」页面管理 key。",
       "providerLabel": "LLM 提供方",
       "modelLabel": "模型",
       "secretLabel": "组织密钥",
@@ -427,8 +427,8 @@
       "commandLabel": "命令",
       "argsLabel": "参数（逗号分隔）",
       "urlLabel": "URL",
-      "envLabel": "环境变量（每行: KEY=${ENV:VAR}）",
-      "headersLabel": "Headers（每行: KEY=${ENV:VAR}）",
+      "envLabel": "环境变量（每行: KEY=$'{'ENV:VAR'}'）",
+      "headersLabel": "Headers（每行: KEY=$'{'ENV:VAR'}'）",
       "descriptionLabel": "描述"
     },
     "skillDialog": {

@@ -361,7 +361,7 @@
     "updatedAt": "Updated",
     "mcpServers": "MCP servers",
     "agentSkills": "Agent Skills",
-    "placeholderEnv": "Value must be ${ENV:VAR_NAME}",
+    "placeholderEnv": "Value must be $'{'ENV:VAR_NAME'}'",
     "publicSlugPlaceholder": "e.g. my-toolset",
     "confirmDeleteDescription": "This cannot be undone.",
     "visibilityOptions": {
@@ -398,7 +398,7 @@
       "generate": "Generate with AI",
       "title": "Generate toolset with AI",
       "subtitle": "Create a draft toolset by describing what you need, then review and edit before saving.",
-      "guardrail": "Do not paste secrets. Use ${ENV:...} placeholders and manage keys via the Secrets page.",
+      "guardrail": "Do not paste secrets. Use $'{'ENV:...'}' placeholders and manage keys via the Secrets page.",
       "providerLabel": "LLM provider",
       "modelLabel": "Model",
       "secretLabel": "Org secret",
@@ -429,7 +429,8 @@
       "argsLabel": "Args (comma-separated)",
       "urlLabel": "URL",
       "envLabel": "Env (one per line: KEY=${ENV:VAR})",
-      "headersLabel": "Headers (one per line: KEY=${ENV:VAR})",
+      "envLabel": "Env (one per line: KEY=$'{'ENV:VAR'}')",
+      "headersLabel": "Headers (one per line: KEY=$'{'ENV:VAR'}')",
       "descriptionLabel": "Description"
     },
     "skillDialog": {
