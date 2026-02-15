@@ -8,6 +8,7 @@
   },
   "nav": {
     "workflows": "工作流",
+    "sessions": "会话",
     "secrets": "密钥",
     "billing": "计费",
     "agents": "代理",
@@ -58,6 +59,7 @@
     "loading": "加载中...",
     "working": "处理中...",
     "notLoggedIn": "未登录",
+    "unknownError": "发生未知错误。",
     "notFound": "未找到",
     "desktopOnly": "当前版本主要针对桌面端优化; 移动端支持会在后续完善。",
     "debug": "调试",
@@ -382,6 +384,77 @@
       "lastSeen": "最近在线",
       "created": "创建时间",
       "tags": "标签"
+    }
+  },
+  "sessions": {
+    "title": "会话",
+    "subtitle": "交互式、运行在节点主机上的 Agent 会话（会固定到某个在线节点）。",
+    "untitled": "未命名会话",
+    "table": {
+      "title": "标题",
+      "engine": "引擎",
+      "model": "模型",
+      "status": "状态",
+      "open": "打开"
+    },
+    "create": {
+      "title": "创建会话",
+      "subtitle": "会话在节点主机上运行。LLM 凭证需要在节点主机环境中配置（BYOK）。",
+      "button": "创建",
+      "created": "会话已创建。"
+    },
+    "list": {
+      "title": "最近会话",
+      "subtitle": "按最近活动排序。",
+      "empty": "暂无会话。"
+    },
+    "fields": {
+      "title": "标题",
+      "engine": "引擎",
+      "provider": "Provider",
+      "model": "模型",
+      "instructions": "指令",
+      "system": "System（可选）",
+      "toolset": "工具集 ID（可选）",
+      "selectorTag": "选择器 tag（可选）",
+      "tools": "允许的工具"
+    },
+    "engineHint": "当前版本会话支持 vespid.loop.v1 和 codex.sdk.v1。",
+    "codexProviderHint": "codex.sdk.v1 仅支持 OpenAI 鉴权。",
+    "modelHint": "需与节点主机可用的 provider/engine 匹配。",
+    "toolsetPlaceholder": "uuid（可选）",
+    "toolsetResolved": "已解析",
+    "toolsetHint": "设置后，工具集 skills 会作为只读上下文注入到节点主机。",
+    "selectorTagPlaceholder": "例如 west",
+    "selectorHint": "路由以控制面 tags 为权威。selector tag 会让会话固定到匹配的节点主机。",
+    "extraToolsPlaceholder": "用逗号分隔的 toolId（可选）",
+    "toolsHint": "允许 {count} 个工具",
+    "pinnedAgent": "已固定节点",
+    "resetAgent": "重置节点",
+    "ws": {
+      "requiresLogin": "需要登录才能连接。",
+      "connected": "已连接",
+      "disconnected": "未连接",
+      "reconnect": "重连",
+      "notConnected": "未连接到网关。",
+      "error": "WebSocket 错误。"
+    },
+    "chat": {
+      "title": "对话",
+      "subtitle": "消息会以 session events 的形式持久化。按 Cmd/Ctrl+Enter 发送。",
+      "empty": "暂无事件，发送一条消息开始。",
+      "message": "消息",
+      "placeholder": "让 agent 做点什么...",
+      "send": "发送",
+      "sendHint": "Cmd/Ctrl+Enter 发送。"
+    },
+    "details": {
+      "title": "会话详情",
+      "subtitle": "只读配置快照。",
+      "engine": "引擎",
+      "llm": "LLM",
+      "toolset": "工具集",
+      "selector": "选择器"
     }
   },
   "toolsets": {

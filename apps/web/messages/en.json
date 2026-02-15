@@ -8,6 +8,7 @@
   },
   "nav": {
     "workflows": "Workflows",
+    "sessions": "Sessions",
     "secrets": "Secrets",
     "billing": "Billing",
     "agents": "Agents",
@@ -38,6 +39,7 @@
     "expandAll": "Expand",
     "collapseAll": "Collapse",
     "truncated": "Truncated after {count} nodes.",
+    "unknownError": "Something went wrong.",
     "refresh": "Refresh",
     "create": "Create",
     "edit": "Edit",
@@ -63,6 +65,77 @@
     "debug": "Debug",
     "show": "Show",
     "hide": "Hide"
+  },
+  "sessions": {
+    "title": "Sessions",
+    "subtitle": "Interactive, node-hosted agent sessions pinned to a connected node host.",
+    "untitled": "Untitled session",
+    "table": {
+      "title": "Title",
+      "engine": "Engine",
+      "model": "Model",
+      "status": "Status",
+      "open": "Open"
+    },
+    "create": {
+      "title": "Create session",
+      "subtitle": "Sessions run on node hosts. LLM credentials must be configured on the node host environment (BYOK).",
+      "button": "Create",
+      "created": "Session created."
+    },
+    "list": {
+      "title": "Recent sessions",
+      "subtitle": "Latest activity first.",
+      "empty": "No sessions yet."
+    },
+    "fields": {
+      "title": "Title",
+      "engine": "Engine",
+      "provider": "Provider",
+      "model": "Model",
+      "instructions": "Instructions",
+      "system": "System (optional)",
+      "toolset": "Toolset ID (optional)",
+      "selectorTag": "Selector tag (optional)",
+      "tools": "Allowed tools"
+    },
+    "engineHint": "In this edition, sessions support vespid.loop.v1 and codex.sdk.v1.",
+    "codexProviderHint": "codex.sdk.v1 uses OpenAI auth only.",
+    "modelHint": "This must match the provider and engine available on the node host.",
+    "toolsetPlaceholder": "uuid (optional)",
+    "toolsetResolved": "Resolved",
+    "toolsetHint": "If set, toolset skills are injected as read-only context on node hosts.",
+    "selectorTagPlaceholder": "e.g. west",
+    "selectorHint": "Routing uses control-plane tags. A selector tag pins the session to a matching node host.",
+    "extraToolsPlaceholder": "Comma-separated tool IDs (optional)",
+    "toolsHint": "{count} tool(s) allowed",
+    "pinnedAgent": "Pinned agent",
+    "resetAgent": "Reset agent",
+    "ws": {
+      "requiresLogin": "Login is required to connect.",
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "reconnect": "Reconnect",
+      "notConnected": "Not connected to gateway.",
+      "error": "WebSocket error."
+    },
+    "chat": {
+      "title": "Chat",
+      "subtitle": "Messages are persisted as session events. Press Cmd/Ctrl+Enter to send.",
+      "empty": "No events yet. Send a message to begin.",
+      "message": "Message",
+      "placeholder": "Ask the agent to do something...",
+      "send": "Send",
+      "sendHint": "Cmd/Ctrl+Enter sends."
+    },
+    "details": {
+      "title": "Session details",
+      "subtitle": "Read-only config snapshot.",
+      "engine": "Engine",
+      "llm": "LLM",
+      "toolset": "Toolset",
+      "selector": "Selector"
+    }
   },
   "commandPalette": {
     "title": "Search",
