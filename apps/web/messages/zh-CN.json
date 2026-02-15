@@ -9,6 +9,7 @@
   "nav": {
     "workflows": "工作流",
     "secrets": "密钥",
+    "billing": "计费",
     "agents": "代理",
     "toolsets": "工具集",
     "auth": "登录",
@@ -512,10 +513,57 @@
       "name": "名称",
       "id": "ID",
       "open": "选择"
+    },
+    "presets": {
+      "title": "LLM 预设（BYOK）",
+      "subtitle": "将模型 API Key 作为组织密钥加密保存。保存后不会再回显明文。",
+      "connected": "已连接",
+      "notConnected": "未连接",
+      "pasteApiKey": "粘贴 API Key...",
+      "saved": "已保存",
+      "rotated": "已轮换"
+    },
+    "vertex": {
+      "title": "高级：Vertex AI（OAuth）",
+      "subtitle": "通过 OAuth（离线）连接 Google Cloud。可选，不影响使用托管 credits。",
+      "projectId": "项目 ID",
+      "location": "区域",
+      "connect": "连接",
+      "disconnect": "断开",
+      "connected": "Vertex 连接已保存",
+      "disconnected": "Vertex 连接已移除",
+      "failed": "Vertex 连接失败"
     }
   },
   "billing": {
-    "credits": "积分"
+    "credits": "Credits",
+    "title": "计费",
+    "subtitle": "查看余额、账单明细并通过 Stripe 充值。",
+    "status": {
+      "success": "充值完成。Credits 将在稍后到账。",
+      "cancel": "已取消支付。"
+    },
+    "balance": {
+      "title": "Credits 余额",
+      "caption": "Credits 仅用于托管模型调用。BYOK 调用将由你的提供方计费。"
+    },
+    "topup": {
+      "title": "充值 Credits",
+      "subtitle": "通过 Stripe Checkout 购买 credits。",
+      "cta": "充值",
+      "pack": "Credits 包",
+      "disabledTitle": "Stripe 未配置",
+      "disabledDescription": "设置 STRIPE_SECRET_KEY、STRIPE_WEBHOOK_SECRET 与 STRIPE_CREDITS_PACKS_JSON 才能启用充值。",
+      "noPacksTitle": "未配置 credits 包"
+    },
+    "ledger": {
+      "title": "账单明细",
+      "subtitle": "充值与消耗记录（仅元数据）。",
+      "emptyTitle": "暂无账单记录",
+      "when": "时间",
+      "reason": "原因",
+      "delta": "变更"
+    }
   },
   "marketing": {
     "nav": {
@@ -717,6 +765,14 @@
       "title": "为规模化编排打造的定价",
       "subtitle": "从小规模起步，随着治理与节点执行需求升级。",
       "footerNote": "支持年付优惠。",
+      "creditsCallout": {
+        "title": "Usage credits + BYOK",
+        "items": {
+          "managedCredits": "托管 credits：快速上手（默认无需 API Key）。",
+          "byok": "支持 BYOK：OpenAI、Anthropic、Gemini。",
+          "vertex": "高级：通过 OAuth 连接 Vertex AI。"
+        }
+      },
       "tiers": {
         "starter": {
           "title": "Starter",

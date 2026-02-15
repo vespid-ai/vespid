@@ -7,6 +7,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CreditCard,
   KeyRound,
   LayoutGrid,
   LogOut,
@@ -180,6 +181,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     () => [
       { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
       { href: (l) => `/${l}/secrets`, labelKey: "nav.secrets", icon: <KeyRound className="h-4 w-4" /> },
+      { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
       { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },
       { href: (l) => `/${l}/toolsets`, labelKey: "nav.toolsets", icon: <Braces className="h-4 w-4" /> },
     ],

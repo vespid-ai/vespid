@@ -9,6 +9,7 @@
   "nav": {
     "workflows": "Workflows",
     "secrets": "Secrets",
+    "billing": "Billing",
     "agents": "Agents",
     "toolsets": "Toolsets",
     "auth": "Auth",
@@ -512,10 +513,57 @@
       "name": "Name",
       "id": "ID",
       "open": "Select"
+    },
+    "presets": {
+      "title": "LLM presets (BYOK)",
+      "subtitle": "Store your provider API keys as encrypted org secrets. Values are never shown again after saving.",
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "pasteApiKey": "Paste API key...",
+      "saved": "Saved",
+      "rotated": "Rotated"
+    },
+    "vertex": {
+      "title": "Advanced: Vertex AI (OAuth)",
+      "subtitle": "Connect Google Cloud via OAuth (offline). This is optional and not required for managed credits.",
+      "projectId": "Project ID",
+      "location": "Location",
+      "connect": "Connect",
+      "disconnect": "Disconnect",
+      "connected": "Vertex connection saved",
+      "disconnected": "Vertex connection removed",
+      "failed": "Vertex connection failed"
     }
   },
   "billing": {
-    "credits": "Credits"
+    "credits": "Credits",
+    "title": "Billing",
+    "subtitle": "Manage credits, view ledger entries, and top up via Stripe.",
+    "status": {
+      "success": "Top up completed. Credits will appear shortly.",
+      "cancel": "Checkout cancelled."
+    },
+    "balance": {
+      "title": "Credits balance",
+      "caption": "Credits are used only for managed LLM usage. BYOK usage is billed by your provider."
+    },
+    "topup": {
+      "title": "Top up credits",
+      "subtitle": "Purchase credits via Stripe Checkout.",
+      "cta": "Top up",
+      "pack": "Credits pack",
+      "disabledTitle": "Stripe is not configured",
+      "disabledDescription": "Set STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and STRIPE_CREDITS_PACKS_JSON to enable top-ups.",
+      "noPacksTitle": "No credit packs configured"
+    },
+    "ledger": {
+      "title": "Ledger",
+      "subtitle": "Credit top-ups and usage debits (metadata only).",
+      "emptyTitle": "No ledger entries yet",
+      "when": "When",
+      "reason": "Reason",
+      "delta": "Delta"
+    }
   },
   "marketing": {
     "nav": {
@@ -717,6 +765,14 @@
       "title": "Pricing built for orchestration at scale",
       "subtitle": "Start small, upgrade when you need deeper governance and node execution.",
       "footerNote": "Annual billing discounts available.",
+      "creditsCallout": {
+        "title": "Usage credits + BYOK",
+        "items": {
+          "managedCredits": "Managed LLM credits included for quick starts (no API key required).",
+          "byok": "BYOK supported: OpenAI, Anthropic, Gemini.",
+          "vertex": "Advanced: connect Vertex AI via OAuth."
+        }
+      },
       "tiers": {
         "starter": {
           "title": "Starter",
