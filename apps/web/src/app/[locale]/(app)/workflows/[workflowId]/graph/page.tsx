@@ -43,6 +43,13 @@ type EditorState = {
   viewport?: { x: number; y: number; zoom: number };
 };
 
+type GraphValidationIssue = {
+  code: string;
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+};
+
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
@@ -134,6 +141,7 @@ export default function WorkflowGraphEditorPage() {
   const [configJson, setConfigJson] = useState<string>("{}");
   const [edgeKind, setEdgeKind] = useState<EdgeKind>("always");
   const [nameDraft, setNameDraft] = useState<string>("");
+  const [issues, setIssues] = useState<GraphValidationIssue[]>([]);
 
   const loaded = workflowQuery.data?.workflow ?? null;
   const dslAny = loaded?.dsl as any;
@@ -311,6 +319,7 @@ export default function WorkflowGraphEditorPage() {
     };
 
     try {
+      setIssues([]);
       await updateDraft.mutateAsync({
         ...(nameDraft.trim().length > 0 ? { name: nameDraft.trim() } : {}),
         dsl,
@@ -319,10 +328,41 @@ export default function WorkflowGraphEditorPage() {
       toast.success("Saved");
     } catch (err: any) {
       const code = err?.payload?.code;
-      if (code === "PARALLEL_REMOTE_NOT_SUPPORTED") {
-        toast.error("Remote execution is not supported inside parallel regions (v3 MVP).");
+      const maybeIssues = err?.payload?.details?.issues;
+      if (Array.isArray(maybeIssues)) {
+        const parsed = maybeIssues
+          .filter((it: any) => it && typeof it === "object")
+          .map((it: any) => ({
+            code: typeof it.code === "string" ? it.code : String(code ?? "VALIDATION_ERROR"),
+            message: typeof it.message === "string" ? it.message : "Validation error",
+            nodeId: typeof it.nodeId === "string" ? it.nodeId : undefined,
+            edgeId: typeof it.edgeId === "string" ? it.edgeId : undefined,
+          }));
+        setIssues(parsed);
+      }
+
+      if (typeof code === "string") {
+        toast.error(`${code}: ${err?.payload?.message ?? "Validation error"}`);
+        const first = (maybeIssues && Array.isArray(maybeIssues) ? maybeIssues[0] : null) as any;
+        const focusNodeId = typeof first?.nodeId === "string" ? first.nodeId : null;
+        const focusEdgeId = typeof first?.edgeId === "string" ? first.edgeId : null;
+        if (focusNodeId) {
+          setSelectedNodeId(focusNodeId);
+          setSelectedEdgeId("");
+          const hit = nodes.find((n) => n.id === focusNodeId);
+          if (hit && instance) {
+            instance.setCenter(hit.position.x, hit.position.y, { zoom: 1.2, duration: 250 });
+          }
+          return;
+        }
+        if (focusEdgeId) {
+          setSelectedEdgeId(focusEdgeId);
+          setSelectedNodeId("");
+          return;
+        }
         return;
       }
+
       throw err;
     }
   }
@@ -505,6 +545,44 @@ export default function WorkflowGraphEditorPage() {
                 <CodeBlock value={{ workflow: loaded, nodes: nodes.length, edges: edges.length }} />
               </CardContent>
             </Card>
+
+            {issues.length ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Validation</CardTitle>
+                  <CardDescription>Fix these issues before saving.</CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-2">
+                  {issues.slice(0, 5).map((issue, idx) => (
+                    <button
+                      key={`${issue.code}-${idx}`}
+                      type="button"
+                      className="rounded-md border border-borderSubtle/60 bg-panel/28 px-3 py-2 text-left text-sm text-text hover:bg-panel/55"
+                      onClick={() => {
+                        if (issue.nodeId) {
+                          setSelectedNodeId(issue.nodeId);
+                          setSelectedEdgeId("");
+                          const hit = nodes.find((n) => n.id === issue.nodeId);
+                          if (hit && instance) {
+                            instance.setCenter(hit.position.x, hit.position.y, { zoom: 1.2, duration: 250 });
+                          }
+                          return;
+                        }
+                        if (issue.edgeId) {
+                          setSelectedEdgeId(issue.edgeId);
+                          setSelectedNodeId("");
+                        }
+                      }}
+                    >
+                      <div className="font-mono text-xs text-muted">{issue.code}</div>
+                      <div className="mt-1 text-sm">{issue.message}</div>
+                      {issue.nodeId ? <div className="mt-1 font-mono text-xs text-muted">node: {issue.nodeId}</div> : null}
+                      {issue.edgeId ? <div className="mt-1 font-mono text-xs text-muted">edge: {issue.edgeId}</div> : null}
+                    </button>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
         </div>
       )}

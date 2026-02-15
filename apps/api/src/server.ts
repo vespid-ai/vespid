@@ -1913,7 +1913,11 @@ export async function buildServer(input?: {
     if (parsed.data.dsl.version === "v3") {
       const constraints = validateV3GraphConstraints(parsed.data.dsl);
       if (!constraints.ok) {
-        throw new AppError(400, { code: constraints.code, message: constraints.message });
+        throw new AppError(400, {
+          code: constraints.code,
+          message: constraints.message,
+          details: constraints.issues ? { issues: constraints.issues } : undefined,
+        });
       }
     }
 
@@ -2011,7 +2015,11 @@ export async function buildServer(input?: {
     if (parsed.data.dsl && parsed.data.dsl.version === "v3") {
       const constraints = validateV3GraphConstraints(parsed.data.dsl);
       if (!constraints.ok) {
-        throw new AppError(400, { code: constraints.code, message: constraints.message });
+        throw new AppError(400, {
+          code: constraints.code,
+          message: constraints.message,
+          details: constraints.issues ? { issues: constraints.issues } : undefined,
+        });
       }
     }
 
