@@ -83,9 +83,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Generate secrets KEK
+        shell: bash
         run: |
           set -euo pipefail
-          SECRETS_KEK_BASE64="$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))')"
+          SECRETS_KEK_BASE64="$(node -p "require('crypto').randomBytes(32).toString('base64')")"
           echo "SECRETS_KEK_BASE64=${SECRETS_KEK_BASE64}" >> "$GITHUB_ENV"
 
       - name: Install enterprise provider package
