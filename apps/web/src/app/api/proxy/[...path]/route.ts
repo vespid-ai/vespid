@@ -19,6 +19,16 @@ function parseErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function readSetCookieHeaders(upstream: Response): string[] {
+  // Node.js fetch exposes getSetCookie(); some runtimes expose only set-cookie.
+  const getSetCookie = (upstream.headers as any).getSetCookie?.bind(upstream.headers);
+  if (typeof getSetCookie === "function") {
+    return getSetCookie() as string[];
+  }
+  const single = upstream.headers.get("set-cookie");
+  return single ? [single] : [];
+}
+
 function buildUpstreamUrl(request: Request, pathParts: string[]): string {
   const base = getControlPlaneBase();
   const url = new URL(request.url);
@@ -90,8 +100,7 @@ async function proxy(request: Request, pathParts: string[]) {
   });
 
   // Preserve refresh cookie updates (Node.js fetch exposes getSetCookie()).
-  const getSetCookie = (upstream.headers as any).getSetCookie?.bind(upstream.headers);
-  const setCookies: string[] = typeof getSetCookie === "function" ? getSetCookie() : [];
+  const setCookies = readSetCookieHeaders(upstream);
   for (const value of setCookies) {
     response.headers.append("set-cookie", value);
   }
