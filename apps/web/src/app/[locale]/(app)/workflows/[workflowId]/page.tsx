@@ -5,7 +5,7 @@ import "@xyflow/react/dist/style.css";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
 import { Badge } from "../../../../../components/ui/badge";
@@ -13,8 +13,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { CodeBlock } from "../../../../../components/ui/code-block";
 import { DataTable } from "../../../../../components/ui/data-table";
 import { EmptyState } from "../../../../../components/ui/empty-state";
-import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
+import { Sheet, SheetClose, SheetContent } from "../../../../../components/ui/sheet";
 import { Skeleton } from "../../../../../components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../components/ui/tabs";
 import { Textarea } from "../../../../../components/ui/textarea";
@@ -44,6 +44,22 @@ function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false
   }
 }
 
+function getDslInfo(dsl: unknown): { version: string; nodeCount: number | null } {
+  if (!dsl || typeof dsl !== "object") {
+    return { version: "unknown", nodeCount: null };
+  }
+  const v = (dsl as any).version;
+  if (v === "v2") {
+    const nodes = (dsl as any).nodes;
+    return { version: "v2", nodeCount: Array.isArray(nodes) ? nodes.length : null };
+  }
+  if (v === "v3") {
+    const graphNodes = (dsl as any)?.graph?.nodes;
+    return { version: "v3", nodeCount: graphNodes && typeof graphNodes === "object" ? Object.keys(graphNodes).length : null };
+  }
+  return { version: typeof v === "string" ? v : "unknown", nodeCount: null };
+}
+
 export default function WorkflowDetailPage() {
   const t = useTranslations();
   const router = useRouter();
@@ -63,7 +79,12 @@ export default function WorkflowDetailPage() {
   const run = useRunWorkflow(orgId, workflowId);
 
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
-  const [showDebug, setShowDebug] = useState(false);
+
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailSection, setDetailSection] = useState<"summary" | "history">("summary");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  const historyRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (workflowId) {
@@ -73,6 +94,22 @@ export default function WorkflowDetailPage() {
 
   const recentRuns = useMemo(() => (workflowId ? getRecentRunIds(workflowId) : []), [workflowId, runsQuery.data]);
   const runs = runsQuery.data?.runs ?? [];
+  const revisions = revisionsQuery.data?.workflows ?? [];
+  const revisionCount = revisions.length;
+
+  const loadedWorkflow = workflowQuery.data?.workflow ?? null;
+  const dslInfo = useMemo(() => getDslInfo(loadedWorkflow?.dsl), [loadedWorkflow?.dsl]);
+  const createdAtShort = String(loadedWorkflow?.createdAt ?? "").slice(0, 19);
+  const updatedAtShort = String(loadedWorkflow?.updatedAt ?? "").slice(0, 19);
+
+  useEffect(() => {
+    if (!detailOpen) return;
+    if (detailSection === "history") {
+      historyRef.current?.scrollIntoView({ block: "start" });
+      return;
+    }
+    summaryRef.current?.scrollIntoView({ block: "start" });
+  }, [detailOpen, detailSection]);
 
   const columns = useMemo(() => {
     return [
@@ -108,65 +145,20 @@ export default function WorkflowDetailPage() {
     ] as const;
   }, [locale, t, workflowId]);
 
-  const revisionColumns = useMemo(() => {
-    return [
-      {
-        header: t("workflows.detail.revision"),
-        accessorKey: "revision",
-        cell: ({ row }: any) => <span className="font-mono text-xs">{String(row.original.revision ?? "-")}</span>,
-      },
-      {
-        header: t("workflows.detail.table.status"),
-        accessorKey: "status",
-        cell: ({ row }: any) => {
-          const status = String(row.original.status ?? "");
-          const variant = status === "published" ? "ok" : "neutral";
-          return <Badge variant={variant as any}>{status}</Badge>;
-        },
-      },
-      {
-        header: "Updated",
-        accessorKey: "updatedAt",
-        cell: ({ row }: any) => (
-          <span className="font-mono text-xs text-muted">{String(row.original.updatedAt ?? "").slice(0, 19)}</span>
-        ),
-      },
-      {
-        header: "ID",
-        accessorKey: "id",
-        cell: ({ row }: any) => <span className="font-mono text-xs text-muted">{String(row.original.id ?? "").slice(0, 8)}</span>,
-      },
-      {
-        header: t("workflows.detail.table.open"),
-        id: "open",
-        cell: ({ row }: any) => (
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/workflows/${row.original.id}`)}>
-              {t("workflows.list.open")}
-            </Button>
-            {row.original.status === "published" ? (
-              <Button
-                size="sm"
-                variant="accent"
-                disabled={clonePublished.isPending}
-                onClick={async () => {
-                  try {
-                    const payload = await clonePublished.mutateAsync({ workflowId: row.original.id });
-                    toast.success(t("workflows.detail.draftCreated"));
-                    router.push(`/${locale}/workflows/${payload.workflow.id}`);
-                  } catch {
-                    toast.error(t("workflows.detail.draftCreateFailed"));
-                  }
-                }}
-              >
-                {clonePublished.isPending ? t("common.loading") : t("workflows.detail.createDraft")}
-              </Button>
-            ) : null}
-          </div>
-        ),
-      },
-    ] as const;
-  }, [clonePublished, locale, router, t]);
+  async function copyToClipboard(input: { label: string; value: string }) {
+    try {
+      await navigator.clipboard.writeText(input.value);
+      toast.success(t("workflows.detail.sheet.copied", { label: input.label }));
+    } catch {
+      toast.error(t("errors.copyFailed"));
+    }
+  }
+
+  function openDetails(section: "summary" | "history") {
+    setDetailSection(section);
+    setShowAdvanced(false);
+    setDetailOpen(true);
+  }
 
   async function doPublish() {
     if (!orgId) {
@@ -255,6 +247,14 @@ export default function WorkflowDetailPage() {
           <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
             {t("common.back")}
           </Button>
+          <Button variant="outline" onClick={() => openDetails("summary")}>
+            {t("workflows.detail.infoButton")}
+          </Button>
+          {revisionCount >= 2 ? (
+            <Button variant="outline" onClick={() => openDetails("history")}>
+              {t("workflows.detail.historyButton", { count: revisionCount })}
+            </Button>
+          ) : null}
           {workflowQuery.data?.workflow?.status === "published" ? (
             <Button variant="accent" onClick={doCreateDraft} disabled={createDraft.isPending}>
               {createDraft.isPending ? t("common.loading") : t("workflows.detail.createDraft")}
@@ -270,9 +270,7 @@ export default function WorkflowDetailPage() {
       <Tabs defaultValue="editor">
         <TabsList>
           <TabsTrigger value="runs">{t("workflows.runs")}</TabsTrigger>
-          <TabsTrigger value="overview">{t("workflows.detail.tabOverview")}</TabsTrigger>
           <TabsTrigger value="editor">{t("workflows.detail.tabEditor")}</TabsTrigger>
-          <TabsTrigger value="revisions">{t("workflows.detail.tabRevisions")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="runs" className="mt-4">
@@ -325,79 +323,204 @@ export default function WorkflowDetailPage() {
                   <Button variant="accent" onClick={doRun} disabled={run.isPending}>
                     {run.isPending ? t("common.loading") : t("workflows.detail.run")}
                   </Button>
-                  <Button variant="outline" onClick={() => setShowDebug((v) => !v)}>
-                    {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
-                  </Button>
                 </div>
-
-                {showDebug ? (
-                  <div className="grid gap-2">
-                    <CodeBlock value={{ workflow: workflowQuery.data, runs: runsQuery.data }} />
-                  </div>
-                ) : null}
               </CardContent>
             </Card>
           </div>
         </TabsContent>
 
-        <TabsContent value="overview" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("workflows.detail.workflowTitle")}</CardTitle>
-              <CardDescription>{t("workflows.detail.workflowHint")}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {workflowQuery.isLoading ? (
-                <div className="text-sm text-muted">{t("common.loading")}</div>
-              ) : workflowQuery.data?.workflow ? (
-                <div className="grid gap-3">
-                  <div className="grid gap-1 text-sm">
-                    <div className="flex flex-wrap gap-2">
-                      <span className="text-muted">{t("workflows.detail.familyId")}:</span>
-                      <span className="font-mono text-xs break-all">{workflowQuery.data.workflow.familyId ?? "-"}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <span className="text-muted">{t("workflows.detail.revision")}:</span>
-                      <span className="font-mono text-xs">{String(workflowQuery.data.workflow.revision ?? "-")}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <span className="text-muted">{t("workflows.detail.sourceWorkflowId")}:</span>
-                      <span className="font-mono text-xs break-all">
-                        {workflowQuery.data.workflow.sourceWorkflowId ?? "-"}
-                      </span>
-                    </div>
-                  </div>
-                  <CodeBlock value={workflowQuery.data.workflow} />
-                </div>
-              ) : (
-                <div className="text-sm text-muted">{t("workflows.detail.noWorkflow")}</div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
         <TabsContent value="editor" className="mt-4" forceMount>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold text-text">{t("workflows.detail.tabEditor")}</div>
+              <div className="text-xs text-muted">{t("workflows.detail.sheet.title")}</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => openDetails("summary")}>
+                {t("workflows.detail.infoButton")}
+              </Button>
+              {revisionCount >= 2 ? (
+                <Button variant="outline" size="sm" onClick={() => openDetails("history")}>
+                  {t("workflows.detail.historyButton", { count: revisionCount })}
+                </Button>
+              ) : null}
+            </div>
+          </div>
           <WorkflowGraphEditor variant="embedded" locale={locale} workflowId={workflowId} />
         </TabsContent>
-
-        <TabsContent value="revisions" className="mt-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("workflows.detail.revisionsTitle")}</CardTitle>
-              <CardDescription>{t("workflows.detail.revisionsHint")}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {revisionsQuery.isLoading ? (
-                <div className="text-sm text-muted">{t("common.loading")}</div>
-              ) : (revisionsQuery.data?.workflows ?? []).length === 0 ? (
-                <div className="text-sm text-muted">{t("workflows.detail.revisionsEmpty")}</div>
-              ) : (
-                <DataTable<any> data={revisionsQuery.data?.workflows ?? []} columns={revisionColumns as any} />
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
+
+      <Sheet open={detailOpen} onOpenChange={setDetailOpen}>
+        <SheetContent
+          side="right"
+          title={t("workflows.detail.sheet.title")}
+          className="w-[min(92vw,540px)]"
+        >
+          <div className="flex h-dvh flex-col">
+            <div className="flex items-start justify-between gap-3 border-b border-borderSubtle/60 px-5 py-4">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-text">{t("workflows.detail.sheet.title")}</div>
+                <div className="mt-1 truncate text-xs text-muted">{loadedWorkflow?.name ?? workflowId.slice(0, 8)}</div>
+              </div>
+              <SheetClose asChild>
+                <Button size="sm" variant="outline">
+                  {t("common.close")}
+                </Button>
+              </SheetClose>
+            </div>
+
+            <div className="flex-1 overflow-auto px-5 py-4">
+              <div ref={summaryRef} />
+              <div className="text-xs uppercase tracking-[0.28em] text-muted">{t("workflows.detail.sheet.summaryTitle")}</div>
+              <div className="mt-3 grid gap-3 rounded-2xl border border-borderSubtle/70 bg-panel/60 p-4 text-sm shadow-inset">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.name")}</div>
+                  <div className="text-muted">{loadedWorkflow?.name ?? "-"}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.status")}</div>
+                  <div className="text-muted">{String(loadedWorkflow?.status ?? "-")}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.dslVersion")}</div>
+                  <div className="font-mono text-xs text-muted">{dslInfo.version}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.nodeCount")}</div>
+                  <div className="font-mono text-xs text-muted">{dslInfo.nodeCount ?? "-"}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.revision")}</div>
+                  <div className="font-mono text-xs text-muted">{String(loadedWorkflow?.revision ?? "-")}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.workflowId")}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-muted">{workflowId.slice(0, 8)}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => copyToClipboard({ label: "workflowId", value: workflowId })}
+                    >
+                      {t("workflows.detail.sheet.copy")}
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.familyId")}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-muted">{String(loadedWorkflow?.familyId ?? "-").slice(0, 8)}</span>
+                    {loadedWorkflow?.familyId ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => copyToClipboard({ label: "familyId", value: String(loadedWorkflow.familyId) })}
+                      >
+                        {t("workflows.detail.sheet.copy")}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.sourceId")}</div>
+                  <div className="font-mono text-xs text-muted">{String(loadedWorkflow?.sourceWorkflowId ?? "-").slice(0, 8)}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.createdAt")}</div>
+                  <div className="font-mono text-xs text-muted">{createdAtShort || "-"}</div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-medium text-text">{t("workflows.detail.sheet.fields.updatedAt")}</div>
+                  <div className="font-mono text-xs text-muted">{updatedAtShort || "-"}</div>
+                </div>
+              </div>
+
+              <div className="mt-6" ref={historyRef} />
+              <div className="flex items-end justify-between gap-3">
+                <div className="text-xs uppercase tracking-[0.28em] text-muted">{t("workflows.detail.sheet.historyTitle")}</div>
+                {revisionCount >= 2 ? (
+                  <div className="text-xs text-muted">{t("workflows.detail.historyButton", { count: revisionCount })}</div>
+                ) : (
+                  <div className="text-xs text-muted">—</div>
+                )}
+              </div>
+
+              {revisionsQuery.isLoading ? (
+                <div className="mt-3 text-sm text-muted">{t("common.loading")}</div>
+              ) : revisionCount < 2 ? (
+                <div className="mt-3 rounded-2xl border border-borderSubtle/70 bg-panel/60 p-4 text-sm text-muted shadow-inset">
+                  {t("workflows.detail.sheet.historyEmpty")}
+                </div>
+              ) : (
+                <div className="mt-3 grid gap-3">
+                  {[...revisions]
+                    .sort((a: any, b: any) => Number(b.revision ?? 0) - Number(a.revision ?? 0))
+                    .map((wf: any) => (
+                      <div key={wf.id} className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-4 shadow-inset">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold text-text">
+                              rev {String(wf.revision ?? "-")} · {String(wf.status ?? "-")}
+                            </div>
+                            <div className="mt-1 font-mono text-xs text-muted">{String(wf.updatedAt ?? "").slice(0, 19) || "-"}</div>
+                            <div className="mt-1 font-mono text-xs text-muted">{String(wf.id ?? "").slice(0, 12)}</div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/workflows/${wf.id}`)}>
+                              {t("workflows.list.open")}
+                            </Button>
+                            {wf.status === "published" ? (
+                              <Button
+                                size="sm"
+                                variant="accent"
+                                disabled={clonePublished.isPending}
+                                onClick={async () => {
+                                  try {
+                                    const payload = await clonePublished.mutateAsync({ workflowId: wf.id });
+                                    toast.success(t("workflows.detail.draftCreated"));
+                                    router.push(`/${locale}/workflows/${payload.workflow.id}`);
+                                  } catch {
+                                    toast.error(t("workflows.detail.draftCreateFailed"));
+                                  }
+                                }}
+                              >
+                                {clonePublished.isPending ? t("common.loading") : t("workflows.detail.createDraft")}
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-between gap-3">
+                <div className="text-xs uppercase tracking-[0.28em] text-muted">{t("workflows.detail.sheet.advancedTitle")}</div>
+                <Button size="sm" variant="outline" onClick={() => setShowAdvanced((v) => !v)}>
+                  {showAdvanced ? t("common.hide") : t("common.show")}
+                </Button>
+              </div>
+
+              {showAdvanced ? (
+                <div className="mt-3 grid gap-3">
+                  <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
+                    <div className="text-xs font-semibold text-muted">workflow</div>
+                    <CodeBlock value={workflowQuery.data?.workflow ?? null} />
+                  </div>
+                  <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
+                    <div className="text-xs font-semibold text-muted">revisions</div>
+                    <CodeBlock value={revisionsQuery.data?.workflows ?? []} />
+                  </div>
+                  <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
+                    <div className="text-xs font-semibold text-muted">runs</div>
+                    <CodeBlock value={runsQuery.data?.runs ?? []} />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
