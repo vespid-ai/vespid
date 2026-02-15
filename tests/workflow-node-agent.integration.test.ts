@@ -591,6 +591,201 @@ describe("workflow node-agent integration", () => {
     await stubAgent.close();
   });
 
+  it("executes a v3 workflow that blocks on remote execution and resumes", async () => {
+    if (!available || !api || !githubStub || !gatewayWsUrl) {
+      return;
+    }
+
+    let stubAgent: Awaited<ReturnType<typeof startStubAgent>> | null = null;
+    try {
+      const signup = await api.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: {
+          email: `v3-node-agent-owner-${Date.now()}@example.com`,
+          password: "Password123",
+        },
+      });
+      expect(signup.statusCode).toBe(201);
+      const ownerToken = (signup.json() as { session: { token: string } }).session.token;
+
+      const orgRes = await api.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+        },
+        payload: {
+          name: "V3 Node Agent Org",
+          slug: randomSlug("v3-node-agent-org"),
+        },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+      const secretCreate = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          connectorId: "github",
+          name: "token",
+          value: githubStub.expectedToken,
+        },
+      });
+      expect(secretCreate.statusCode).toBe(201);
+      const secretId = (secretCreate.json() as { secret: { id: string } }).secret.id;
+
+      const pairing = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(pairing.statusCode).toBe(201);
+      const pairingToken = (pairing.json() as { token: string }).token;
+
+      const pairRes = await api.inject({
+        method: "POST",
+        url: "/v1/agents/pair",
+        payload: {
+          pairingToken,
+          name: "stub-agent",
+          agentVersion: "test-agent",
+          capabilities: { kinds: ["connector.action"] },
+        },
+      });
+      expect(pairRes.statusCode).toBe(201);
+      const agentToken = (pairRes.json() as { agentToken: string }).agentToken;
+
+      stubAgent = await startStubAgent({
+        gatewayWsUrl,
+        agentToken,
+        githubApiBaseUrl: githubStub.baseUrl,
+      });
+
+      const createWorkflow = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          name: "V3 Remote Execution Workflow",
+          dsl: {
+            version: "v3",
+            trigger: { type: "trigger.manual" },
+            graph: {
+              nodes: {
+                root: { id: "root", type: "http.request" },
+                "node-github": {
+                  id: "node-github",
+                  type: "connector.action",
+                  config: {
+                    connectorId: "github",
+                    actionId: "issue.create",
+                    input: {
+                      repo: "octo/test",
+                      title: "Remote Exec Issue (v3)",
+                      body: "Created by vespid v3 remote execution test",
+                    },
+                    auth: { secretId },
+                    execution: { mode: "node" },
+                  },
+                },
+                end: { id: "end", type: "http.request" },
+              },
+              edges: [
+                { id: "e1", from: "root", to: "node-github" },
+                { id: "e2", from: "node-github", to: "end" },
+              ],
+            },
+          },
+        },
+      });
+      expect(createWorkflow.statusCode).toBe(201);
+      const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+      const publish = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(publish.statusCode).toBe(200);
+
+      const runCreate = await api.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          input: { flag: true },
+        },
+      });
+      expect(runCreate.statusCode).toBe(201);
+      const runBody = runCreate.json() as { run: { id: string; status: string } };
+      expect(runBody.run.status).toBe("queued");
+
+      let finalStatus = runBody.run.status;
+      for (let index = 0; index < 60; index += 1) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+
+        const runGet = await api.inject({
+          method: "GET",
+          url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runBody.run.id}`,
+          headers: {
+            authorization: `Bearer ${ownerToken}`,
+            "x-org-id": orgId,
+          },
+        });
+        expect(runGet.statusCode).toBe(200);
+        const currentRun = runGet.json() as { run: { status: string } };
+        finalStatus = currentRun.run.status;
+        if (finalStatus === "succeeded" || finalStatus === "failed") {
+          break;
+        }
+      }
+
+      expect(finalStatus).toBe("succeeded");
+
+      const eventsRes = await api.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs/${runBody.run.id}/events?limit=200`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(eventsRes.statusCode).toBe(200);
+      const eventsBody = eventsRes.json() as { events: Array<{ nodeId?: string; eventType: string; payload?: unknown }> };
+      const serializedEvents = JSON.stringify(eventsBody.events);
+      expect(serializedEvents).not.toContain(githubStub.expectedToken);
+      expect(githubStub.getLastAuth()).toBe(`Bearer ${githubStub.expectedToken}`);
+
+      const githubSuccess = eventsBody.events.find(
+        (event) => event.eventType === "node_succeeded" && event.nodeId === "node-github"
+      );
+      expect(githubSuccess).toBeTruthy();
+    } finally {
+      if (stubAgent) {
+        await stubAgent.close();
+      }
+    }
+  });
+
   it("completes remote execution across a gateway restart", async () => {
     if (!available || !api || !gatewayWsUrl || !gatewayBaseUrl) {
       return;
