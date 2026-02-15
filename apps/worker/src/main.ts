@@ -456,9 +456,12 @@ export async function processWorkflowRunJob(
 
     const checkpointCursorIndexForV3 = 0;
 
+    let getGraphV3Runtime: (() => unknown) | null = null;
+
     const checkpointProgress = async (nextCursorNodeIndex: number) => {
-      const graphV3 = dslAny.version === "v3" ? { completed: steps.filter((s) => s.status === "succeeded").map((s) => s.nodeId) } : null;
-      runtime = dslAny.version === "v3" ? mergeRuntime(runtime, { graphV3 }) : runtime;
+      if (getGraphV3Runtime) {
+        runtime = mergeRuntime(runtime, { graphV3: getGraphV3Runtime() });
+      }
       await withTenantContext(pool, actor, async (tenantDb) =>
         updateWorkflowRunProgress(tenantDb, {
           organizationId: job.data.organizationId,
@@ -705,9 +708,11 @@ export async function processWorkflowRunJob(
 
       const nodeIds = Object.keys(nodes);
       const incomingByNodeId = new Map<string, Array<{ from: string; kind: "always" | "cond_true" | "cond_false" }>>();
+      const outgoingByNodeId = new Map<string, Array<{ to: string; kind: "always" | "cond_true" | "cond_false" }>>();
       for (const edge of edges) {
         const kind = (edge.kind ?? "always") as "always" | "cond_true" | "cond_false";
         incomingByNodeId.set(edge.to, [...(incomingByNodeId.get(edge.to) ?? []), { from: edge.from, kind }]);
+        outgoingByNodeId.set(edge.from, [...(outgoingByNodeId.get(edge.from) ?? []), { to: edge.to, kind }]);
       }
 
       const stepByNodeId = new Map<string, WorkflowExecutionStep>();
@@ -726,18 +731,25 @@ export async function processWorkflowRunJob(
 
       const hasSucceeded = (nodeId: string): boolean => stepByNodeId.get(nodeId)?.status === "succeeded";
 
-      const edgeSatisfied = (edge: { from: string; kind: "always" | "cond_true" | "cond_false" }): boolean => {
+      const edgeStatus = (edge: { from: string; kind: "always" | "cond_true" | "cond_false" }): {
+        satisfied: boolean;
+        reasonCode: "OK" | "UPSTREAM_NOT_SUCCEEDED" | "CONDITION_RESULT_MISSING" | "CONDITION_NOT_MET";
+      } => {
         if (!hasSucceeded(edge.from)) {
-          return false;
+          return { satisfied: false, reasonCode: "UPSTREAM_NOT_SUCCEEDED" };
         }
         if (edge.kind === "always") {
-          return true;
+          return { satisfied: true, reasonCode: "OK" };
         }
         const cond = getConditionResult(edge.from);
         if (cond === null) {
-          return false;
+          return { satisfied: false, reasonCode: "CONDITION_RESULT_MISSING" };
         }
-        return edge.kind === "cond_true" ? cond === true : cond === false;
+        const shouldBeTrue = edge.kind === "cond_true";
+        if (cond !== shouldBeTrue) {
+          return { satisfied: false, reasonCode: "CONDITION_NOT_MET" };
+        }
+        return { satisfied: true, reasonCode: "OK" };
       };
 
       const nodeReady = (nodeId: string): boolean => {
@@ -746,12 +758,81 @@ export async function processWorkflowRunJob(
         }
         const incoming = incomingByNodeId.get(nodeId) ?? [];
         for (const edge of incoming) {
-          if (!edgeSatisfied(edge)) {
+          if (!edgeStatus(edge).satisfied) {
             return false;
           }
         }
         return true;
       };
+
+      const snapshotGraphV3Runtime = (input: { includeSkipped: boolean }) => {
+        const completedNodeIds = steps.filter((s) => s.status === "succeeded").map((s) => s.nodeId);
+        const readyNodeIds = nodeIds.filter(nodeReady).sort((a, b) => a.localeCompare(b));
+
+        const conditions: Record<string, unknown> = {};
+        for (const [id, step] of stepByNodeId.entries()) {
+          if (step.nodeType !== "condition" || step.status !== "succeeded") {
+            continue;
+          }
+          const node = nodes[id];
+          const cfg = node && typeof (node as any).config === "object" ? (node as any).config : null;
+          const output = step.output && typeof step.output === "object" ? (step.output as any) : null;
+          conditions[id] = {
+            result: output && typeof output.result === "boolean" ? output.result : null,
+            path: cfg && typeof cfg.path === "string" ? cfg.path : null,
+            op: cfg && typeof cfg.op === "string" ? cfg.op : null,
+            expected: cfg && "value" in cfg ? (cfg as any).value : null,
+          };
+        }
+
+        const joins: Record<string, unknown> = {};
+        for (const [id, node] of Object.entries(nodes)) {
+          if (!node || (node as any).type !== "parallel.join") {
+            continue;
+          }
+          const incoming = incomingByNodeId.get(id) ?? [];
+          const statuses = incoming.map((edge) => ({ ...edge, ...edgeStatus(edge) }));
+          const requiredIncoming = incoming.length;
+          const satisfiedIncoming = statuses.filter((s) => s.satisfied).length;
+          joins[id] = {
+            requiredIncoming,
+            satisfiedIncoming,
+            incoming: statuses.map((s) => ({ from: s.from, kind: s.kind, satisfied: s.satisfied, reasonCode: s.reasonCode })),
+          };
+        }
+
+        const base: Record<string, unknown> = {
+          completedNodeIds,
+          readyNodeIds,
+          conditions,
+          joins,
+        };
+
+        if (!input.includeSkipped) {
+          return base;
+        }
+
+        const skipped: Record<string, unknown> = {};
+        for (const id of nodeIds.sort((a, b) => a.localeCompare(b))) {
+          if (stepByNodeId.has(id)) {
+            continue;
+          }
+          const incoming = incomingByNodeId.get(id) ?? [];
+          const blockers = incoming
+            .map((edge) => ({ ...edge, ...edgeStatus(edge) }))
+            .filter((s) => !s.satisfied)
+            .map((s) => ({ from: s.from, kind: s.kind, reasonCode: s.reasonCode }));
+
+          skipped[id] = {
+            reasonCode: blockers.length > 0 ? "DEPENDENCIES_NOT_SATISFIED" : "NOT_REACHED",
+            blockers,
+          };
+        }
+
+        return { ...base, skipped };
+      };
+
+      getGraphV3Runtime = () => snapshotGraphV3Runtime({ includeSkipped: false });
 
       while (true) {
         const ready = nodeIds.filter(nodeReady).sort((a, b) => a.localeCompare(b));
@@ -820,14 +901,23 @@ export async function processWorkflowRunJob(
               result = false;
           }
 
+          const explain = {
+            path: cfg.path,
+            op: cfg.op,
+            expected: "value" in cfg ? (cfg as any).value : null,
+            actualPresent: actual !== undefined,
+            actualType: actual === null ? "null" : Array.isArray(actual) ? "array" : typeof actual,
+          };
+          const output = { result, explain };
+
           await appendEvent({
             eventType: "node_succeeded",
             level: "info",
             nodeId: node.id,
             nodeType: node.type,
-            payload: summarizeForEvent({ result }),
+            payload: summarizeForEvent(output),
           });
-          const step: WorkflowExecutionStep = { nodeId: node.id, nodeType: node.type, status: "succeeded", output: { result } };
+          const step: WorkflowExecutionStep = { nodeId: node.id, nodeType: node.type, status: "succeeded", output };
           steps.push(step);
           stepByNodeId.set(node.id, step);
           await checkpointProgress(checkpointCursorIndexForV3);
@@ -836,8 +926,24 @@ export async function processWorkflowRunJob(
 
         if (node.type === "parallel.join") {
           await appendEvent({ eventType: "node_started", level: "info", nodeId: node.id, nodeType: node.type });
-          await appendEvent({ eventType: "node_succeeded", level: "info", nodeId: node.id, nodeType: node.type, payload: summarizeForEvent({ joined: true }) });
-          const step: WorkflowExecutionStep = { nodeId: node.id, nodeType: node.type, status: "succeeded", output: { joined: true } };
+          const incoming = incomingByNodeId.get(node.id) ?? [];
+          const statuses = incoming.map((edge) => ({ ...edge, ...edgeStatus(edge) }));
+          const requiredIncoming = incoming.length;
+          const satisfiedIncoming = statuses.filter((s) => s.satisfied).length;
+          const output = {
+            joined: true,
+            requiredIncoming,
+            satisfiedIncoming,
+            incomingFrom: incoming.map((e) => e.from),
+          };
+          await appendEvent({
+            eventType: "node_succeeded",
+            level: "info",
+            nodeId: node.id,
+            nodeType: node.type,
+            payload: summarizeForEvent(output),
+          });
+          const step: WorkflowExecutionStep = { nodeId: node.id, nodeType: node.type, status: "succeeded", output };
           steps.push(step);
           stepByNodeId.set(node.id, step);
           await checkpointProgress(checkpointCursorIndexForV3);
@@ -853,6 +959,28 @@ export async function processWorkflowRunJob(
           return;
         }
         await checkpointProgress(checkpointCursorIndexForV3);
+      }
+
+      // Final explainability: record skipped nodes (e.g. untaken condition branches) in runtime and events.
+      const finalGraphV3 = snapshotGraphV3Runtime({ includeSkipped: true }) as any;
+      runtime = mergeRuntime(runtime, { graphV3: finalGraphV3 });
+
+      const skipped = finalGraphV3 && typeof finalGraphV3 === "object" ? (finalGraphV3 as any).skipped : null;
+      if (skipped && typeof skipped === "object") {
+        const entries = Object.entries(skipped as Record<string, unknown>).slice(0, 500);
+        for (const [nodeId, payload] of entries) {
+          const node = nodes[nodeId];
+          if (!node) {
+            continue;
+          }
+          await appendEvent({
+            eventType: "node_skipped",
+            level: "info",
+            nodeId,
+            nodeType: (node as any).type ?? null,
+            payload: summarizeForEvent(payload),
+          });
+        }
       }
     } else {
       const dsl = dslAny;
