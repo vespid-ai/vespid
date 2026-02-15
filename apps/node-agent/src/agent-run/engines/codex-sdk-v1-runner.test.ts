@@ -5,6 +5,8 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
+let capturedPrompt = "";
+
 vi.mock("node:child_process", async () => {
   const actual = (await vi.importActual("node:child_process")) as any;
 
@@ -13,6 +15,9 @@ vi.mock("node:child_process", async () => {
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.stdin = new PassThrough();
+    child.stdin.on("data", (chunk: any) => {
+      capturedPrompt += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    });
 
     // Emit a minimal JSONL stream and write the last message file.
     setImmediate(async () => {
@@ -50,6 +55,7 @@ describe("codex.sdk.v1 engine (node-agent)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     process.env = { ...originalEnv };
+    capturedPrompt = "";
   });
 
   afterEach(() => {
@@ -90,6 +96,19 @@ describe("codex.sdk.v1 engine (node-agent)", () => {
       organizationSettings: { tools: { shellRunEnabled: true } },
       githubApiBaseUrl: "https://api.github.com",
       secrets: { llmApiKey: "sk-test" },
+      toolset: {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        name: "My Toolset",
+        mcpServers: [],
+        agentSkills: [
+          {
+            format: "agentskills-v1",
+            id: "hello",
+            name: "Hello",
+            files: [{ path: "SKILL.md", content: "# Hello Skill\n\nDo not leak this." }],
+          },
+        ],
+      },
       sandbox: { async executeShellTask() { return { status: "failed", error: "nope" }; } },
       emitEvent: (e: any) => events.push(e),
     } as any);
@@ -101,5 +120,13 @@ describe("codex.sdk.v1 engine (node-agent)", () => {
     expect(events.map((e) => e.kind)).toContain("agent.assistant_delta");
     expect(events.map((e) => e.kind)).toContain("agent.assistant_message");
     expect(events.map((e) => e.kind)).toContain("agent.final");
+
+    expect(capturedPrompt).toContain("Toolset Skills (read-only context)");
+    expect(capturedPrompt).toContain("Toolset: My Toolset");
+    expect(capturedPrompt).toContain("# Hello Skill");
+
+    const toolsetEvent = events.find((e) => e.kind === "toolset_skills_applied") ?? null;
+    expect(toolsetEvent).toBeTruthy();
+    expect(toolsetEvent?.payload).toEqual({ toolsetId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", count: 1 });
   });
 });
