@@ -17,6 +17,8 @@ vi.mock("node:child_process", async () => {
     // Emit a minimal JSONL stream and write the last message file.
     setImmediate(async () => {
       child.stdout.write(JSON.stringify({ type: "turn.started" }) + "\n");
+      child.stdout.write(JSON.stringify({ type: "response.output_text.delta", delta: "hello " }) + "\n");
+      child.stdout.write(JSON.stringify({ type: "response.output_text.delta", delta: "world" }) + "\n");
 
       const idx = args.indexOf("--output-last-message");
       const lastPath = idx >= 0 ? args[idx + 1] : null;
@@ -96,6 +98,7 @@ describe("codex.sdk.v1 engine (node-agent)", () => {
     if (result.ok) {
       expect(result.output).toEqual(expect.objectContaining({ ok: true }));
     }
+    expect(events.map((e) => e.kind)).toContain("agent.assistant_delta");
     expect(events.map((e) => e.kind)).toContain("agent.assistant_message");
     expect(events.map((e) => e.kind)).toContain("agent.final");
   });

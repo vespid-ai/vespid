@@ -29,6 +29,15 @@ function safeTruncate(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : value.slice(0, maxChars);
 }
 
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function extractJsonObjectCandidate(raw: string): string | null {
   const trimmed = raw.trim();
   const fence = trimmed.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);
@@ -248,6 +257,91 @@ function isCodexToolUseEvent(json: any): boolean {
   return /(commandExecution|fileChange|mcpToolCall|webSearch|browser|apply_patch)/i.test(combined);
 }
 
+function extractCodexAssistantDelta(json: any): string | null {
+  const type = typeof json?.type === "string" ? json.type : "";
+  const itemType = typeof json?.item?.type === "string" ? json.item.type : "";
+  const combined = `${type} ${itemType}`;
+
+  // Common Codex/OpenAI streaming shapes include e.g.:
+  // - { type: "response.output_text.delta", delta: "..." }
+  // - { type: "output_text.delta", delta: "..." }
+  const delta = typeof json?.delta === "string" ? json.delta : null;
+  if (delta && /delta/i.test(combined) && /(output_text|text|assistant)/i.test(combined)) {
+    return delta;
+  }
+
+  // Some variants may use `text` for the chunk.
+  const text = typeof json?.text === "string" ? json.text : null;
+  if (text && /delta/i.test(combined) && /(output_text|text|assistant)/i.test(combined)) {
+    return text;
+  }
+
+  return null;
+}
+
+function createCoalescedDeltaEmitter(input: {
+  flushChars: number;
+  flushMs: number;
+  maxEvents: number;
+  maxChars: number;
+  onFlush: (deltaChunk: string) => void;
+}) {
+  let buffer = "";
+  let scheduled: NodeJS.Timeout | null = null;
+  let emittedEvents = 0;
+  let emittedChars = 0;
+
+  const flush = () => {
+    if (scheduled) {
+      clearTimeout(scheduled);
+      scheduled = null;
+    }
+    if (!buffer) {
+      return;
+    }
+    if (emittedEvents >= input.maxEvents || emittedChars >= input.maxChars) {
+      buffer = "";
+      return;
+    }
+    const remainingChars = Math.max(0, input.maxChars - emittedChars);
+    const chunk = buffer.length <= remainingChars ? buffer : buffer.slice(0, remainingChars);
+    buffer = buffer.length <= remainingChars ? "" : buffer.slice(remainingChars);
+
+    if (chunk) {
+      emittedEvents += 1;
+      emittedChars += chunk.length;
+      input.onFlush(chunk);
+    }
+  };
+
+  const schedule = () => {
+    if (scheduled) {
+      return;
+    }
+    scheduled = setTimeout(flush, input.flushMs);
+  };
+
+  return {
+    write(delta: string) {
+      if (!delta) {
+        return;
+      }
+      if (emittedChars >= input.maxChars || emittedEvents >= input.maxEvents) {
+        return;
+      }
+      buffer += delta;
+      if (buffer.length >= input.flushChars) {
+        flush();
+      } else {
+        schedule();
+      }
+    },
+    finish() {
+      flush();
+    },
+  };
+}
+
 async function codexChatCompletion(input: {
   codexPath: string;
   apiKey: string;
@@ -256,6 +350,7 @@ async function codexChatCompletion(input: {
   prompt: string;
   timeoutMs: number;
   maxOutputChars: number;
+  onAssistantDelta?: (deltaChunk: string) => void;
 }): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
   const homeDir = path.join(input.workdir, "codex-home");
   await fs.mkdir(homeDir, { recursive: true });
@@ -309,6 +404,16 @@ async function codexChatCompletion(input: {
   }, input.timeoutMs);
 
   let toolUseDetected = false;
+  const deltaEmitter = input.onAssistantDelta
+    ? createCoalescedDeltaEmitter({
+        flushChars: Math.max(32, Math.min(2048, envNumber("VESPID_AGENT_STREAM_FLUSH_CHARS", 128))),
+        flushMs: Math.max(10, Math.min(1000, envNumber("VESPID_AGENT_STREAM_FLUSH_MS", 80))),
+        maxEvents: Math.max(10, Math.min(10_000, envNumber("VESPID_AGENT_STREAM_MAX_EVENTS", 800))),
+        maxChars: Math.max(256, Math.min(2_000_000, envNumber("VESPID_AGENT_STREAM_MAX_CHARS", 200_000))),
+        onFlush: input.onAssistantDelta,
+      })
+    : null;
+
   const rl = readline.createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
     if (toolUseDetected) {
@@ -318,6 +423,17 @@ async function codexChatCompletion(input: {
       const json = JSON.parse(line) as any;
       if (isCodexToolUseEvent(json)) {
         toolUseDetected = true;
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      const delta = deltaEmitter ? extractCodexAssistantDelta(json) : null;
+      if (deltaEmitter && delta) {
+        deltaEmitter.write(delta);
       }
     } catch {
       // ignore non-json lines
@@ -334,6 +450,9 @@ async function codexChatCompletion(input: {
 
   clearTimeout(timeout);
   rl.close();
+  if (deltaEmitter) {
+    deltaEmitter.finish();
+  }
 
   if (timedOut) {
     return { ok: false, error: "LLM_TIMEOUT" };
@@ -673,6 +792,8 @@ export const codexSdkV1Runner: AgentRunEngineRunner = {
 
       const prompt = messages.map((m) => `${m.role.toUpperCase()}:\n${m.content}`).join("\n\n");
       emit({ kind: "agent.turn_started", payload: { turn: turns } });
+      let deltaIndex = 0;
+      const streamEnabled = typeof input.emitEvent === "function";
       const llm = await codexChatCompletion({
         codexPath,
         apiKey,
@@ -681,6 +802,21 @@ export const codexSdkV1Runner: AgentRunEngineRunner = {
         prompt,
         timeoutMs: Math.max(1000, deadline - Date.now()),
         maxOutputChars: input.node.config.limits.maxOutputChars,
+        ...(streamEnabled
+          ? {
+              onAssistantDelta: (deltaChunk: string) => {
+                deltaIndex += 1;
+                emit({
+                  kind: "agent.assistant_delta",
+                  payload: {
+                    turn: turns,
+                    deltaIndex,
+                    delta: safeTruncate(deltaChunk, 4000),
+                  },
+                });
+              },
+            }
+          : {}),
       });
 
       if (!llm.ok) {

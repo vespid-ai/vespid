@@ -27,6 +27,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
       expect(shellTool).toBeTruthy();
       await shellTool.handler({ input: { script: "echo hi" } });
 
+      yield {
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "hello" } },
+      };
+
       // Return a valid final envelope.
       yield { type: "result", subtype: "success", result: JSON.stringify({ type: "final", output: { ok: true } }) };
     })();
@@ -98,6 +103,7 @@ describe("claude.agent-sdk.v1 engine adapter", () => {
     }
     expect(events.map((e) => e.kind)).toContain("agent.tool_call");
     expect(events.map((e) => e.kind)).toContain("agent.tool_result");
+    expect(events.map((e) => e.kind)).toContain("agent.assistant_delta");
     expect(events.map((e) => e.kind)).toContain("agent.final");
   });
 });
