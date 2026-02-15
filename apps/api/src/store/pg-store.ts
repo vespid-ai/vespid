@@ -71,6 +71,7 @@ import {
   getOrganizationCreditBalance as dbGetOrganizationCreditBalance,
   grantOrganizationCredits as dbGrantOrganizationCredits,
   creditOrganizationFromStripeEvent as dbCreditOrganizationFromStripeEvent,
+  listOrganizationCreditLedger as dbListOrganizationCreditLedger,
   getOrganizationBillingAccount as dbGetOrganizationBillingAccount,
   createOrganizationBillingAccount as dbCreateOrganizationBillingAccount,
 } from "@vespid/db";
@@ -79,6 +80,7 @@ import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
 import type {
   AgentToolsetRecord,
   AppStore,
+  OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
   OrganizationSettings,
   ToolsetBuilderSessionRecord,
@@ -1347,6 +1349,43 @@ export class PgAppStore implements AppStore {
 
     const balance = await this.getOrganizationCredits({ organizationId: input.organizationId });
     return { applied: result.applied, balance };
+  }
+
+  async listOrganizationCreditLedger(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ entries: OrganizationCreditLedgerEntryRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+
+    const result = await this.withOrgContext({ userId: input.actorUserId, organizationId: input.organizationId }, async (db) =>
+      dbListOrganizationCreditLedger(db, {
+        organizationId: input.organizationId,
+        limit: input.limit,
+        cursor,
+      })
+    );
+
+    return {
+      entries: result.entries.map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        deltaCredits: row.deltaCredits,
+        reason: row.reason,
+        stripeEventId: row.stripeEventId,
+        workflowRunId: row.workflowRunId,
+        createdByUserId: row.createdByUserId,
+        metadata: row.metadata,
+        createdAt: toIso(row.createdAt),
+      })),
+      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
+    };
   }
 
   async getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null> {

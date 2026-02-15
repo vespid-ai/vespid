@@ -1930,6 +1930,14 @@ describe("personal billing credits (memory store + fake Stripe)", () => {
     customers: {
       create: vi.fn(async () => ({ id: "cus_test_1" })),
     },
+    prices: {
+      retrieve: vi.fn(async (priceId: string, opts?: any) => ({
+        id: priceId,
+        currency: "usd",
+        unit_amount: 1000,
+        product: { name: "Vespid credits" },
+      })),
+    },
     checkout: {
       sessions: {
         create: vi.fn(async () => ({ id: "cs_test_1", url: "https://checkout.local/session/cs_test_1" })),
@@ -2015,6 +2023,26 @@ describe("personal billing credits (memory store + fake Stripe)", () => {
     const checkoutBody = checkout.json() as { checkoutUrl: string };
     expect(checkoutBody.checkoutUrl).toContain("checkout.local");
 
+    const packs = await server.inject({
+      method: "GET",
+      url: "/v1/billing/credits/packs",
+      headers: {
+        authorization: `Bearer ${bearerToken(signupBody as any)}`,
+      },
+    });
+    expect(packs.statusCode).toBe(200);
+    expect(packs.json()).toMatchObject({
+      enabled: true,
+      packs: [
+        expect.objectContaining({
+          packId: "credits-1m",
+          credits: 10,
+          currency: "usd",
+          unitAmount: 1000,
+        }),
+      ],
+    });
+
     // Webhook: apply credits to the org from metadata. In this unit test we simply assert idempotency.
     const webhook1 = await server.inject({
       method: "POST",
@@ -2039,6 +2067,109 @@ describe("personal billing credits (memory store + fake Stripe)", () => {
     });
     expect(webhook2.statusCode).toBe(200);
     expect(webhook2.json()).toMatchObject({ ok: true, applied: false });
+
+    const ledger = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/billing/credits/ledger?limit=10`,
+      headers: {
+        authorization: `Bearer ${bearerToken(signupBody as any)}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(ledger.statusCode).toBe(200);
+    const ledgerBody = ledger.json() as { entries: Array<{ reason: string; deltaCredits: number }> };
+    expect(ledgerBody.entries.some((e) => e.reason === "stripe_topup" && e.deltaCredits === 10)).toBe(true);
+  });
+});
+
+describe("vertex oauth advanced connection", () => {
+  const store = new MemoryAppStore();
+  const queueProducer = createFakeQueueProducer();
+  let server: Awaited<ReturnType<typeof buildServer>>;
+  const priorKek = process.env.SECRETS_KEK_BASE64;
+
+  const vertexOAuthService = {
+    createAuthorizationUrl(context: { state: string; codeVerifier: string; nonce: string }) {
+      const url = new URL("https://oauth.local/google/authorize");
+      url.searchParams.set("state", context.state);
+      url.searchParams.set("nonce", context.nonce);
+      return url;
+    },
+    async exchangeCodeForConnection(context: { code: string; codeVerifier: string; nonce: string }) {
+      return {
+        refreshToken: "rt_test",
+        scopes: ["openid", "email", "profile", "https://www.googleapis.com/auth/cloud-platform"],
+        profile: { email: "vertex@example.com", displayName: "Vertex User" },
+      };
+    },
+  } as any;
+
+  beforeAll(async () => {
+    process.env.SECRETS_KEK_BASE64 = Buffer.alloc(32, 7).toString("base64");
+    server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      queueProducer,
+      vertexOAuthService,
+    });
+  });
+
+  afterAll(async () => {
+    await server.close();
+    if (priorKek === undefined) delete process.env.SECRETS_KEK_BASE64;
+    else process.env.SECRETS_KEK_BASE64 = priorKek;
+  });
+
+  it("stores a vertex oauth connection as an encrypted org secret", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: "vertex-owner@example.com", password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as any);
+
+    const me = await server.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const orgId = (me.json() as any).defaultOrgId as string;
+    expect(typeof orgId).toBe("string");
+
+    const start = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/llm/vertex/start?projectId=proj-1&location=us-central1`,
+      headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
+    });
+    expect(start.statusCode).toBe(302);
+    const cookieHeader = extractCookies(start as any, ["vespid_vertex_oauth_state", "vespid_vertex_oauth_nonce"]);
+    expect(cookieHeader).toContain("vespid_vertex_oauth_state=");
+
+    const location = String((start.headers as any).location ?? "");
+    const redirect = new URL(location);
+    const state = redirect.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callback = await server.inject({
+      method: "GET",
+      url: `/v1/llm/vertex/callback?code=code_test&state=${encodeURIComponent(state as string)}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        cookie: cookieHeader,
+        "accept-language": "en",
+      },
+    });
+    expect(callback.statusCode).toBe(302);
+
+    const secrets = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/secrets?connectorId=llm.vertex.oauth`,
+      headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
+    });
+    expect(secrets.statusCode).toBe(200);
+    const body = secrets.json() as { secrets: Array<{ connectorId: string; name: string }> };
+    expect(body.secrets.some((s) => s.connectorId === "llm.vertex.oauth" && s.name === "default")).toBe(true);
   });
 });
 

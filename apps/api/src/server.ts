@@ -28,6 +28,7 @@ import { createConnectorCatalog } from "@vespid/connectors";
 import { generateCodeVerifier, generateState } from "arctic";
 import { z } from "zod";
 import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
+import { createVertexOAuthServiceFromEnv, type VertexOAuthService } from "./vertex-oauth.js";
 import { createStore } from "./store/index.js";
 import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
@@ -61,6 +62,16 @@ type OAuthStateRecord = {
   expiresAtSec: number;
 };
 
+type VertexOAuthStateRecord = {
+  organizationId: string;
+  userId: string;
+  projectId: string;
+  location: string;
+  codeVerifier: string;
+  nonce: string;
+  expiresAtSec: number;
+};
+
 type RefreshTokenPayload = {
   sessionId: string;
   userId: string;
@@ -83,6 +94,8 @@ const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME ?? "vespid_session";
 const PERSONAL_TRIAL_CREDITS = Number(process.env.PERSONAL_TRIAL_CREDITS ?? 100);
 const OAUTH_STATE_COOKIE_NAME = "vespid_oauth_state";
 const OAUTH_NONCE_COOKIE_NAME = "vespid_oauth_nonce";
+const VERTEX_OAUTH_STATE_COOKIE_NAME = "vespid_vertex_oauth_state";
+const VERTEX_OAUTH_NONCE_COOKIE_NAME = "vespid_vertex_oauth_nonce";
 const WEB_BASE_URL = process.env.WEB_BASE_URL ?? "http://localhost:3000";
 const API_LOG_LEVEL = process.env.API_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info");
 const ORG_CONTEXT_ENFORCEMENT = z
@@ -296,10 +309,20 @@ const listWorkflowRunEventsQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
 });
 
+const listCreditLedgerQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  cursor: z.string().min(1).optional(),
+});
+
 const oauthQuerySchema = z.object({
   code: z.string().min(1),
   state: z.string().min(1),
   mode: z.enum(["json"]).optional(),
+});
+
+const vertexStartQuerySchema = z.object({
+  projectId: z.string().min(1).max(120),
+  location: z.string().min(1).max(64),
 });
 
 function toPublicUser(input: { id: string; email: string; displayName: string | null; createdAt: string }) {
@@ -320,6 +343,14 @@ function parseAuthHeader(value: string | undefined): string | null {
     return null;
   }
   return token;
+}
+
+function localeFromAcceptLanguage(value: string | undefined): "en" | "zh-CN" {
+  const raw = (value ?? "").toLowerCase();
+  if (raw.includes("zh")) {
+    return "zh-CN";
+  }
+  return "en";
 }
 
 function orgContextRequired(message = "X-Org-Id header is required"): AppError {
@@ -660,6 +691,7 @@ function invitationErrorToAppError(error: Error): AppError {
 export async function buildServer(input?: {
   store?: AppStore;
   oauthService?: OAuthService;
+  vertexOAuthService?: VertexOAuthService | null;
   orgContextEnforcement?: OrgContextEnforcement;
   queueProducer?: WorkflowRunQueueProducer;
   enterpriseProvider?: EnterpriseProvider;
@@ -695,6 +727,7 @@ export async function buildServer(input?: {
 
   const store = input?.store ?? createStore();
   const oauthService = input?.oauthService ?? createOAuthServiceFromEnv();
+  const vertexOAuthService = input?.vertexOAuthService ?? createVertexOAuthServiceFromEnv();
   const orgContextEnforcement: OrgContextEnforcement = input?.orgContextEnforcement ?? ORG_CONTEXT_ENFORCEMENT;
   const queueProducer =
     input?.queueProducer ??
@@ -714,6 +747,7 @@ export async function buildServer(input?: {
     "llm.openai",
     "llm.anthropic",
     "llm.gemini",
+    "llm.vertex.oauth",
   ]);
   await store.ensureDefaultRoles();
 
@@ -760,11 +794,69 @@ export async function buildServer(input?: {
   }
   const stripeCreditsPacks = parseStripeCreditsPacks();
 
+  type StripeCreditsPackSummary = {
+    packId: string;
+    credits: number;
+    currency?: string;
+    unitAmount?: number;
+    productName?: string;
+  };
+
+  type StripePriceSummary = {
+    currency: string | null;
+    unitAmount: number | null;
+    productName: string | null;
+  };
+
+  const stripePriceCache = new Map<string, { value: StripePriceSummary; expiresAtMs: number }>();
+  const stripePriceInFlight = new Map<string, Promise<StripePriceSummary>>();
+  const STRIPE_PRICE_CACHE_TTL_MS = 10 * 60_000;
+
+  async function getStripePriceSummary(priceId: string): Promise<StripePriceSummary> {
+    if (!stripe) {
+      throw new Error("STRIPE_NOT_CONFIGURED");
+    }
+
+    const cached = stripePriceCache.get(priceId);
+    if (cached && cached.expiresAtMs > Date.now()) {
+      return cached.value;
+    }
+
+    const inFlight = stripePriceInFlight.get(priceId);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = (async () => {
+      // Expand product so we can surface a stable name without extra calls.
+      const price = await stripe.prices.retrieve(priceId, { expand: ["product"] });
+      const productName =
+        price.product && typeof price.product === "object" && "name" in price.product && typeof (price.product as any).name === "string"
+          ? String((price.product as any).name)
+          : null;
+      const summary: StripePriceSummary = {
+        currency: typeof price.currency === "string" ? price.currency : null,
+        unitAmount: typeof price.unit_amount === "number" ? price.unit_amount : null,
+        productName,
+      };
+      stripePriceCache.set(priceId, { value: summary, expiresAtMs: Date.now() + STRIPE_PRICE_CACHE_TTL_MS });
+      return summary;
+    })();
+
+    stripePriceInFlight.set(priceId, promise);
+    try {
+      return await promise;
+    } finally {
+      stripePriceInFlight.delete(priceId);
+    }
+  }
+
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
   const refreshSecret = process.env.REFRESH_TOKEN_SECRET ?? authSecret;
   const oauthStateSecret = process.env.OAUTH_STATE_SECRET ?? "dev-oauth-state-secret";
   const secureCookies = process.env.NODE_ENV === "production";
   const oauthStates = new Map<string, OAuthStateRecord>();
+  const vertexOAuthStates = new Map<string, VertexOAuthStateRecord>();
 
   function setSessionCookie(reply: { setCookie: Function }, refreshToken: string): void {
     reply.setCookie(SESSION_COOKIE_NAME, refreshToken, {
@@ -821,6 +913,53 @@ export async function buildServer(input?: {
   function clearOAuthCookies(reply: { clearCookie: Function }): void {
     reply.clearCookie(OAUTH_STATE_COOKIE_NAME, { path: "/", sameSite: "lax", secure: secureCookies });
     reply.clearCookie(OAUTH_NONCE_COOKIE_NAME, { path: "/", sameSite: "lax", secure: secureCookies });
+  }
+
+  function setVertexOAuthCookies(reply: { setCookie: Function }, input: { state: string; nonce: string }): void {
+    reply.setCookie(
+      VERTEX_OAUTH_STATE_COOKIE_NAME,
+      signRefreshToken(
+        {
+          sessionId: input.state,
+          userId: "vertex",
+          tokenNonce: "state",
+          expiresAt: Math.floor(Date.now() / 1000) + OAUTH_CONTEXT_TTL_SEC,
+        },
+        oauthStateSecret
+      ),
+      {
+        httpOnly: true,
+        path: "/",
+        maxAge: OAUTH_CONTEXT_TTL_SEC,
+        sameSite: "lax",
+        secure: secureCookies,
+      }
+    );
+
+    reply.setCookie(
+      VERTEX_OAUTH_NONCE_COOKIE_NAME,
+      signRefreshToken(
+        {
+          sessionId: input.nonce,
+          userId: "vertex",
+          tokenNonce: "nonce",
+          expiresAt: Math.floor(Date.now() / 1000) + OAUTH_CONTEXT_TTL_SEC,
+        },
+        oauthStateSecret
+      ),
+      {
+        httpOnly: true,
+        path: "/",
+        maxAge: OAUTH_CONTEXT_TTL_SEC,
+        sameSite: "lax",
+        secure: secureCookies,
+      }
+    );
+  }
+
+  function clearVertexOAuthCookies(reply: { clearCookie: Function }): void {
+    reply.clearCookie(VERTEX_OAUTH_STATE_COOKIE_NAME, { path: "/", sameSite: "lax", secure: secureCookies });
+    reply.clearCookie(VERTEX_OAUTH_NONCE_COOKIE_NAME, { path: "/", sameSite: "lax", secure: secureCookies });
   }
 
   async function createSessionForUser(input: {
@@ -1382,6 +1521,32 @@ export async function buildServer(input?: {
     return reply.status(201).send(created);
   });
 
+  server.get("/v1/billing/credits/packs", async (request) => {
+    requireAuth(request);
+
+    if (!stripe || !stripeCreditsPacks) {
+      return { enabled: false, packs: [] as StripeCreditsPackSummary[] };
+    }
+
+    const packs: StripeCreditsPackSummary[] = [];
+    for (const [packId, pack] of Object.entries(stripeCreditsPacks)) {
+      try {
+        const price = await getStripePriceSummary(pack.priceId);
+        packs.push({
+          packId,
+          credits: pack.credits,
+          ...(price.currency ? { currency: price.currency } : {}),
+          ...(typeof price.unitAmount === "number" ? { unitAmount: price.unitAmount } : {}),
+          ...(price.productName ? { productName: price.productName } : {}),
+        });
+      } catch {
+        // Skip packs that cannot be resolved (misconfigured or transient Stripe failure).
+      }
+    }
+
+    return { enabled: packs.length > 0, packs };
+  });
+
   server.get("/v1/orgs/:orgId/billing/credits", async (request) => {
     const auth = requireAuth(request);
     const orgId = (request.params as { orgId?: string }).orgId;
@@ -1395,6 +1560,43 @@ export async function buildServer(input?: {
     return {
       balanceCredits: credits.balanceCredits,
       lastUpdatedAt: credits.updatedAt,
+    };
+  });
+
+  server.get("/v1/orgs/:orgId/billing/credits/ledger", async (request) => {
+    const auth = requireAuth(request);
+    const orgId = (request.params as { orgId?: string }).orgId;
+    if (!orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const parsed = listCreditLedgerQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid ledger query", parsed.error.flatten());
+    }
+
+    const cursor = parsed.data.cursor
+      ? decodeCursor<{ createdAt: string; id: string }>(parsed.data.cursor)
+      : null;
+    if (parsed.data.cursor && !cursor) {
+      throw badRequest("Invalid cursor");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage billing");
+    }
+
+    const result = await store.listOrganizationCreditLedger({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      limit: parsed.data.limit ?? 50,
+      cursor,
+    });
+
+    return {
+      entries: result.entries,
+      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
     };
   });
 
@@ -1790,6 +1992,218 @@ export async function buildServer(input?: {
 
     if (!ok) {
       throw secretNotFound();
+    }
+
+    return { ok: true };
+  });
+
+  server.get("/v1/orgs/:orgId/llm/vertex/start", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const parsed = vertexStartQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid vertex connection query", parsed.error.flatten());
+    }
+
+    // Do not require X-Org-Id for start URLs (browser navigations cannot set headers).
+    const membership = await store.getMembership({
+      organizationId: params.orgId,
+      userId: auth.userId,
+      actorUserId: auth.userId,
+    });
+    if (!membership) {
+      throw forbidden("Organization access denied");
+    }
+    if (!["owner", "admin"].includes(membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    if (!vertexOAuthService) {
+      throw new AppError(500, { code: "VERTEX_OAUTH_NOT_CONFIGURED", message: "Vertex OAuth is not configured" });
+    }
+
+    const state = generateState();
+    const codeVerifier = generateCodeVerifier();
+    const nonce = crypto.randomBytes(24).toString("base64url");
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    vertexOAuthStates.set(state, {
+      organizationId: params.orgId,
+      userId: auth.userId,
+      projectId: parsed.data.projectId.trim(),
+      location: parsed.data.location.trim(),
+      codeVerifier,
+      nonce,
+      expiresAtSec: nowSec + OAUTH_CONTEXT_TTL_SEC,
+    });
+    setVertexOAuthCookies(reply, { state, nonce });
+
+    const url = vertexOAuthService.createAuthorizationUrl({ state, codeVerifier, nonce });
+    return reply.redirect(url.toString());
+  });
+
+  server.get("/v1/llm/vertex/callback", async (request, reply) => {
+    const auth = requireAuth(request);
+
+    function redirectWithError(code: string) {
+      const locale = localeFromAcceptLanguage(request.headers["accept-language"] as string | undefined);
+      const redirectUrl = new URL(`/${locale}/secrets`, WEB_BASE_URL);
+      redirectUrl.searchParams.set("vertex", "error");
+      redirectUrl.searchParams.set("code", code);
+      return reply.redirect(redirectUrl.toString());
+    }
+
+    try {
+      const parsed = oauthQuerySchema.safeParse(request.query ?? {});
+      if (!parsed.success) {
+        throw badRequest("Invalid callback query", parsed.error.flatten());
+      }
+
+      const signedStateCookie = request.cookies[VERTEX_OAUTH_STATE_COOKIE_NAME];
+      const signedNonceCookie = request.cookies[VERTEX_OAUTH_NONCE_COOKIE_NAME];
+      if (!signedStateCookie || !signedNonceCookie) {
+        throw unauthorized("Missing vertex OAuth state/nonce cookies");
+      }
+
+      const stateCookiePayload = verifyRefreshToken(signedStateCookie, oauthStateSecret);
+      const nonceCookiePayload = verifyRefreshToken(signedNonceCookie, oauthStateSecret);
+      if (!stateCookiePayload || !nonceCookiePayload) {
+        throw unauthorized("Invalid vertex OAuth state/nonce cookies");
+      }
+      if (stateCookiePayload.sessionId !== parsed.data.state) {
+        throw unauthorized("Invalid vertex OAuth state");
+      }
+
+      const stored = vertexOAuthStates.get(parsed.data.state);
+      if (!stored) {
+        throw unauthorized("Invalid vertex OAuth state");
+      }
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (stored.expiresAtSec < nowSec) {
+        vertexOAuthStates.delete(parsed.data.state);
+        throw unauthorized("Vertex OAuth state expired");
+      }
+      if (stored.userId !== auth.userId) {
+        throw unauthorized("Vertex OAuth state does not match authenticated user");
+      }
+      if (nonceCookiePayload.sessionId !== stored.nonce) {
+        throw unauthorized("Invalid vertex OAuth nonce");
+      }
+
+      clearVertexOAuthCookies(reply);
+      vertexOAuthStates.delete(parsed.data.state);
+
+      if (!vertexOAuthService) {
+        throw new AppError(500, { code: "VERTEX_OAUTH_NOT_CONFIGURED", message: "Vertex OAuth is not configured" });
+      }
+
+      const connection = await vertexOAuthService.exchangeCodeForConnection({
+        code: parsed.data.code,
+        codeVerifier: stored.codeVerifier,
+        nonce: stored.nonce,
+      });
+
+      const connectorId = "llm.vertex.oauth";
+      const name = "default";
+      const value = JSON.stringify({
+        refreshToken: connection.refreshToken,
+        projectId: stored.projectId,
+        location: stored.location,
+        accountEmail: connection.profile.email,
+        scopes: connection.scopes,
+        createdAt: new Date().toISOString(),
+      });
+
+      try {
+        await store.createConnectorSecret({
+          organizationId: stored.organizationId,
+          actorUserId: auth.userId,
+          connectorId,
+          name,
+          value,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === "SECRET_ALREADY_EXISTS") {
+          const existing = await store.listConnectorSecrets({
+            organizationId: stored.organizationId,
+            actorUserId: auth.userId,
+            connectorId,
+          });
+          const current = existing.find((s) => s.name === name) ?? null;
+          if (!current) {
+            throw new AppError(500, { code: "VERTEX_OAUTH_STORE_FAILED", message: "Failed to rotate existing Vertex connection secret" });
+          }
+          await store.rotateConnectorSecret({
+            organizationId: stored.organizationId,
+            actorUserId: auth.userId,
+            secretId: current.id,
+            value,
+          });
+        } else {
+          throw error;
+        }
+      }
+
+      const locale = localeFromAcceptLanguage(request.headers["accept-language"] as string | undefined);
+      const redirectUrl = new URL(`/${locale}/secrets`, WEB_BASE_URL);
+      redirectUrl.searchParams.set("vertex", "success");
+      redirectUrl.searchParams.set("orgId", stored.organizationId);
+      return reply.redirect(redirectUrl.toString());
+    } catch (error) {
+      if (error instanceof AppError) {
+        return redirectWithError(error.payload.code);
+      }
+      if (error instanceof Error) {
+        if (error.message === "VERTEX_OAUTH_REFRESH_TOKEN_REQUIRED") {
+          return redirectWithError("VERTEX_OAUTH_REFRESH_TOKEN_REQUIRED");
+        }
+        if (error.message === "OAUTH_INVALID_NONCE") {
+          return redirectWithError("OAUTH_INVALID_NONCE");
+        }
+        if (error.message === "OAUTH_EMAIL_REQUIRED") {
+          return redirectWithError("OAUTH_EMAIL_REQUIRED");
+        }
+      }
+      return redirectWithError("VERTEX_OAUTH_FAILED");
+    }
+  });
+
+  server.delete("/v1/orgs/:orgId/llm/vertex", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const membership = await store.getMembership({
+      organizationId: params.orgId,
+      userId: auth.userId,
+      actorUserId: auth.userId,
+    });
+    if (!membership) {
+      throw forbidden("Organization access denied");
+    }
+    if (!["owner", "admin"].includes(membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    const existing = await store.listConnectorSecrets({
+      organizationId: params.orgId,
+      actorUserId: auth.userId,
+      connectorId: "llm.vertex.oauth",
+    });
+
+    const current = existing.find((s) => s.name === "default") ?? null;
+    if (current) {
+      await store.deleteConnectorSecret({
+        organizationId: params.orgId,
+        actorUserId: auth.userId,
+        secretId: current.id,
+      });
     }
 
     return { ok: true };

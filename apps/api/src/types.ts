@@ -147,6 +147,18 @@ export type OrganizationCreditsRecord = {
   updatedAt: string;
 };
 
+export type OrganizationCreditLedgerEntryRecord = {
+  id: string;
+  organizationId: string;
+  deltaCredits: number;
+  reason: string;
+  stripeEventId: string | null;
+  workflowRunId: string | null;
+  createdByUserId: string | null;
+  metadata: unknown;
+  createdAt: string;
+};
+
 export type AgentPairingTokenRecord = {
   id: string;
   organizationId: string;
@@ -418,6 +430,13 @@ export interface AppStore {
     credits: number;
     metadata?: unknown;
   }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }>;
+
+  listOrganizationCreditLedger(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ entries: OrganizationCreditLedgerEntryRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
   getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null>;
   createOrganizationBillingAccount(input: {
     organizationId: string;

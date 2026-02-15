@@ -9,6 +9,7 @@ import type {
   InvitationRecord,
   MembershipRecord,
   OrganizationAgentRecord,
+  OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
   OrganizationRecord,
   OrganizationSettings,
@@ -47,6 +48,7 @@ export class MemoryAppStore implements AppStore {
     secretTag: Buffer;
   })>();
   private orgCreditBalances = new Map<string, { balanceCredits: number; updatedAt: string }>();
+  private orgCreditLedger = new Map<string, Array<Omit<OrganizationCreditLedgerEntryRecord, "createdAt"> & { createdAt: Date }>>();
   private processedStripeEvents = new Set<string>();
   private orgBillingAccounts = new Map<string, { stripeCustomerId: string }>();
   private agentPairingTokensByHash = new Map<string, AgentPairingTokenRecord>();
@@ -992,11 +994,27 @@ export class MemoryAppStore implements AppStore {
     metadata?: unknown;
   }): Promise<OrganizationCreditsRecord> {
     const existing = await this.getOrganizationCredits({ organizationId: input.organizationId });
+    const delta = Math.max(0, Math.floor(input.credits));
     const next = {
       balanceCredits: existing.balanceCredits + Math.max(0, Math.floor(input.credits)),
       updatedAt: nowIso(),
     };
     this.orgCreditBalances.set(input.organizationId, next);
+
+    const ledger = this.orgCreditLedger.get(input.organizationId) ?? [];
+    ledger.push({
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      deltaCredits: delta,
+      reason: input.reason,
+      stripeEventId: null,
+      workflowRunId: null,
+      createdByUserId: input.actorUserId ?? null,
+      metadata: input.metadata ?? null,
+      createdAt: new Date(),
+    });
+    this.orgCreditLedger.set(input.organizationId, ledger);
+
     return { organizationId: input.organizationId, balanceCredits: next.balanceCredits, updatedAt: next.updatedAt };
   }
 
@@ -1010,13 +1028,66 @@ export class MemoryAppStore implements AppStore {
       return { applied: false, balance: await this.getOrganizationCredits({ organizationId: input.organizationId }) };
     }
     this.processedStripeEvents.add(input.stripeEventId);
-    const balance = await this.grantOrganizationCredits({
+    const delta = Math.max(0, Math.floor(input.credits));
+    const existing = await this.getOrganizationCredits({ organizationId: input.organizationId });
+    const next = { balanceCredits: existing.balanceCredits + delta, updatedAt: nowIso() };
+    this.orgCreditBalances.set(input.organizationId, next);
+
+    const ledger = this.orgCreditLedger.get(input.organizationId) ?? [];
+    ledger.push({
+      id: crypto.randomUUID(),
       organizationId: input.organizationId,
-      credits: input.credits,
+      deltaCredits: delta,
       reason: "stripe_topup",
-      metadata: input.metadata,
+      stripeEventId: input.stripeEventId,
+      workflowRunId: null,
+      createdByUserId: null,
+      metadata: input.metadata ?? null,
+      createdAt: new Date(),
     });
+    this.orgCreditLedger.set(input.organizationId, ledger);
+
+    const balance: OrganizationCreditsRecord = {
+      organizationId: input.organizationId,
+      balanceCredits: next.balanceCredits,
+      updatedAt: next.updatedAt,
+    };
     return { applied: true, balance };
+  }
+
+  async listOrganizationCreditLedger(input: {
+    organizationId: string;
+    actorUserId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ entries: OrganizationCreditLedgerEntryRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(200, Math.floor(input.limit))) : 50;
+    const all = this.orgCreditLedger.get(input.organizationId) ?? [];
+
+    const cursor = input.cursor
+      ? { createdAtMs: new Date(input.cursor.createdAt).getTime(), id: input.cursor.id }
+      : null;
+
+    const filtered = cursor
+      ? all.filter((row) => {
+          const ts = row.createdAt.getTime();
+          return ts < cursor.createdAtMs || (ts === cursor.createdAtMs && row.id < cursor.id);
+        })
+      : all;
+
+    const sorted = [...filtered].sort((a, b) => {
+      const dt = b.createdAt.getTime() - a.createdAt.getTime();
+      if (dt !== 0) return dt;
+      return b.id.localeCompare(a.id);
+    });
+
+    const slice = sorted.slice(0, limit);
+    const next = sorted.length > limit ? slice[slice.length - 1] ?? null : null;
+
+    return {
+      entries: slice.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
+      nextCursor: next ? { createdAt: next.createdAt.toISOString(), id: next.id } : null,
+    };
   }
 
   async getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null> {

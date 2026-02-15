@@ -329,6 +329,42 @@ export async function grantOrganizationCredits(
   });
 }
 
+export async function listOrganizationCreditLedger(
+  db: Db,
+  input: {
+    organizationId: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+): Promise<{ entries: typeof organizationCreditLedger.$inferSelect[]; nextCursor: { createdAt: Date; id: string } | null }> {
+  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(200, Math.floor(input.limit))) : 50;
+
+  const where = and(
+    eq(organizationCreditLedger.organizationId, input.organizationId),
+    input.cursor
+      ? or(
+          lt(organizationCreditLedger.createdAt, input.cursor.createdAt),
+          and(eq(organizationCreditLedger.createdAt, input.cursor.createdAt), lt(organizationCreditLedger.id, input.cursor.id))
+        )
+      : undefined
+  );
+
+  const rows = await db
+    .select()
+    .from(organizationCreditLedger)
+    .where(where)
+    .orderBy(desc(organizationCreditLedger.createdAt), desc(organizationCreditLedger.id))
+    .limit(limit + 1);
+
+  const slice = rows.slice(0, limit);
+  const tail = rows.length > limit ? slice[slice.length - 1] ?? null : null;
+
+  return {
+    entries: slice,
+    nextCursor: tail ? { createdAt: tail.createdAt, id: tail.id } : null,
+  };
+}
+
 export async function getOrganizationBillingAccount(db: Db, input: { organizationId: string }) {
   const [row] = await db
     .select()
