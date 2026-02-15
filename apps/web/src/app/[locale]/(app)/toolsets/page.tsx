@@ -35,6 +35,27 @@ import {
 } from "../../../../lib/hooks/use-toolsets";
 
 const ENV_PLACEHOLDER_RE = /^\$\{ENV:[A-Z0-9_]{1,128}\}$/;
+const MCP_NAME_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/;
+const SKILL_ID_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/;
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.valueOf())) return "-";
+  try {
+    // Use runtime locale (browser) for display.
+    const fmt = new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return fmt.format(d);
+  } catch {
+    return d.toISOString();
+  }
+}
 
 function parseKvLines(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -198,6 +219,10 @@ function ToolsetEditorDialog(props: {
       toast.error(t("toolsets.validation.mcpNameRequired"));
       return;
     }
+    if (!MCP_NAME_RE.test(mcpDraft.name.trim())) {
+      toast.error(t("toolsets.validation.invalidMcpServerName"));
+      return;
+    }
     if (mcpDraft.transport === "stdio" && (!mcpDraft.command || mcpDraft.command.trim().length === 0)) {
       toast.error(t("toolsets.validation.mcpCommandRequired"));
       return;
@@ -260,6 +285,10 @@ function ToolsetEditorDialog(props: {
   function saveSkillEditor() {
     if (skillDraft.id.trim().length === 0 || skillDraft.name.trim().length === 0) {
       toast.error(t("toolsets.validation.skillIdNameRequired"));
+      return;
+    }
+    if (!SKILL_ID_RE.test(skillDraft.id.trim())) {
+      toast.error(t("toolsets.validation.invalidSkillId"));
       return;
     }
     const hasSkillMd = (skillDraft.files ?? []).some((f) => f.path === "SKILL.md");
@@ -420,6 +449,15 @@ function ToolsetEditorDialog(props: {
               <DialogDescription>{t("toolsets.placeholderEnv")}</DialogDescription>
             </DialogHeader>
             <div className="mt-3 grid gap-3">
+              <label className="flex items-center gap-2 text-sm text-text">
+                <input
+                  type="checkbox"
+                  checked={(mcpDraft.enabled ?? true) !== false}
+                  onChange={(e) => setMcpDraft((p) => ({ ...p, enabled: e.target.checked }))}
+                  className="h-4 w-4 accent-[color:var(--color-accent)]"
+                />
+                <span>{t("toolsets.mcpDialog.enabledLabel")}</span>
+              </label>
               <div className="grid gap-1.5">
                 <Label>{t("toolsets.mcpDialog.nameLabel")}</Label>
                 <Input value={mcpDraft.name} onChange={(e) => setMcpDraft((p) => ({ ...p, name: e.target.value }))} />
@@ -463,6 +501,14 @@ function ToolsetEditorDialog(props: {
                 <Label>{t("toolsets.mcpDialog.headersLabel")}</Label>
                 <Textarea value={mcpHeaderLines} onChange={(e) => setMcpHeaderLines(e.target.value)} className="min-h-[110px]" />
               </div>
+              <div className="grid gap-1.5">
+                <Label>{t("toolsets.mcpDialog.descriptionLabel")}</Label>
+                <Textarea
+                  value={mcpDraft.description ?? ""}
+                  onChange={(e) => setMcpDraft((p) => ({ ...p, description: e.target.value }))}
+                  className="min-h-[90px]"
+                />
+              </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setMcpEditorOpen(false)}>
                   {t("common.cancel")}
@@ -481,12 +527,21 @@ function ToolsetEditorDialog(props: {
               <DialogTitle>{t("toolsets.skillDialog.title")}</DialogTitle>
               <DialogDescription>{t("toolsets.skillDialog.subtitle")}</DialogDescription>
             </DialogHeader>
-	            <div className="mt-3 grid gap-3">
-	              <div className="grid gap-3 md:grid-cols-2">
-	                <div className="grid gap-1.5">
-	                  <Label>{t("toolsets.skillDialog.idLabel")}</Label>
-	                  <Input value={skillDraft.id} onChange={(e) => setSkillDraft((p) => ({ ...p, id: e.target.value }))} />
-	                </div>
+            <div className="mt-3 grid gap-3">
+              <label className="flex items-center gap-2 text-sm text-text">
+                <input
+                  type="checkbox"
+                  checked={(skillDraft.enabled ?? true) !== false}
+                  onChange={(e) => setSkillDraft((p) => ({ ...p, enabled: e.target.checked }))}
+                  className="h-4 w-4 accent-[color:var(--color-accent)]"
+                />
+                <span>{t("toolsets.skillDialog.enabledLabel")}</span>
+              </label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label>{t("toolsets.skillDialog.idLabel")}</Label>
+                  <Input value={skillDraft.id} onChange={(e) => setSkillDraft((p) => ({ ...p, id: e.target.value }))} />
+                </div>
 	                <div className="grid gap-1.5">
 	                  <Label>{t("toolsets.skillDialog.nameLabel")}</Label>
 	                  <Input value={skillDraft.name} onChange={(e) => setSkillDraft((p) => ({ ...p, name: e.target.value }))} />
@@ -500,6 +555,44 @@ function ToolsetEditorDialog(props: {
 	                  className="min-h-[90px]"
 	                />
 	              </div>
+              <div className="grid gap-2 rounded-md border border-borderSubtle bg-panel/40 p-3">
+                <div className="text-sm font-medium text-text">{t("toolsets.skillDialog.optionalDirs.title")}</div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(skillDraft.optionalDirs?.scripts)}
+                      onChange={(e) =>
+                        setSkillDraft((p) => ({ ...p, optionalDirs: { ...(p.optionalDirs ?? {}), scripts: e.target.checked } }))
+                      }
+                      className="h-4 w-4 accent-[color:var(--color-accent)]"
+                    />
+                    <span>{t("toolsets.skillDialog.optionalDirs.scripts")}</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(skillDraft.optionalDirs?.references)}
+                      onChange={(e) =>
+                        setSkillDraft((p) => ({ ...p, optionalDirs: { ...(p.optionalDirs ?? {}), references: e.target.checked } }))
+                      }
+                      className="h-4 w-4 accent-[color:var(--color-accent)]"
+                    />
+                    <span>{t("toolsets.skillDialog.optionalDirs.references")}</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(skillDraft.optionalDirs?.assets)}
+                      onChange={(e) =>
+                        setSkillDraft((p) => ({ ...p, optionalDirs: { ...(p.optionalDirs ?? {}), assets: e.target.checked } }))
+                      }
+                      className="h-4 w-4 accent-[color:var(--color-accent)]"
+                    />
+                    <span>{t("toolsets.skillDialog.optionalDirs.assets")}</span>
+                  </label>
+                </div>
+              </div>
 	              <div className="grid gap-1.5">
 	                <Label>{t("toolsets.skillDialog.filesLabel")}</Label>
 	                <div className="flex flex-wrap items-center gap-2">
@@ -661,6 +754,7 @@ export default function ToolsetsPage() {
 
   const [adoptSlug, setAdoptSlug] = useState<string | null>(null);
   const [adoptName, setAdoptName] = useState("");
+  const [adoptDescription, setAdoptDescription] = useState("");
   const [adoptOpen, setAdoptOpen] = useState(false);
 
   const columns = useMemo(() => {
@@ -695,6 +789,11 @@ export default function ToolsetsPage() {
         header: t("toolsets.publicSlug"),
         accessorKey: "publicSlug",
         cell: ({ row }: any) => <span className="font-mono text-xs text-muted">{row.original.publicSlug ?? "-"}</span>,
+      },
+      {
+        header: t("toolsets.updatedAt"),
+        accessorKey: "updatedAt",
+        cell: ({ row }: any) => <span className="text-xs text-muted">{formatDateTime((row.original as Toolset).updatedAt)}</span>,
       },
       {
         header: t("common.actions"),
@@ -931,6 +1030,7 @@ export default function ToolsetsPage() {
                               onClick={() => {
                                 setAdoptSlug(it.publicSlug);
                                 setAdoptName(t("toolsets.adoptDefaultName", { name: it.name }));
+                                setAdoptDescription(it.description ?? "");
                                 setAdoptOpen(true);
                               }}
                             >
@@ -1108,6 +1208,15 @@ export default function ToolsetsPage() {
               <Label>{t("toolsets.name")}</Label>
               <Input value={adoptName} onChange={(e) => setAdoptName(e.target.value)} />
             </div>
+            <div className="grid gap-1.5">
+              <Label>{t("toolsets.description")}</Label>
+              <Textarea
+                value={adoptDescription}
+                onChange={(e) => setAdoptDescription(e.target.value)}
+                placeholder={t("toolsets.adoptDescriptionPlaceholder")}
+                className="min-h-[90px]"
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setAdoptOpen(false)}>
                 {t("common.cancel")}
@@ -1116,7 +1225,11 @@ export default function ToolsetsPage() {
                 variant="accent"
                 onClick={async () => {
                   if (!orgId || !adoptSlug) return;
-                  await adoptToolset.mutateAsync({ publicSlug: adoptSlug, name: adoptName.trim() });
+                  await adoptToolset.mutateAsync({
+                    publicSlug: adoptSlug,
+                    name: adoptName.trim(),
+                    ...(adoptDescription.trim().length > 0 ? { description: adoptDescription.trim() } : {}),
+                  });
                   toast.success(t("common.created"));
                   setAdoptOpen(false);
                 }}

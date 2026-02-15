@@ -56,3 +56,19 @@ Expected results:
 - Node execution fails fast with `MCP_ENV_NOT_SET:VAR` when a placeholder env var is missing.
 - Enabled Agent Skills are staged to the run workdir under `.claude/skills/<skillId>/...`.
 - Enabled MCP servers are passed to the Claude Agent SDK under `mcpServers` and their tools become callable as `mcp__<server>__*`.
+
+### Claude Agent SDK E2E (Opt-in)
+
+The engine adapter includes an opt-in e2e test that validates the local Claude Agent SDK + Claude Code wiring without impacting CI.
+
+Run:
+```bash
+VESPID_CLAUDE_E2E=1 \
+VESPID_CLAUDE_CODE_PATH=/path/to/claude \
+ANTHROPIC_API_KEY=... \
+pnpm -C packages/engine-claude-agent-sdk test
+```
+
+Notes:
+- This test is skipped unless `VESPID_CLAUDE_E2E` is set.
+- It registers an SDK MCP server and checks that `mcpServerStatus()` includes it.

@@ -358,6 +358,7 @@
     "visibility": "Visibility",
     "name": "Name",
     "description": "Description",
+    "updatedAt": "Updated",
     "mcpServers": "MCP servers",
     "agentSkills": "Agent Skills",
     "placeholderEnv": "Value must be ${ENV:VAR_NAME}",
@@ -392,22 +393,32 @@
       "fileCount": "{count} file(s)"
     },
     "adoptDefaultName": "{name} (Adopted)",
+    "adoptDescriptionPlaceholder": "Optional description...",
     "mcpDialog": {
       "title": "MCP server",
+      "enabledLabel": "Enabled",
       "nameLabel": "Name",
       "transportLabel": "Transport",
       "commandLabel": "Command",
       "argsLabel": "Args (comma-separated)",
       "urlLabel": "URL",
       "envLabel": "Env (one per line: KEY=${ENV:VAR})",
-      "headersLabel": "Headers (one per line: KEY=${ENV:VAR})"
+      "headersLabel": "Headers (one per line: KEY=${ENV:VAR})",
+      "descriptionLabel": "Description"
     },
     "skillDialog": {
       "title": "Agent Skill bundle",
       "subtitle": "Bundle format: agentskills-v1",
+      "enabledLabel": "Enabled",
       "idLabel": "Id",
       "nameLabel": "Name",
       "descriptionLabel": "Description",
+      "optionalDirs": {
+        "title": "Optional directories",
+        "scripts": "scripts/",
+        "references": "references/",
+        "assets": "assets/"
+      },
       "filesLabel": "Files",
       "addFile": "Add file",
       "removeFile": "Remove",
@@ -419,9 +430,11 @@
     "validation": {
       "nameRequired": "Name is required.",
       "mcpNameRequired": "MCP name is required.",
+      "invalidMcpServerName": "Invalid MCP server name (use a-z0-9, -, _).",
       "mcpCommandRequired": "Command is required for stdio transport.",
       "mcpUrlRequired": "URL is required for http transport.",
       "skillIdNameRequired": "Skill id and name are required.",
+      "invalidSkillId": "Invalid skill id (use a-z0-9, -, _).",
       "skillMdRequired": "SKILL.md is required.",
       "invalidPlaceholderFor": "Invalid placeholder for {key}.",
       "duplicateFilePath": "File path already exists: {path}"

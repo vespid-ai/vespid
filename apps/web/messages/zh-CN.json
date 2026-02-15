@@ -357,6 +357,7 @@
     "visibility": "可见性",
     "name": "名称",
     "description": "描述",
+    "updatedAt": "更新时间",
     "mcpServers": "MCP 服务",
     "agentSkills": "Agent Skills",
     "placeholderEnv": "值必须为 ${ENV:VAR_NAME}",
@@ -391,22 +392,32 @@
       "fileCount": "{count} 个文件"
     },
     "adoptDefaultName": "{name}（已采用）",
+    "adoptDescriptionPlaceholder": "可选描述...",
     "mcpDialog": {
       "title": "MCP 服务",
+      "enabledLabel": "启用",
       "nameLabel": "名称",
       "transportLabel": "传输",
       "commandLabel": "命令",
       "argsLabel": "参数（逗号分隔）",
       "urlLabel": "URL",
       "envLabel": "环境变量（每行: KEY=${ENV:VAR}）",
-      "headersLabel": "Headers（每行: KEY=${ENV:VAR}）"
+      "headersLabel": "Headers（每行: KEY=${ENV:VAR}）",
+      "descriptionLabel": "描述"
     },
     "skillDialog": {
       "title": "Agent Skill Bundle",
       "subtitle": "Bundle 格式：agentskills-v1",
+      "enabledLabel": "启用",
       "idLabel": "Id",
       "nameLabel": "名称",
       "descriptionLabel": "描述",
+      "optionalDirs": {
+        "title": "可选目录",
+        "scripts": "scripts/",
+        "references": "references/",
+        "assets": "assets/"
+      },
       "filesLabel": "文件",
       "addFile": "添加文件",
       "removeFile": "移除",
@@ -418,9 +429,11 @@
     "validation": {
       "nameRequired": "名称必填。",
       "mcpNameRequired": "MCP 名称必填。",
+      "invalidMcpServerName": "MCP 服务名称格式无效（仅 a-z0-9, -, _）。",
       "mcpCommandRequired": "stdio 传输需要 command。",
       "mcpUrlRequired": "http 传输需要 url。",
       "skillIdNameRequired": "Skill id 和 name 必填。",
+      "invalidSkillId": "Skill id 格式无效（仅 a-z0-9, -, _）。",
       "skillMdRequired": "必须包含 SKILL.md。",
       "invalidPlaceholderFor": "{key} 的占位符无效。",
       "duplicateFilePath": "文件路径已存在: {path}"
