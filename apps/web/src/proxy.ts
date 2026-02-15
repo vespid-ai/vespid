@@ -9,7 +9,9 @@ export default createMiddleware({
 
 export const config = {
   // Match all pathnames except for:
+  // - api (Next.js route handlers should not be locale-prefixed)
+  // - billing (non-localized redirect endpoints)
   // - _next (Next.js internals)
   // - files with extensions (static assets)
-  matcher: ["/((?!_next|.*\\..*).*)"],
+  matcher: ["/((?!api|billing|_next|.*\\..*).*)"],
 };
