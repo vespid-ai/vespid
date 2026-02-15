@@ -27,7 +27,7 @@ export function HowItWorks({ eyebrow, title, subtitle, steps }: HowItWorksProps)
           {steps.map((step, index) => (
             <div
               key={step.title}
-              className="relative rounded-2xl border border-borderSubtle/70 bg-panel/60 p-6 shadow-elev1"
+              className="relative rounded-2xl border border-borderSubtle/70 bg-panel/60 p-6 shadow-elev1 transition will-change-transform hover:-translate-y-0.5 hover:border-borderStrong/70 hover:shadow-elev2"
             >
               <div className="absolute right-5 top-5 text-xs font-semibold text-muted">0{index + 1}</div>
               <div className="text-lg font-semibold text-text">{step.title}</div>

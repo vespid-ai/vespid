@@ -12,6 +12,7 @@ import { MarketingHero } from "../../components/marketing/marketing-hero";
 import { LogoWall } from "../../components/marketing/logo-wall";
 import { FeatureGrid } from "../../components/marketing/feature-grid";
 import { HowItWorks } from "../../components/marketing/how-it-works";
+import { Quickstart } from "../../components/marketing/quickstart";
 import { UseCases } from "../../components/marketing/use-cases";
 import { CaseStudies } from "../../components/marketing/case-studies";
 import { Comparison } from "../../components/marketing/comparison";
@@ -52,12 +53,12 @@ export default function LocaleHomePage() {
   ];
 
   const logos = [
-    "novaBank",
-    "helixBio",
-    "northwind",
-    "atlasRetail",
-    "orchidMedia",
-    "kiteManufacturing",
+    "fintech",
+    "healthcare",
+    "retailOps",
+    "soc2Ready",
+    "rlsDefault",
+    "auditTrails",
   ].map((key) => t(`marketing.logos.items.${key}`));
 
   const featureItems = [
@@ -213,7 +214,44 @@ export default function LocaleHomePage() {
           }}
         />
 
-        <LogoWall title={t("marketing.logos.title")} logos={logos} />
+        <Quickstart
+          eyebrow={t("marketing.quickstart.eyebrow")}
+          title={t("marketing.quickstart.title")}
+          subtitle={t("marketing.quickstart.subtitle")}
+          steps={[
+            {
+              timeLabel: t("marketing.quickstart.steps.signIn.time"),
+              title: t("marketing.quickstart.steps.signIn.title"),
+              description: t("marketing.quickstart.steps.signIn.description"),
+            },
+            {
+              timeLabel: t("marketing.quickstart.steps.pick.time"),
+              title: t("marketing.quickstart.steps.pick.title"),
+              description: t("marketing.quickstart.steps.pick.description"),
+            },
+            {
+              timeLabel: t("marketing.quickstart.steps.run.time"),
+              title: t("marketing.quickstart.steps.run.title"),
+              description: t("marketing.quickstart.steps.run.description"),
+            },
+          ]}
+          artifact={{
+            title: t("marketing.quickstart.artifact.title"),
+            subtitle: t("marketing.quickstart.artifact.subtitle"),
+            dslSnippet: t("marketing.quickstart.artifact.dslSnippet"),
+            events: [
+              t("marketing.quickstart.artifact.events.started"),
+              t("marketing.quickstart.artifact.events.nodeStarted"),
+              t("marketing.quickstart.artifact.events.nodeSucceeded"),
+              t("marketing.quickstart.artifact.events.runSucceeded"),
+            ],
+            callout: t("marketing.quickstart.artifact.callout"),
+            ctaLabel: t("marketing.quickstart.artifact.cta"),
+            ctaHref: `/${locale}/auth`,
+          }}
+        />
+
+        <LogoWall title={t("marketing.logos.title")} subtitle={t("marketing.logos.subtitle")} logos={logos} />
 
         <FeatureGrid
           eyebrow={t("marketing.features.eyebrow")}

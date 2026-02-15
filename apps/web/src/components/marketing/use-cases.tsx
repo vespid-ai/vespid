@@ -27,7 +27,7 @@ export function UseCases({ eyebrow, title, subtitle, items }: UseCasesProps) {
           {items.map((item) => (
             <div
               key={item.title}
-              className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-6 shadow-elev1"
+              className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-6 shadow-elev1 transition will-change-transform hover:-translate-y-0.5 hover:border-borderStrong/70 hover:shadow-elev2"
             >
               <div className="text-base font-semibold text-text">{item.title}</div>
               <p className="mt-2 text-sm text-muted">{item.description}</p>

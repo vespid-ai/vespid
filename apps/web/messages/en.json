@@ -601,13 +601,55 @@
     },
     "logos": {
       "title": "Trusted by teams building automation at scale",
+      "subtitle": "Industry-ready patterns: isolation, auditability, and safe execution.",
       "items": {
         "novaBank": "NovaBank",
         "helixBio": "HelixBio",
         "northwind": "Northwind Logistics",
         "atlasRetail": "Atlas Retail",
         "orchidMedia": "Orchid Media",
-        "kiteManufacturing": "Kite Manufacturing"
+        "kiteManufacturing": "Kite Manufacturing",
+        "fintech": "Fintech",
+        "healthcare": "Healthcare",
+        "retailOps": "Retail ops",
+        "soc2Ready": "SOC2-ready",
+        "rlsDefault": "RLS-first",
+        "auditTrails": "Audit trails"
+      }
+    },
+    "quickstart": {
+      "eyebrow": "Quickstart",
+      "title": "From zero to first run in minutes",
+      "subtitle": "Sign in to get a personal workspace. Try managed credits now, bring your own key later.",
+      "steps": {
+        "signIn": {
+          "time": "30s",
+          "title": "Sign in",
+          "description": "OAuth sign-in creates a personal workspace automatically."
+        },
+        "pick": {
+          "time": "2 min",
+          "title": "Pick a workflow",
+          "description": "Start from a template, then refine nodes and connectors."
+        },
+        "run": {
+          "time": "1 min",
+          "title": "Run + observe",
+          "description": "Queued execution with events, retries, and a timeline you can audit."
+        }
+      },
+      "artifact": {
+        "title": "Artifact preview",
+        "subtitle": "What you ship is what you can audit.",
+        "dslSnippet": "{\n  \"version\": \"v2\",\n  \"nodes\": [\n    { \"id\": \"n1\", \"type\": \"agent.run\" },\n    { \"id\": \"n2\", \"type\": \"connector.action\" }\n  ]\n}",
+        "events": {
+          "started": "run_started  attempt=1",
+          "nodeStarted": "node_started  n1:agent.run",
+          "nodeSucceeded": "node_succeeded  n2:connector.action",
+          "runSucceeded": "run_succeeded"
+        },
+        "callout": "No API key required to try. Managed credits included for quick starts.",
+        "cta": "Start Free"
       }
     },
     "features": {

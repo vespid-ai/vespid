@@ -601,13 +601,55 @@
     },
     "logos": {
       "title": "深受规模化自动化团队信赖",
+      "subtitle": "面向行业的基线：隔离、可审计、可控执行。",
       "items": {
         "novaBank": "NovaBank",
         "helixBio": "HelixBio",
         "northwind": "Northwind Logistics",
         "atlasRetail": "Atlas Retail",
         "orchidMedia": "Orchid Media",
-        "kiteManufacturing": "Kite Manufacturing"
+        "kiteManufacturing": "Kite Manufacturing",
+        "fintech": "金融科技",
+        "healthcare": "医疗健康",
+        "retailOps": "零售运营",
+        "soc2Ready": "SOC2 就绪",
+        "rlsDefault": "RLS 优先",
+        "auditTrails": "审计轨迹"
+      }
+    },
+    "quickstart": {
+      "eyebrow": "快速上手",
+      "title": "几分钟跑通第一条自动化",
+      "subtitle": "登录后自动创建个人工作区。先用内置额度试跑，后续再 BYOK。",
+      "steps": {
+        "signIn": {
+          "time": "30 秒",
+          "title": "登录",
+          "description": "通过 OAuth 登录后会自动创建个人工作区。"
+        },
+        "pick": {
+          "time": "2 分钟",
+          "title": "选择工作流",
+          "description": "从模板开始，逐步调整节点与连接器。"
+        },
+        "run": {
+          "time": "1 分钟",
+          "title": "运行并观察",
+          "description": "队列执行 + 运行事件 + 重试与时间线，可审计可回放。"
+        }
+      },
+      "artifact": {
+        "title": "交付物预览",
+        "subtitle": "你发布的，就是你能审计的。",
+        "dslSnippet": "{\n  \"version\": \"v2\",\n  \"nodes\": [\n    { \"id\": \"n1\", \"type\": \"agent.run\" },\n    { \"id\": \"n2\", \"type\": \"connector.action\" }\n  ]\n}",
+        "events": {
+          "started": "run_started  attempt=1",
+          "nodeStarted": "node_started  n1:agent.run",
+          "nodeSucceeded": "node_succeeded  n2:connector.action",
+          "runSucceeded": "run_succeeded"
+        },
+        "callout": "无需 API Key 也能试跑；内置额度用于快速上手。",
+        "cta": "免费开始"
       }
     },
     "features": {
