@@ -39,6 +39,8 @@ Use this monorepo layout:
 - `pnpm dev`
 - `pnpm migrate:check`
 - `pnpm migrate`
+- `pnpm db:rollback`
+- `pnpm check:migrations`
 
 ## Codex Rules (AI Execution Guardrails)
 This repo includes Codex rules to control what commands may run **outside the sandbox**:
@@ -95,6 +97,8 @@ Operational guardrails:
 - Auth runtime is dual-mode: short-lived Bearer access token + HttpOnly refresh cookie.
 - Billing model is Seat + Usage (Stripe), with idempotent webhook processing.
 - Node agent supports CLI-first execution with optional Docker isolation mode.
+- Database migrations must be reversible by default: every `packages/db/migrations/*.sql` must ship with a same-name `*.down.sql` in the same PR.
+- CI must enforce migration up/down pairing via `pnpm check:migrations`.
 
 ## Security & Multi-Tenant Guardrails
 - Never access tenant data without tenant context (`organization_id` + auth principal).

@@ -19,6 +19,7 @@
     "test": "vitest run --exclude 'dist/**'",
     "test:integration": "vitest run src/rls.integration.test.ts",
     "migrate": "tsx src/migrate.ts",
+    "rollback": "tsx src/rollback.ts",
     "migrate:check": "tsx src/migration-check.ts"
   },
   "dependencies": {
