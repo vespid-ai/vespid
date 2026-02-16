@@ -161,6 +161,8 @@
     "oauthDescription": "或使用以下方式继续",
     "oauthSuccess": "OAuth 登录成功（{provider}）。",
     "oauthError": "OAuth 登录失败: {code}",
+    "loggedOutTitle": "已退出登录",
+    "loggedOutDescription": "你已退出登录，请重新登录继续使用。",
     "google": "使用 Google 继续",
     "github": "使用 GitHub 继续"
   },

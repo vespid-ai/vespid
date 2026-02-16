@@ -28,6 +28,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { useTheme } from "next-themes";
+import { useQueryClient } from "@tanstack/react-query";
 import { useSession } from "../../lib/hooks/use-session";
 import {
   clearActiveOrgId,
@@ -77,6 +78,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const locale = useMemo(() => getLocaleFromPathname(pathname ?? "/en"), [pathname]);
+  const queryClient = useQueryClient();
 
   const session = useSession();
   const { density, setDensity } = useDensity();
@@ -272,8 +274,20 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
-    await apiFetch("/v1/auth/logout", { method: "POST" });
-    router.refresh();
+    try {
+      await apiFetch("/v1/auth/logout", { method: "POST" });
+    } catch {
+      // Best effort: continue local sign-out UX even if network is unstable.
+    }
+    clearActiveOrgId();
+    setOrgSummaries([]);
+    setKnownOrgIds([]);
+    setDraftOrgId("");
+    setCreditsBalance(null);
+    setHasOrgSecrets(false);
+    setHasStarterResource(false);
+    queryClient.setQueryData(["session"], null);
+    router.push(`/${locale}/auth?loggedOut=1`);
   }
 
   const userEmail = session.data?.user?.email;

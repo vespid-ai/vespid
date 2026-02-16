@@ -36,6 +36,7 @@ export default function AuthPage() {
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
   const [oauthCode, setOauthCode] = useState<string | null>(null);
+  const [loggedOut, setLoggedOut] = useState(false);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -47,6 +48,7 @@ export default function AuthPage() {
     setOauthStatus(query.get("oauth"));
     setOauthProvider(query.get("provider"));
     setOauthCode(query.get("code"));
+    setLoggedOut(query.get("loggedOut") === "1");
   }, []);
 
   const oauthBanner = useMemo(() => {
@@ -132,6 +134,18 @@ export default function AuthPage() {
               <CardTitle>{t("auth.oauth")}</CardTitle>
             </div>
             <CardDescription>{oauthBanner.text}</CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
+
+      {loggedOut ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Badge variant="ok">{t("common.ok")}</Badge>
+              <CardTitle>{t("auth.loggedOutTitle")}</CardTitle>
+            </div>
+            <CardDescription>{t("auth.loggedOutDescription")}</CardDescription>
           </CardHeader>
         </Card>
       ) : null}
