@@ -100,9 +100,7 @@ export type GatewayDispatchRequest = {
   attemptCount: number;
   kind: GatewayExecutionKind;
   payload: unknown;
-  selectorTag?: string;
-  selectorAgentId?: string;
-  selectorGroup?: string;
+  executorSelector?: ExecutorSelectorV1;
   secret?: string;
   timeoutMs?: number;
 };
@@ -198,9 +196,10 @@ export type ToolPolicyV1 = {
 
 export type ExecutorSelectorV1 = {
   pool: ExecutorPool;
-  labels?: string[];
-  group?: string;
-  tag?: string;
+  labels?: string[] | undefined;
+  group?: string | undefined;
+  tag?: string | undefined;
+  executorId?: string | undefined;
 };
 
 export type GatewayExecutorHelloV2 = {

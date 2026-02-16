@@ -652,11 +652,7 @@ export async function processWorkflowRunJob(
           attemptCount,
           kind,
           payload: nodeResult.block.payload,
-          ...(typeof nodeResult.block.selectorTag === "string" ? { selectorTag: nodeResult.block.selectorTag } : {}),
-          ...(typeof nodeResult.block.selectorAgentId === "string"
-            ? { selectorAgentId: nodeResult.block.selectorAgentId }
-            : {}),
-          ...(typeof nodeResult.block.selectorGroup === "string" ? { selectorGroup: nodeResult.block.selectorGroup } : {}),
+          ...(nodeResult.block.executorSelector ? { executorSelector: nodeResult.block.executorSelector } : {}),
           ...(typeof nodeResult.block.secret === "string" && nodeResult.block.secret.length > 0
             ? { secret: nodeResult.block.secret }
             : {}),

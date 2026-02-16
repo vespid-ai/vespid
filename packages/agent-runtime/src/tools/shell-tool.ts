@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AgentToolDefinition, AgentToolExecuteResult } from "./types.js";
+import type { ExecutorSelectorV1 } from "@vespid/shared";
 
 const shellRunArgsSchema = z.object({
   script: z.string().min(1).max(200_000),
@@ -20,12 +21,25 @@ const shellRunArgsSchema = z.object({
     .optional(),
   selector: z
     .object({
-      tag: z.string().min(1).max(64).optional(),
-      agentId: z.string().uuid().optional(),
+      pool: z.enum(["managed", "byon"]).default("managed"),
+      labels: z.array(z.string().min(1).max(64)).max(50).optional(),
       group: z.string().min(1).max(64).optional(),
+      tag: z.string().min(1).max(64).optional(),
+      executorId: z.string().uuid().optional(),
     })
     .optional(),
 });
+
+function normalizeSelector(selector: z.infer<typeof shellRunArgsSchema>["selector"]): ExecutorSelectorV1 | undefined {
+  if (!selector) return undefined;
+  return {
+    pool: selector.pool,
+    ...(Array.isArray(selector.labels) && selector.labels.length > 0 ? { labels: selector.labels } : {}),
+    ...(typeof selector.group === "string" && selector.group.length > 0 ? { group: selector.group } : {}),
+    ...(typeof selector.tag === "string" && selector.tag.length > 0 ? { tag: selector.tag } : {}),
+    ...(typeof selector.executorId === "string" && selector.executorId.length > 0 ? { executorId: selector.executorId } : {}),
+  };
+}
 
 export const shellRunTool: AgentToolDefinition = {
   id: "shell.run",
@@ -41,7 +55,7 @@ export const shellRunTool: AgentToolDefinition = {
       return { status: "failed", error: "INVALID_TOOL_INPUT" };
     }
 
-    const selector = parsed.data.selector;
+    const selector = normalizeSelector(parsed.data.selector);
     const nodeId = `${ctx.nodeId}:shell.run`;
     const node = {
       id: nodeId,
@@ -69,9 +83,7 @@ export const shellRunTool: AgentToolDefinition = {
           workflowId: ctx.workflowId,
           attemptCount: ctx.attemptCount,
         },
-        ...(selector?.tag ? { selectorTag: selector.tag } : {}),
-        ...(selector?.agentId ? { selectorAgentId: selector.agentId } : {}),
-        ...(selector?.group ? { selectorGroup: selector.group } : {}),
+        ...(selector ? { executorSelector: selector } : {}),
         ...(typeof parsed.data.sandbox?.timeoutMs === "number" && Number.isFinite(parsed.data.sandbox.timeoutMs)
           ? { timeoutMs: parsed.data.sandbox.timeoutMs }
           : {}),

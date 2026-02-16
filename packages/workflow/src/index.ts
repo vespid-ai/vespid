@@ -47,17 +47,15 @@ const agentExecuteSandboxSchema = z.object({
   envPassthroughAllowlist: z.array(z.string().min(1)).max(50).optional(),
 });
 
-const nodeExecutionSelectorSchema = z.union([
-  z.object({
-    tag: z.string().min(1).max(64),
-  }),
-  z.object({
-    agentId: z.string().uuid(),
-  }),
-  z.object({
-    group: z.string().min(1).max(64),
-  }),
-]);
+const nodeExecutionSelectorSchema = z
+  .object({
+    pool: z.enum(["managed", "byon"]).default("managed"),
+    labels: z.array(z.string().min(1).max(64)).max(50).optional(),
+    group: z.string().min(1).max(64).optional(),
+    tag: z.string().min(1).max(64).optional(),
+    executorId: z.string().uuid().optional(),
+  })
+  .default({ pool: "managed" });
 
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),

@@ -1,4 +1,11 @@
-import type { GatewayDispatchRequest, GatewayDispatchResponse, GatewayInvokeToolV2, GatewayToolEventV2, GatewayToolResultV2 } from "@vespid/shared";
+import type {
+  GatewayBrainSessionEventV2,
+  GatewayDispatchRequest,
+  GatewayDispatchResponse,
+  GatewayInvokeToolV2,
+  GatewayToolEventV2,
+  GatewayToolResultV2,
+} from "@vespid/shared";
 
 export type EdgeToBrainRequest =
   | {
@@ -37,8 +44,7 @@ export type BrainToEdgeCommand =
   | {
       type: "client_broadcast";
       sessionId: string;
-      // Keep loosely typed so edge can forward legacy session_event messages during cutover.
-      event: unknown;
+      event: GatewayBrainSessionEventV2;
     }
   | {
       type: "workflow_reply";

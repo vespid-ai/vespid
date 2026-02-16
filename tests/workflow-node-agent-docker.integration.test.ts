@@ -188,7 +188,7 @@ describe("workflow node-agent docker integration", () => {
               id: "node-agent",
               type: "agent.execute",
               config: {
-                execution: { mode: "node" },
+                execution: { mode: "executor" },
                 task: { type: "shell", script: "echo hello", shell: "sh" },
                 sandbox: { backend: "docker", network: "none", timeoutMs: 30_000 },
               },
@@ -348,7 +348,7 @@ describe("workflow node-agent docker integration", () => {
               id: "node-timeout",
               type: "agent.execute",
               config: {
-                execution: { mode: "node" },
+                execution: { mode: "executor" },
                 task: { type: "shell", script: "sleep 3; echo done", shell: "sh" },
                 sandbox: { backend: "docker", network: "none", timeoutMs: 1000 },
               },

@@ -1681,7 +1681,7 @@ export class MemoryAppStore implements AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
-    selector?: { tag?: string; group?: string } | null;
+    executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   }): Promise<AgentSessionRecord> {
     const id = crypto.randomUUID();
     const now = nowIso();
@@ -1692,8 +1692,9 @@ export class MemoryAppStore implements AppStore {
       title: input.title ?? "",
       status: "active",
       pinnedAgentId: null,
-      selectorTag: input.selector?.tag ?? null,
-      selectorGroup: input.selector?.group ?? null,
+      executorSelector: input.executorSelector ?? null,
+      selectorTag: input.executorSelector?.tag ?? null,
+      selectorGroup: input.executorSelector?.group ?? null,
       engineId: input.engineId,
       toolsetId: input.toolsetId ?? null,
       llmProvider: input.llm.provider,

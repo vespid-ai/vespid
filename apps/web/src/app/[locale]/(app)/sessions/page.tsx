@@ -304,7 +304,7 @@ export default function SessionsPage() {
                       instructions: instructions.trim(),
                     },
                     tools: { allow: toolAllow },
-                    ...(selectorTag.trim().length > 0 ? { selector: { tag: selectorTag.trim() } } : {}),
+                    ...(selectorTag.trim().length > 0 ? { executorSelector: { pool: "managed", tag: selectorTag.trim() } } : {}),
                   } as const;
 
                   const out = await createSession.mutateAsync(payload as any);

@@ -62,11 +62,13 @@ const agentRunNodeSchema = z.object({
       .object({
         mode: z.literal("gateway").default("gateway"),
         selector: z
-          .union([
-            z.object({ tag: z.string().min(1).max(64) }),
-            z.object({ agentId: z.string().uuid() }),
-            z.object({ group: z.string().min(1).max(64) }),
-          ])
+          .object({
+            pool: z.enum(["managed", "byon"]).default("managed"),
+            labels: z.array(z.string().min(1).max(64)).max(50).optional(),
+            group: z.string().min(1).max(64).optional(),
+            tag: z.string().min(1).max(64).optional(),
+            executorId: z.string().uuid().optional(),
+          })
           .optional(),
       })
       .default({ mode: "gateway" }),
@@ -217,8 +219,8 @@ export function createAgentRunExecutor(input: {
 
       return {
         status: "blocked",
-        block: {
-          kind: "agent.run",
+          block: {
+            kind: "agent.run",
           payload: {
             nodeId: node.id,
             node: nodeForGateway,
@@ -239,13 +241,10 @@ export function createAgentRunExecutor(input: {
                 : {}),
             },
           },
-          ...(selector && typeof selector === "object" && "tag" in selector ? { selectorTag: (selector as any).tag } : {}),
-          ...(selector && typeof selector === "object" && "agentId" in selector ? { selectorAgentId: (selector as any).agentId } : {}),
-          ...(selector && typeof selector === "object" && "group" in selector ? { selectorGroup: (selector as any).group } : {}),
+          ...(selector ? { executorSelector: selector } : {}),
           timeoutMs,
         },
       };
     },
   };
 }
-

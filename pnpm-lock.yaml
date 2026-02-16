@@ -96,6 +96,22 @@ importers:
         specifier: ^8.18.1
         version: 8.18.1
 
+  apps/engine-runner:
+    dependencies:
+      '@vespid/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
+      fastify:
+        specifier: ^5.6.1
+        version: 5.7.4
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@types/node':
+        specifier: ^24.3.0
+        version: 24.10.13
+
   apps/gateway:
     dependencies:
       '@aws-sdk/client-s3':

@@ -190,6 +190,7 @@ export class PgAppStore implements AppStore {
       title: row.title ?? "",
       status: row.status === "archived" ? "archived" : "active",
       pinnedAgentId: row.pinnedAgentId ?? null,
+      executorSelector: (row.executorSelector as any) ?? null,
       selectorTag: row.selectorTag ?? null,
       selectorGroup: row.selectorGroup ?? null,
       engineId: row.engineId,
@@ -2009,7 +2010,7 @@ export class PgAppStore implements AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
-    selector?: { tag?: string; group?: string } | null;
+    executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   }): Promise<AgentSessionRecord> {
     const row = await this.withOrgContext(
       { userId: input.actorUserId, organizationId: input.organizationId },
@@ -2019,8 +2020,9 @@ export class PgAppStore implements AppStore {
           createdByUserId: input.actorUserId,
           title: input.title ?? "",
           status: "active",
-          selectorTag: input.selector?.tag ?? null,
-          selectorGroup: input.selector?.group ?? null,
+          selectorTag: input.executorSelector?.tag ?? null,
+          selectorGroup: input.executorSelector?.group ?? null,
+          executorSelector: input.executorSelector ?? null,
           engineId: input.engineId,
           toolsetId: input.toolsetId ?? null,
           llmProvider: input.llm.provider,

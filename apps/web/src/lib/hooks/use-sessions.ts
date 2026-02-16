@@ -8,6 +8,7 @@ export type AgentSession = {
   title: string;
   status: "active" | "archived" | string;
   pinnedAgentId: string | null;
+  executorSelector: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   selectorTag: string | null;
   selectorGroup: string | null;
   engineId: string;
@@ -89,7 +90,7 @@ export function useCreateSession(orgId: string | null) {
       llm: { provider: "openai" | "anthropic" | "gemini"; model: string };
       prompt: { system?: string; instructions: string };
       tools: { allow: string[] };
-      selector?: { tag: string } | { group: string };
+      executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string };
     }) => {
       return apiFetchJson<{ session: AgentSession }>(
         `/v1/orgs/${orgId}/sessions`,

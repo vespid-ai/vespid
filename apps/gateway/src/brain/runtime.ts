@@ -21,11 +21,14 @@ import {
   REMOTE_EXEC_ERROR,
   decryptSecret,
   parseKekFromEnv,
+  type ExecutorSelectorV1,
+  type GatewayBrainSessionEventV2,
   type GatewayDispatchResponse,
   type GatewayInvokeToolV2,
   type GatewayToolKind,
   type WorkflowContinuationJobPayload,
 } from "@vespid/shared";
+import type { LlmInvokeInput, LlmInvokeResult } from "@vespid/agent-runtime";
 import { replyKey, sessionBrainKey, sessionEdgesKey, streamToBrain, streamToEdge } from "../bus/keys.js";
 import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";
 import { ensureConsumerGroup, xaddJson, xreadGroupJson } from "../bus/streams.js";
@@ -86,21 +89,53 @@ type SelectedExecutor = {
   maxInFlight: number;
 };
 
+type SelectExecutorResult =
+  | { ok: true; selected: SelectedExecutor }
+  | { ok: false; error: "NO_EXECUTOR_AVAILABLE" | "EXECUTOR_OVER_CAPACITY" | "ORG_QUOTA_EXCEEDED" };
+
 async function selectExecutorForTool(redis: Redis, input: {
   organizationId: string;
   kind: GatewayToolKind;
-  selector?: { executorId?: string | null; labels?: string[] | null } | null;
+  selector?: ExecutorSelectorV1 | null;
   orgMaxInFlight: number;
   reserveTtlMs: number;
-}): Promise<SelectedExecutor | null> {
+}): Promise<SelectExecutorResult> {
+  const selectorPool = input.selector?.pool ?? "managed";
   const selectorExecutorId = input.selector?.executorId ?? null;
-  const selectorLabels = input.selector?.labels ?? null;
+  const selectorLabels = [
+    ...(Array.isArray(input.selector?.labels) ? input.selector!.labels! : []),
+    ...(typeof input.selector?.tag === "string" ? [input.selector.tag] : []),
+  ];
+  const selectorGroup = typeof input.selector?.group === "string" ? input.selector.group : null;
+  const matchesSelector = (route: {
+    labels?: string[] | undefined;
+  }) => {
+    const labels = new Set((route.labels ?? []).filter((x) => typeof x === "string"));
+    if (!selectorLabels.every((need) => labels.has(need))) {
+      return false;
+    }
+    if (!selectorGroup) {
+      return true;
+    }
+    return labels.has(selectorGroup) || labels.has(`group:${selectorGroup}`);
+  };
+
+  const listInput =
+    selectorPool === "byon"
+      ? { pool: "byon" as const, organizationId: input.organizationId }
+      : { pool: "managed" as const };
 
   if (selectorExecutorId) {
-    const routes = await listExecutorRoutes(redis, { organizationId: input.organizationId });
+    const routes = await listExecutorRoutes(redis, listInput);
     const match = routes.find((r) => r.executorId === selectorExecutorId) ?? null;
-    if (!match) return null;
-    if (!match.kinds?.includes(input.kind)) return null;
+    if (!match) return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
+    if (!match.kinds?.includes(input.kind)) return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
+    if (selectorPool === "byon" && match.organizationId !== input.organizationId) {
+      return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
+    }
+    if (!matchesSelector(match)) {
+      return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
+    }
     const maxInFlight = match.maxInFlight ?? 10;
     const reserved = await reserveCapacity(redis, {
       executorId: match.executorId,
@@ -109,21 +144,20 @@ async function selectExecutorForTool(redis: Redis, input: {
       orgMaxInFlight: input.orgMaxInFlight,
       ttlMs: input.reserveTtlMs,
     });
-    if (!reserved) return null;
+    if (!reserved.ok) {
+      return { ok: false, error: reserved.reason === "ORG_QUOTA_EXCEEDED" ? "ORG_QUOTA_EXCEEDED" : "EXECUTOR_OVER_CAPACITY" };
+    }
     await markExecutorUsed(redis, match.executorId);
-    return { executorId: match.executorId, edgeId: match.edgeId, maxInFlight };
+    return { ok: true, selected: { executorId: match.executorId, edgeId: match.edgeId, maxInFlight } };
   }
 
-  const routes = await listExecutorRoutes(redis, { organizationId: input.organizationId });
+  const routes = await listExecutorRoutes(redis, listInput);
   const candidates = routes
+    .filter((r) => (selectorPool === "byon" ? r.organizationId === input.organizationId : true))
     .filter((r) => (r.kinds ?? []).includes(input.kind))
-    .filter((r) => {
-      if (!selectorLabels || selectorLabels.length === 0) return true;
-      const labels = new Set((r.labels ?? []).filter((x) => typeof x === "string"));
-      return selectorLabels.every((need) => labels.has(need));
-    });
+    .filter((r) => matchesSelector(r));
 
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
 
   // Score by least loaded ratio; tie-break by least recently used.
   const scored: Array<{ r: (typeof candidates)[number]; ratio: number; lastUsedMs: number }> = [];
@@ -140,6 +174,8 @@ async function selectExecutorForTool(redis: Redis, input: {
     return a.lastUsedMs - b.lastUsedMs;
   });
 
+  let sawExecutorOverCapacity = false;
+  let sawOrgQuotaExceeded = false;
   for (const entry of scored) {
     const maxInFlight = entry.r.maxInFlight ?? 10;
     const reserved = await reserveCapacity(redis, {
@@ -149,14 +185,18 @@ async function selectExecutorForTool(redis: Redis, input: {
       orgMaxInFlight: input.orgMaxInFlight,
       ttlMs: input.reserveTtlMs,
     });
-    if (!reserved) {
+    if (!reserved.ok) {
+      if (reserved.reason === "ORG_QUOTA_EXCEEDED") sawOrgQuotaExceeded = true;
+      if (reserved.reason === "EXECUTOR_OVER_CAPACITY") sawExecutorOverCapacity = true;
       continue;
     }
     await markExecutorUsed(redis, entry.r.executorId);
-    return { executorId: entry.r.executorId, edgeId: entry.r.edgeId, maxInFlight };
+    return { ok: true, selected: { executorId: entry.r.executorId, edgeId: entry.r.edgeId, maxInFlight } };
   }
 
-  return null;
+  if (sawOrgQuotaExceeded) return { ok: false, error: "ORG_QUOTA_EXCEEDED" };
+  if (sawExecutorOverCapacity) return { ok: false, error: "EXECUTOR_OVER_CAPACITY" };
+  return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
 }
 
 function buildSessionTranscript(events: Array<{ eventType: string; payload: any; level: string }>) {
@@ -179,6 +219,10 @@ function buildSessionTranscript(events: Array<{ eventType: string; payload: any;
     steps.push({ type: e.eventType, level: e.level, payload: e.payload ?? null });
   }
   return steps;
+}
+
+function normalizeEventLevel(level: unknown): "info" | "warn" | "error" {
+  return level === "warn" || level === "error" ? level : "info";
 }
 
 async function loadSecretValueFromDb(input: { pool: ReturnType<typeof createPool>; organizationId: string; userId: string; secretId: string }): Promise<string> {
@@ -228,8 +272,109 @@ export async function startGatewayBrainRuntime(input?: {
   const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
   const brainId = input?.brainId ?? process.env.GATEWAY_BRAIN_ID ?? `brain-${crypto.randomBytes(6).toString("hex")}`;
 
-  const orgMaxInFlight = Math.max(1, envNumber("GATEWAY_ORG_MAX_INFLIGHT", 50));
+  const orgMaxInFlightDefault = Math.max(1, envNumber("GATEWAY_ORG_MAX_INFLIGHT", 50));
   const reserveTtlMs = Math.max(5_000, envNumber("GATEWAY_RESERVE_TTL_MS", 5 * 60 * 1000));
+  const orgQuotaCacheTtlMs = Math.max(2_000, envNumber("GATEWAY_ORG_QUOTA_CACHE_TTL_MS", 15_000));
+  const orgQuotaCache = new Map<string, { value: number; expiresAtMs: number }>();
+
+  async function getOrgMaxInFlight(organizationId: string): Promise<number> {
+    const now = Date.now();
+    const cached = orgQuotaCache.get(organizationId);
+    if (cached && cached.expiresAtMs > now) {
+      return cached.value;
+    }
+
+    let resolved = orgMaxInFlightDefault;
+    try {
+      const orgRow = await withTenantContext(pool, { organizationId }, async (db) =>
+        getOrganizationById(db, { organizationId })
+      );
+      const quotaValue = (orgRow?.settings as any)?.execution?.quotas?.maxExecutorInFlight;
+      if (typeof quotaValue === "number" && Number.isFinite(quotaValue) && quotaValue > 0) {
+        resolved = Math.max(1, Math.floor(quotaValue));
+      }
+    } catch {
+      // Keep fallback default when org settings cannot be loaded.
+    }
+    orgQuotaCache.set(organizationId, { value: resolved, expiresAtMs: now + orgQuotaCacheTtlMs });
+    return resolved;
+  }
+
+  const engineRunnerBaseUrlRaw = process.env.ENGINE_RUNNER_BASE_URL ?? "";
+  const engineRunnerBaseUrl = engineRunnerBaseUrlRaw.trim().length > 0 ? engineRunnerBaseUrlRaw.replace(/\/+$/, "") : null;
+  const engineRunnerTokenRaw = process.env.ENGINE_RUNNER_TOKEN ?? "";
+  const engineRunnerToken = engineRunnerTokenRaw.trim().length > 0 ? engineRunnerTokenRaw : null;
+  const engineRunnerTimeoutMs = Math.max(1000, envNumber("ENGINE_RUNNER_TIMEOUT_MS", 30_000));
+
+  const invokeViaEngineRunner = async (
+    invokeInput: Omit<LlmInvokeInput, "fetchImpl">
+  ): Promise<LlmInvokeResult> => {
+    if (!engineRunnerBaseUrl || !engineRunnerToken) {
+      return { ok: false, error: "ENGINE_UNAVAILABLE" };
+    }
+    const timeoutMs = Math.max(1000, Math.min(invokeInput.timeoutMs, engineRunnerTimeoutMs));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${engineRunnerBaseUrl}/internal/v1/llm/infer`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${engineRunnerToken}`,
+        },
+        body: JSON.stringify({
+          provider: invokeInput.provider,
+          model: invokeInput.model,
+          messages: invokeInput.messages,
+          auth: invokeInput.auth,
+          timeoutMs,
+          maxOutputChars: invokeInput.maxOutputChars,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return { ok: false, error: "ENGINE_UNAVAILABLE" };
+      }
+      const payload = (await response.json()) as unknown;
+      const parsed = z
+        .discriminatedUnion("ok", [
+          z.object({
+            ok: z.literal(true),
+            content: z.string(),
+            usage: z
+              .object({
+                inputTokens: z.number().int().nonnegative(),
+                outputTokens: z.number().int().nonnegative(),
+                totalTokens: z.number().int().nonnegative(),
+              })
+              .optional(),
+          }),
+          z.object({
+            ok: z.literal(false),
+            error: z.string().min(1),
+          }),
+        ])
+        .safeParse(payload);
+      if (!parsed.success) {
+        return { ok: false, error: "ENGINE_UNAVAILABLE" };
+      }
+      if (parsed.data.ok) {
+        return {
+          ok: true,
+          content: parsed.data.content,
+          ...(parsed.data.usage ? { usage: parsed.data.usage } : {}),
+        };
+      }
+      return { ok: false, error: parsed.data.error };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return { ok: false, error: "ENGINE_UNAVAILABLE" };
+      }
+      return { ok: false, error: "ENGINE_UNAVAILABLE" };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   const s3Config = readWorkspaceS3ConfigFromEnv();
   const s3Client = s3Config ? createWorkspaceS3Client(s3Config) : null;
@@ -241,7 +386,7 @@ export async function startGatewayBrainRuntime(input?: {
       ? new Queue<WorkflowContinuationJobPayload>(continuationQueueName, { connection: parseRedisConnectionOptions(process.env.REDIS_URL) })
       : null;
 
-  async function broadcastToSessionEdges(sessionId: string, event: unknown) {
+  async function broadcastToSessionEdges(sessionId: string, event: GatewayBrainSessionEventV2) {
     const edgeIds = await redis.smembers(sessionEdgesKey(sessionId));
     for (const edgeId of edgeIds) {
       await xaddJson(redis, streamToEdge(edgeId), { type: "client_broadcast", sessionId, event });
@@ -251,8 +396,7 @@ export async function startGatewayBrainRuntime(input?: {
   async function invokeToolOnExecutor(inputTool: {
     organizationId: string;
     userId: string;
-    selectorExecutorId?: string | null;
-    selectorLabels?: string[] | null;
+    selector?: ExecutorSelectorV1 | null;
     kind: GatewayToolKind;
     payload: unknown;
     secret?: string;
@@ -260,19 +404,24 @@ export async function startGatewayBrainRuntime(input?: {
     networkMode: "none" | "enabled";
     workspaceOwner: { ownerType: "session" | "workflow_run"; ownerId: string };
   }): Promise<{ status: "succeeded" | "failed"; output?: unknown; error?: string; workspace?: any }>{
+    const orgMaxInFlight = await getOrgMaxInFlight(inputTool.organizationId);
     const selected = await selectExecutorForTool(redis, {
       organizationId: inputTool.organizationId,
       kind: inputTool.kind,
-      selector: {
-        executorId: inputTool.selectorExecutorId ?? null,
-        labels: inputTool.selectorLabels ?? null,
-      },
+      selector: inputTool.selector ?? { pool: "managed" },
       orgMaxInFlight,
       reserveTtlMs,
     });
-    if (!selected) {
-      return { status: "failed", error: REMOTE_EXEC_ERROR.NoAgentAvailable };
+    if (!selected.ok) {
+      if (selected.error === "ORG_QUOTA_EXCEEDED") {
+        return { status: "failed", error: "ORG_QUOTA_EXCEEDED" };
+      }
+      if (selected.error === "EXECUTOR_OVER_CAPACITY") {
+        return { status: "failed", error: "EXECUTOR_OVER_CAPACITY" };
+      }
+      return { status: "failed", error: "NO_EXECUTOR_AVAILABLE" };
     }
+    const selectedExecutor = selected.selected;
 
     try {
       const workspaceRow =
@@ -365,7 +514,7 @@ export async function startGatewayBrainRuntime(input?: {
         },
       };
 
-      await xaddJson(redis, streamToEdge(selected.edgeId), { type: "executor_invoke", executorId: selected.executorId, invoke });
+      await xaddJson(redis, streamToEdge(selectedExecutor.edgeId), { type: "executor_invoke", executorId: selectedExecutor.executorId, invoke });
 
       const reply = await waitForJsonReply<any>(redis, toolRequestId, inputTool.timeoutMs);
       if (!reply || typeof reply !== "object") {
@@ -394,7 +543,7 @@ export async function startGatewayBrainRuntime(input?: {
 
       return { status, ...(output !== undefined ? { output } : {}), ...(error ? { error } : {}), ...(workspace ? { workspace } : {}) };
     } finally {
-      await releaseCapacity(redis, { executorId: selected.executorId, organizationId: inputTool.organizationId });
+      await releaseCapacity(redis, { executorId: selectedExecutor.executorId, organizationId: inputTool.organizationId });
     }
   }
 
@@ -446,16 +595,10 @@ export async function startGatewayBrainRuntime(input?: {
   }): Promise<GatewayDispatchResponse> {
     const dispatch = inputDispatch.dispatch as any;
     if (dispatch.kind === "agent.execute" || dispatch.kind === "connector.action") {
-      const selectorExecutorId = typeof dispatch.selectorAgentId === "string" ? dispatch.selectorAgentId : null;
-      const selectorLabels: string[] = [];
-      if (typeof dispatch.selectorTag === "string") selectorLabels.push(dispatch.selectorTag);
-      if (typeof dispatch.selectorGroup === "string") selectorLabels.push(dispatch.selectorGroup);
-
       const tool = await invokeToolOnExecutor({
         organizationId: dispatch.organizationId,
         userId: dispatch.requestedByUserId,
-        selectorExecutorId,
-        selectorLabels,
+        selector: (dispatch.executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "managed" },
         kind: dispatch.kind,
         payload: dispatch.payload,
         ...(typeof dispatch.secret === "string" ? { secret: dispatch.secret } : {}),
@@ -519,6 +662,7 @@ export async function startGatewayBrainRuntime(input?: {
           githubApiBaseUrl: parsed.data.env.githubApiBaseUrl,
           loadSecretValue: ({ organizationId, userId, secretId }) => loadSecretValueFromDb({ pool, organizationId, userId, secretId }),
           fetchImpl: fetch,
+          llmInvoke: invokeViaEngineRunner,
           config: {
             llm: {
               provider: llmProvider,
@@ -557,11 +701,9 @@ export async function startGatewayBrainRuntime(input?: {
         const toolRes = await invokeToolOnExecutor({
           organizationId: dispatch.organizationId,
           userId: dispatch.requestedByUserId,
-          selectorExecutorId: typeof block.selectorAgentId === "string" ? block.selectorAgentId : null,
-          selectorLabels: [
-            ...(typeof block.selectorTag === "string" ? [block.selectorTag] : []),
-            ...(typeof block.selectorGroup === "string" ? [block.selectorGroup] : []),
-          ],
+          selector:
+            (block?.executorSelector as ExecutorSelectorV1 | null | undefined) ??
+            ((dispatch.executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "managed" }),
           kind,
           payload: block.payload,
           ...(typeof block.secret === "string" ? { secret: block.secret } : {}),
@@ -635,6 +777,7 @@ export async function startGatewayBrainRuntime(input?: {
           githubApiBaseUrl: process.env.GITHUB_API_BASE_URL ?? "https://api.github.com",
           loadSecretValue: ({ organizationId, userId, secretId }) => loadSecretValueFromDb({ pool, organizationId, userId, secretId }),
           fetchImpl: fetch,
+          llmInvoke: invokeViaEngineRunner,
           config: {
             llm: { provider: sessionLlmProvider as any, model: session.llmModel, auth: { fallbackToEnv: true } },
             prompt: { ...(session.promptSystem ? { system: session.promptSystem } : {}), instructions: session.promptInstructions },
@@ -665,11 +808,11 @@ export async function startGatewayBrainRuntime(input?: {
             appendAgentSessionEvent(db, { organizationId: msg.organizationId, sessionId: msg.sessionId, eventType: "agent_message", level: "info", payload: { message: typeof out === "string" ? out : safeJsonStringify(out) } })
           );
           await broadcastToSessionEdges(msg.sessionId, {
-            type: "session_event",
+            type: "session_event_v2",
             sessionId: msg.sessionId,
             seq: agentEvent.seq,
             eventType: agentEvent.eventType,
-            level: agentEvent.level,
+            level: normalizeEventLevel(agentEvent.level),
             payload: agentEvent.payload ?? null,
             createdAt: agentEvent.createdAt.toISOString(),
           });
@@ -682,11 +825,11 @@ export async function startGatewayBrainRuntime(input?: {
             appendAgentSessionEvent(db, { organizationId: msg.organizationId, sessionId: msg.sessionId, eventType: "error", level: "error", payload: { code: err } })
           );
           await broadcastToSessionEdges(msg.sessionId, {
-            type: "session_event",
+            type: "session_event_v2",
             sessionId: msg.sessionId,
             seq: errorEvent.seq,
             eventType: errorEvent.eventType,
-            level: errorEvent.level,
+            level: normalizeEventLevel(errorEvent.level),
             payload: errorEvent.payload ?? null,
             createdAt: errorEvent.createdAt.toISOString(),
           });
@@ -705,11 +848,9 @@ export async function startGatewayBrainRuntime(input?: {
         const toolRes = await invokeToolOnExecutor({
           organizationId: msg.organizationId,
           userId: msg.userId,
-          selectorExecutorId: typeof block.selectorAgentId === "string" ? block.selectorAgentId : null,
-          selectorLabels: [
-            ...(typeof block.selectorTag === "string" ? [block.selectorTag] : []),
-            ...(typeof block.selectorGroup === "string" ? [block.selectorGroup] : []),
-          ],
+          selector:
+            (block?.executorSelector as ExecutorSelectorV1 | null | undefined) ??
+            (((session as any).executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "managed" }),
           kind,
           payload: block.payload,
           ...(typeof block.secret === "string" ? { secret: block.secret } : {}),

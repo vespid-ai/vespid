@@ -1,3 +1,5 @@
+import type { ExecutorSelectorV1 } from "./types.js";
+
 export type Edition = "community" | "enterprise";
 
 export const communityFeatureCapabilities = [
@@ -74,9 +76,7 @@ export type WorkflowNodeExecutorResult = {
     // If omitted, the workflow nodeId is used.
     dispatchNodeId?: string;
     payload: unknown;
-    selectorTag?: string;
-    selectorAgentId?: string;
-    selectorGroup?: string;
+    executorSelector?: ExecutorSelectorV1;
     secret?: string;
     timeoutMs?: number;
   };

@@ -4,7 +4,7 @@ Toolsets are reusable bundles that package:
 - MCP server configurations (`mcpServers[]`)
 - Anthropic Agent Skills bundles (`agentSkills[]`, `agentskills-v1`)
 
-They are designed to be attached to `agent.run` nodes when executing on a node-agent using the Claude Agent SDK engine (`engine.id="claude.agent-sdk.v1"`).
+They are designed to be attached to `agent.run` nodes executed by gateway brain (`engine.id="gateway.*.v2"`).
 
 ## Data Model
 
@@ -23,14 +23,14 @@ To prevent secret material from being stored in the database, MCP server `env` a
 - Allowed format: `${ENV:VAR_NAME}`
 - Any literal secret values are rejected by the API.
 
-At runtime on the node-agent machine, placeholders are resolved from the node-agent process environment:
+At runtime on the executor machine, placeholders are resolved from the executor process environment:
 - If a referenced `VAR_NAME` is missing or empty, execution fails with `MCP_ENV_NOT_SET:VAR_NAME`.
 
 ## Applying Toolsets to `agent.run`
 
 Toolsets are applied only when:
-- `agent.run.config.execution.mode = "node"`
-- `agent.run.config.engine.id = "claude.agent-sdk.v1"`
+- `agent.run.config.execution.mode = "gateway"`
+- `agent.run.config.tools.execution = "executor"` (for remote tool workloads)
 
 Resolution order:
 1. `agent.run.config.toolsetId` (explicit per-node)
@@ -62,30 +62,14 @@ The finalize endpoint returns a `draft` toolset payload (`mcpServers` + `agentSk
 
 ## Manual Validation (Optional)
 
-This MVP is validated primarily via unit/integration tests. If you want to verify end-to-end behavior with a real node-agent and Claude Code:
+This MVP is validated primarily via unit/integration tests. If you want to verify end-to-end behavior with a real executor:
 
 1. Create a toolset with an external MCP server config using placeholder values (for example `env: { TOKEN: "${ENV:MY_TOKEN}" }`).
-2. Ensure the referenced environment variables are set in the node-agent environment (`MY_TOKEN` in this example).
+2. Ensure the referenced environment variables are set in the executor environment (`MY_TOKEN` in this example).
 3. Attach the toolset to an `agent.run` node via `config.toolsetId` (or set an org default toolset).
-4. Run the workflow with `execution.mode="node"` and `engine.id="claude.agent-sdk.v1"`.
+4. Run the workflow with `execution.mode="gateway"` and `engine.id="gateway.claude.v2"` (or other `gateway.*.v2` engine).
 
 Expected results:
 - Node execution fails fast with `MCP_ENV_NOT_SET:VAR` when a placeholder env var is missing.
 - Enabled Agent Skills are staged to the run workdir under `.claude/skills/<skillId>/...`.
-- Enabled MCP servers are passed to the Claude Agent SDK under `mcpServers` and their tools become callable as `mcp__<server>__*`.
-
-### Claude Agent SDK E2E (Opt-in)
-
-The engine adapter includes an opt-in e2e test that validates the local Claude Agent SDK + Claude Code wiring without impacting CI.
-
-Run:
-```bash
-VESPID_CLAUDE_E2E=1 \
-VESPID_CLAUDE_CODE_PATH=/path/to/claude \
-ANTHROPIC_API_KEY=... \
-pnpm -C packages/engine-claude-agent-sdk test
-```
-
-Notes:
-- This test is skipped unless `VESPID_CLAUDE_E2E` is set.
-- It registers an SDK MCP server and checks that `mcpServerStatus()` includes it.
+- Enabled MCP servers are passed through toolset context and their tools become callable as `mcp__<server>__*`.

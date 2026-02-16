@@ -14,12 +14,14 @@ const connectorActionNodeSchema = z.object({
     }),
     execution: z
       .object({
-        mode: z.enum(["cloud", "node"]).default("cloud"),
+        mode: z.enum(["cloud", "executor"]).default("cloud"),
         selector: z
           .object({
+            pool: z.enum(["managed", "byon"]).default("managed"),
+            labels: z.array(z.string().min(1).max(64)).max(50).optional(),
             tag: z.string().min(1).max(64).optional(),
-            agentId: z.string().uuid().optional(),
             group: z.string().min(1).max(64).optional(),
+            executorId: z.string().uuid().optional(),
           })
           .optional(),
       })
@@ -56,7 +58,7 @@ export function createConnectorActionExecutor(input: {
       }
 
       const executionMode = nodeParsed.data.config.execution?.mode ?? "cloud";
-      if (executionMode === "node") {
+      if (executionMode === "executor") {
         // Resume path: the continuation worker stores the remote result under runtime.pendingRemoteResult.
         if (context.pendingRemoteResult) {
           const pending = context.pendingRemoteResult as any;
@@ -105,9 +107,7 @@ export function createConnectorActionExecutor(input: {
                 githubApiBaseUrl,
               },
             },
-            ...(selector?.tag ? { selectorTag: selector.tag } : {}),
-            ...(selector?.agentId ? { selectorAgentId: selector.agentId } : {}),
-            ...(selector?.group ? { selectorGroup: selector.group } : {}),
+            ...(selector ? { executorSelector: selector } : {}),
             ...(secret ? { secret } : {}),
           },
         };

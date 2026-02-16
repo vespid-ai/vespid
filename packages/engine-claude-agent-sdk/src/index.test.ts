@@ -86,7 +86,7 @@ describe("claude.agent-sdk.v1 engine adapter", () => {
         type: "agent.run",
         config: {
           llm: { provider: "anthropic", model: "claude-3-5-sonnet-latest", auth: { fallbackToEnv: true } },
-          execution: { mode: "node" },
+          execution: { mode: "executor" },
           engine: { id: "claude.agent-sdk.v1" },
           prompt: { instructions: "Do the thing." },
           tools: { allow: ["shell.run"], execution: "node" },
@@ -146,7 +146,7 @@ describe("claude.agent-sdk.v1 engine adapter", () => {
         type: "agent.run",
         config: {
           llm: { provider: "anthropic", model: "claude-3-5-sonnet-latest", auth: { fallbackToEnv: true } },
-          execution: { mode: "node" },
+          execution: { mode: "executor" },
           engine: { id: "claude.agent-sdk.v1" },
           prompt: { instructions: "Do the thing." },
           tools: { allow: ["shell.run"], execution: "node" },

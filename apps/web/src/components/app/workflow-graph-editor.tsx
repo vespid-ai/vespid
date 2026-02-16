@@ -661,21 +661,21 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     label?: string;
   }) {
     const exec = asObject(params.config["execution"]) ?? {};
-    const mode = (exec["mode"] === "node" ? "node" : "cloud") as "cloud" | "node";
+    const mode = (exec["mode"] === "executor" ? "executor" : "cloud") as "cloud" | "executor";
     const selector = asObject(exec["selector"]) ?? null;
     const selectorKind =
       selector && typeof selector["tag"] === "string"
         ? "tag"
-        : selector && typeof selector["agentId"] === "string"
-          ? "agentId"
-          : selector && typeof selector["group"] === "string"
+        : selector && typeof selector["executorId"] === "string"
+          ? "executorId"
+        : selector && typeof selector["group"] === "string"
             ? "group"
             : "none";
     const selectorValue =
       selectorKind === "tag"
         ? String(selector?.tag ?? "")
-        : selectorKind === "agentId"
-          ? String(selector?.agentId ?? "")
+        : selectorKind === "executorId"
+          ? String(selector?.executorId ?? "")
           : selectorKind === "group"
             ? String(selector?.group ?? "")
             : "";
@@ -688,10 +688,15 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
           <Select
             value={mode}
             onValueChange={(v) => {
-              const nextMode = v === "node" ? "node" : "cloud";
+              const nextMode = v === "executor" ? "executor" : "cloud";
               params.onChange({
                 ...params.config,
-                execution: { ...exec, mode: nextMode, ...(nextMode === "cloud" ? { selector: undefined } : {}) },
+                execution: {
+                  ...exec,
+                  mode: nextMode,
+                  ...(nextMode === "cloud" ? { selector: undefined } : {}),
+                  ...(nextMode === "executor" && !selector ? { selector: { pool: "managed" } } : {}),
+                },
               });
             }}
           >
@@ -700,12 +705,12 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="cloud">cloud</SelectItem>
-              <SelectItem value="node">node</SelectItem>
+              <SelectItem value="executor">executor</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        {mode === "node" ? (
+        {mode === "executor" ? (
           <div className="grid gap-2">
             <div className="grid gap-1.5">
               <Label>Selector</Label>
@@ -717,7 +722,13 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                     return;
                   }
                   const nextSel =
-                    v === "tag" ? { tag: "" } : v === "agentId" ? { agentId: "" } : v === "group" ? { group: "" } : undefined;
+                    v === "tag"
+                      ? { pool: "managed", tag: "" }
+                      : v === "executorId"
+                        ? { pool: "managed", executorId: "" }
+                        : v === "group"
+                          ? { pool: "managed", group: "" }
+                          : undefined;
                   params.onChange({ ...params.config, execution: { ...exec, mode, selector: nextSel } });
                 }}
               >
@@ -727,7 +738,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 <SelectContent>
                   <SelectItem value="none">none</SelectItem>
                   <SelectItem value="tag">tag</SelectItem>
-                  <SelectItem value="agentId">agentId</SelectItem>
+                  <SelectItem value="executorId">executorId</SelectItem>
                   <SelectItem value="group">group</SelectItem>
                 </SelectContent>
               </Select>
@@ -741,11 +752,11 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                     const raw = e.target.value;
                     const nextSel =
                       selectorKind === "tag"
-                        ? { tag: raw }
-                        : selectorKind === "agentId"
-                          ? { agentId: raw }
+                        ? { pool: "managed", tag: raw }
+                        : selectorKind === "executorId"
+                          ? { pool: "managed", executorId: raw }
                           : selectorKind === "group"
-                            ? { group: raw }
+                            ? { pool: "managed", group: raw }
                             : undefined;
                     params.onChange({ ...params.config, execution: { ...exec, mode, selector: nextSel } });
                   }}
@@ -776,7 +787,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     };
 
     const toolsAllowText = (Array.isArray(tools["allow"]) ? tools["allow"] : []).filter((v) => typeof v === "string").join("\n");
-    const toolsExecution = tools["execution"] === "node" ? "node" : "cloud";
+    const toolsExecution = tools["execution"] === "executor" ? "executor" : "cloud";
 
     const outputMode = output["mode"] === "json" ? "json" : "text";
 
@@ -785,9 +796,9 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     const timeoutMs = asNumber(limits["timeoutMs"], 60_000);
 
     const engineId =
-      engine["id"] === "claude.agent-sdk.v1" || engine["id"] === "codex.sdk.v1" || engine["id"] === "vespid.loop.v1"
+      engine["id"] === "gateway.codex.v2" || engine["id"] === "gateway.claude.v2" || engine["id"] === "gateway.loop.v2"
         ? (engine["id"] as string)
-        : "vespid.loop.v1";
+        : "gateway.loop.v2";
 
     const toolsetId = typeof cfg["toolsetId"] === "string" ? (cfg["toolsetId"] as string) : "";
 
@@ -906,7 +917,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
             <Select
               value={toolsExecution}
               onValueChange={(v) => {
-                const nextExec = v === "node" ? "node" : "cloud";
+                const nextExec = v === "executor" ? "executor" : "cloud";
                 updateNode(node.id, (cur) => {
                   const curCfg = asObject(cur.config) ?? {};
                   const curTools = asObject(curCfg["tools"]) ?? {};
@@ -919,7 +930,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="cloud">cloud</SelectItem>
-                <SelectItem value="node">node</SelectItem>
+                <SelectItem value="executor">executor</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -1348,20 +1359,14 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
             <Select
               value={engineId}
               onValueChange={(v) => {
-                const nextId = v === "claude.agent-sdk.v1" || v === "codex.sdk.v1" ? v : "vespid.loop.v1";
+                const nextId = v === "gateway.codex.v2" || v === "gateway.claude.v2" ? v : "gateway.loop.v2";
                 updateNode(node.id, (cur) => {
                   const curCfg = asObject(cur.config) ?? {};
-                  const curExec = asObject((curCfg as any)["execution"]) ?? {};
-                  const nextExec = nextId === "vespid.loop.v1" ? curExec : { ...curExec, mode: "node" };
-                  if (nextId !== "vespid.loop.v1" && (curExec as any)["mode"] !== "node") {
-                    toast.info("Engine requires execution.mode=node; updated execution mode.");
-                  }
                   return {
                     ...cur,
                     config: {
                       ...curCfg,
-                      execution: nextExec,
-                      ...(nextId === "vespid.loop.v1" ? { engine: undefined } : { engine: { id: nextId } }),
+                      engine: { id: nextId },
                     },
                   };
                 });
@@ -1371,9 +1376,9 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="vespid.loop.v1">vespid.loop.v1</SelectItem>
-                <SelectItem value="claude.agent-sdk.v1">claude.agent-sdk.v1</SelectItem>
-                <SelectItem value="codex.sdk.v1">codex.sdk.v1</SelectItem>
+                <SelectItem value="gateway.loop.v2">gateway.loop.v2</SelectItem>
+                <SelectItem value="gateway.claude.v2">gateway.claude.v2</SelectItem>
+                <SelectItem value="gateway.codex.v2">gateway.codex.v2</SelectItem>
               </SelectContent>
             </Select>
           </div>

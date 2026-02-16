@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent-loop": "./src/agent-loop.ts",
+    "./llm-invoke": "./src/llm-invoke.ts",
     "./tools": "./src/tools/index.ts",
     "./tools/types": "./src/tools/types.ts"
   },

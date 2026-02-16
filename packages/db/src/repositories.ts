@@ -1678,6 +1678,34 @@ export async function revokeOrganizationExecutor(db: Db, input: { organizationId
   return row ?? null;
 }
 
+export async function getManagedExecutorByTokenHash(db: Db, input: { tokenHash: string }) {
+  const [row] = await db.select().from(managedExecutors).where(eq(managedExecutors.tokenHash, input.tokenHash));
+  return row ?? null;
+}
+
+export async function listManagedExecutors(db: Db) {
+  const rows = await db.select().from(managedExecutors).orderBy(desc(managedExecutors.createdAt));
+  return rows;
+}
+
+export async function touchManagedExecutorLastSeen(db: Db, input: { executorId: string }) {
+  const [row] = await db
+    .update(managedExecutors)
+    .set({ lastSeenAt: new Date() })
+    .where(eq(managedExecutors.id, input.executorId))
+    .returning();
+  return row ?? null;
+}
+
+export async function revokeManagedExecutor(db: Db, input: { executorId: string }) {
+  const [row] = await db
+    .update(managedExecutors)
+    .set({ revokedAt: new Date() })
+    .where(eq(managedExecutors.id, input.executorId))
+    .returning();
+  return row ?? null;
+}
+
 export async function createOrganizationAgent(
   db: Db,
   input: {
@@ -2080,6 +2108,7 @@ export async function createAgentSession(
     status?: "active" | "archived";
     selectorTag?: string | null;
     selectorGroup?: string | null;
+    executorSelector?: unknown;
     engineId: string;
     toolsetId?: string | null;
     llmProvider: string;
@@ -2097,8 +2126,9 @@ export async function createAgentSession(
       createdByUserId: input.createdByUserId,
       title: input.title ?? "",
       status: input.status ?? "active",
-      selectorTag: input.selectorTag ?? null,
-      selectorGroup: input.selectorGroup ?? null,
+      selectorTag: input.selectorTag ?? ((input.executorSelector as any)?.tag ?? null),
+      selectorGroup: input.selectorGroup ?? ((input.executorSelector as any)?.group ?? null),
+      executorSelector: (input.executorSelector ?? null) as any,
       engineId: input.engineId,
       toolsetId: input.toolsetId ?? null,
       llmProvider: input.llmProvider,

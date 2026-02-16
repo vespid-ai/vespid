@@ -5,6 +5,7 @@ import { z } from "zod";
 import { WebSocketServer, WebSocket } from "ws";
 import { Redis } from "ioredis";
 import {
+  createDb,
   createPool,
   withTenantContext,
   getMembership,
@@ -14,6 +15,8 @@ import {
   listAgentSessionEventsTail,
   appendAgentSessionEvent,
   getOrganizationExecutorByTokenHash,
+  getManagedExecutorByTokenHash,
+  touchManagedExecutorLastSeen,
   touchOrganizationExecutorLastSeen,
 } from "@vespid/db";
 import type {
@@ -35,8 +38,10 @@ import type { BrainToEdgeCommand, EdgeToBrainRequest } from "../bus/types.js";
 type ConnectedExecutor = {
   ws: WebSocket;
   executorId: string;
-  organizationId: string;
+  pool: "managed" | "byon";
+  organizationId: string | null;
   tokenHash: string;
+  configuredMaxInFlight: number;
   lastSeenAtMs: number;
   name: string | null;
   labels: string[];
@@ -62,10 +67,10 @@ function parseBearerToken(value: unknown): string | null {
   return token;
 }
 
-function parseOrgIdPrefix(value: string): string | null {
-  const [orgId] = value.split(".");
-  if (!orgId) return null;
-  const parsed = z.string().uuid().safeParse(orgId);
+function parseUuidPrefix(value: string): string | null {
+  const [prefix] = value.split(".");
+  if (!prefix) return null;
+  const parsed = z.string().uuid().safeParse(prefix);
   return parsed.success ? parsed.data : null;
 }
 
@@ -157,6 +162,30 @@ function parseUuid(value: unknown): string | null {
   return parsed.success ? parsed.data : null;
 }
 
+function normalizeEventLevel(level: unknown): "info" | "warn" | "error" {
+  return level === "warn" || level === "error" ? level : "info";
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()))];
+}
+
+function parseKinds(capabilities: unknown): Array<"connector.action" | "agent.execute"> {
+  const kindsRaw = capabilities && typeof capabilities === "object" ? (capabilities as any).kinds : null;
+  const parsed = Array.isArray(kindsRaw)
+    ? kindsRaw.filter((k): k is "connector.action" | "agent.execute" => k === "connector.action" || k === "agent.execute")
+    : [];
+  return parsed.length > 0 ? parsed : ["agent.execute", "connector.action"];
+}
+
+function parseMaxInFlight(capabilities: unknown, fallback: number): number {
+  const raw = capabilities && typeof capabilities === "object" ? (capabilities as any).maxInFlight : null;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.max(1, Math.min(200, Math.floor(raw)));
+  }
+  return fallback;
+}
+
 const dispatchRequestSchema = z.object({
   organizationId: z.string().uuid(),
   requestedByUserId: z.string().uuid(),
@@ -168,9 +197,15 @@ const dispatchRequestSchema = z.object({
   kind: z.enum(["connector.action", "agent.execute", "agent.run"]),
   payload: z.unknown(),
   secret: z.string().min(1).optional(),
-  selectorTag: z.string().min(1).max(64).optional(),
-  selectorAgentId: z.string().uuid().optional(),
-  selectorGroup: z.string().min(1).max(64).optional(),
+  executorSelector: z
+    .object({
+      pool: z.enum(["managed", "byon"]).default("managed"),
+      labels: z.array(z.string().min(1).max(64)).max(50).optional(),
+      group: z.string().min(1).max(64).optional(),
+      tag: z.string().min(1).max(64).optional(),
+      executorId: z.string().uuid().optional(),
+    })
+    .optional(),
   timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
 });
 
@@ -220,11 +255,16 @@ export async function buildGatewayEdgeServer(input?: {
   const sessionClientsBySessionId = new Map<string, Set<WebSocket>>();
   const clientStateByWs = new Map<WebSocket, { organizationId: string; userId: string; joinedSessionId: string | null }>();
 
-  async function touchExecutor(orgId: string, executorId: string) {
+  async function touchExecutor(executor: ConnectedExecutor) {
     try {
-      await withTenantContext(pool, { organizationId: orgId }, async (db) => {
-        await touchOrganizationExecutorLastSeen(db, { organizationId: orgId, executorId });
-      });
+      if (executor.pool === "managed") {
+        await touchManagedExecutorLastSeen(createDb(pool), { executorId: executor.executorId });
+      } else if (executor.organizationId) {
+        const orgId = executor.organizationId;
+        await withTenantContext(pool, { organizationId: orgId }, async (db) => {
+          await touchOrganizationExecutorLastSeen(db, { organizationId: orgId, executorId: executor.executorId });
+        });
+      }
     } catch {
       // ignore best-effort
     }
@@ -235,6 +275,7 @@ export async function buildGatewayEdgeServer(input?: {
     const payload = {
       edgeId,
       executorId: executor.executorId,
+      pool: executor.pool,
       organizationId: executor.organizationId,
       labels: executor.labels,
       maxInFlight: executor.maxInFlight,
@@ -291,7 +332,7 @@ export async function buildGatewayEdgeServer(input?: {
     );
     for (const row of tail) {
       safeWsSend(input.ws, {
-        type: "session_event",
+        type: "session_event_v2",
         sessionId: input.sessionId,
         seq: row.seq,
         eventType: row.eventType,
@@ -504,18 +545,17 @@ export async function buildGatewayEdgeServer(input?: {
           })
         );
 
-        // Broadcast legacy event for hydration compatibility.
-        const legacy = {
-          type: "session_event",
+        const eventV2: GatewayBrainSessionEventV2 = {
+          type: "session_event_v2",
           sessionId: parsed.data.sessionId,
           seq: userEvent.seq,
           eventType: userEvent.eventType,
-          level: userEvent.level,
+          level: normalizeEventLevel(userEvent.level),
           payload: userEvent.payload ?? null,
           createdAt: userEvent.createdAt.toISOString(),
         };
         for (const client of sessionClientsBySessionId.get(parsed.data.sessionId) ?? []) {
-          safeWsSend(client, legacy);
+          safeWsSend(client, eventV2);
         }
 
         const requestId = `${parsed.data.sessionId}:turn:${userEvent.seq}`;
@@ -563,15 +603,28 @@ export async function buildGatewayEdgeServer(input?: {
             kinds: z.array(z.enum(["connector.action", "agent.execute"])).min(1),
           })
           .safeParse(message) as { success: boolean; data?: GatewayExecutorHelloV2 };
-
-        executor.lastSeenAtMs = Date.now();
-        if (parsed.success && parsed.data) {
-          executor.labels = parsed.data.labels ?? [];
-          executor.maxInFlight = parsed.data.maxInFlight ?? 10;
-          executor.kinds = parsed.data.kinds ?? ["agent.execute"];
-          executor.name = parsed.data.name ?? null;
+        if (!parsed.success || !parsed.data) return;
+        if (parsed.data.executorId !== executor.executorId) {
+          ws.close();
+          return;
         }
-        await touchExecutor(executor.organizationId, executor.executorId);
+        if (parsed.data.pool !== executor.pool) {
+          ws.close();
+          return;
+        }
+        if (executor.pool === "byon") {
+          if (!executor.organizationId || parsed.data.organizationId !== executor.organizationId) {
+            ws.close();
+            return;
+          }
+        }
+        executor.lastSeenAtMs = Date.now();
+        executor.labels = parsed.data.labels ?? [];
+        const reportedMax = parsed.data.maxInFlight ?? executor.configuredMaxInFlight;
+        executor.maxInFlight = Math.max(1, Math.min(executor.configuredMaxInFlight, reportedMax));
+        executor.kinds = parsed.data.kinds ?? ["agent.execute"];
+        executor.name = parsed.data.name ?? null;
+        await touchExecutor(executor);
         await writeExecutorRoute(executor);
         return;
       }
@@ -590,7 +643,7 @@ export async function buildGatewayEdgeServer(input?: {
         if (!parsed.success || !parsed.data) return;
 
         executor.lastSeenAtMs = Date.now();
-        await touchExecutor(executor.organizationId, executor.executorId);
+        await touchExecutor(executor);
         await writeExecutorRoute(executor);
 
         // Store tool result as a reply for brain awaiters.
@@ -673,38 +726,74 @@ export async function buildGatewayEdgeServer(input?: {
         socket.destroy();
         return;
       }
-      const orgId = parseOrgIdPrefix(token);
-      if (!orgId) {
+      const tokenPrefix = parseUuidPrefix(token);
+      if (!tokenPrefix) {
         socket.destroy();
         return;
       }
       const tokenHash = sha256Hex(token);
-      const row = await withTenantContext(pool, { organizationId: orgId }, async (db) =>
-        getOrganizationExecutorByTokenHash(db, { organizationId: orgId, tokenHash })
-      );
-      if (!row || row.revokedAt) {
-        socket.destroy();
-        return;
+      let executor: ConnectedExecutor | null = null;
+
+      const managed = await getManagedExecutorByTokenHash(createDb(pool), { tokenHash });
+      if (managed && !managed.revokedAt && managed.id === tokenPrefix) {
+        const reportedLabelsRaw =
+          managed.capabilities && typeof managed.capabilities === "object" ? (managed.capabilities as any).labels : null;
+        const labels = uniqueStrings([
+          ...(Array.isArray(managed.labels) ? managed.labels : []),
+          ...(Array.isArray(reportedLabelsRaw) ? reportedLabelsRaw : []),
+        ]);
+        const configuredMaxInFlight = Math.max(1, managed.maxInFlight ?? 50);
+        executor = {
+          ws: null as unknown as WebSocket,
+          executorId: managed.id,
+          pool: "managed",
+          organizationId: null,
+          tokenHash,
+          configuredMaxInFlight,
+          lastSeenAtMs: Date.now(),
+          name: managed.name ?? null,
+          labels,
+          maxInFlight: configuredMaxInFlight,
+          kinds: parseKinds(managed.capabilities),
+        };
+      } else {
+        const orgId = tokenPrefix;
+        const row = await withTenantContext(pool, { organizationId: orgId }, async (db) =>
+          getOrganizationExecutorByTokenHash(db, { organizationId: orgId, tokenHash })
+        );
+        if (!row || row.revokedAt) {
+          socket.destroy();
+          return;
+        }
+        const reportedLabelsRaw =
+          row.capabilities && typeof row.capabilities === "object" ? (row.capabilities as any).labels : null;
+        const labels = uniqueStrings([
+          ...(Array.isArray(row.labels) ? row.labels : []),
+          ...(Array.isArray(reportedLabelsRaw) ? reportedLabelsRaw : []),
+        ]);
+        const configuredMaxInFlight = parseMaxInFlight(row.capabilities, 10);
+        executor = {
+          ws: null as unknown as WebSocket,
+          executorId: row.id,
+          pool: "byon",
+          organizationId: orgId,
+          tokenHash,
+          configuredMaxInFlight,
+          lastSeenAtMs: Date.now(),
+          name: row.name ?? null,
+          labels,
+          maxInFlight: configuredMaxInFlight,
+          kinds: parseKinds(row.capabilities),
+        };
       }
 
-      const executor: ConnectedExecutor = {
-        ws: null as unknown as WebSocket,
-        executorId: row.id,
-        organizationId: orgId,
-        tokenHash,
-        lastSeenAtMs: Date.now(),
-        name: row.name ?? null,
-        labels: Array.isArray((row as any).labels) ? ((row as any).labels as any) : [],
-        maxInFlight: 10,
-        kinds: ["agent.execute", "connector.action"],
-      };
-
       wssExec.handleUpgrade(req, socket, head, (ws) => {
-        executor.ws = ws;
-        executorsById.set(executor.executorId, executor);
-        void touchExecutor(executor.organizationId, executor.executorId);
-        void writeExecutorRoute(executor);
-        wireExecutorSocket(ws, executor);
+        const connected = executor!;
+        connected.ws = ws;
+        executorsById.set(connected.executorId, connected);
+        void touchExecutor(connected);
+        void writeExecutorRoute(connected);
+        wireExecutorSocket(ws, connected);
       });
       return;
     }
@@ -752,4 +841,3 @@ export async function buildGatewayEdgeServer(input?: {
 
   return server;
 }
-
