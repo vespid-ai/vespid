@@ -2,11 +2,14 @@ import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { ChannelId } from "@vespid/shared";
 import {
+  createBluebubblesWebhookAdapter,
   createDiscordWebhookAdapter,
+  createFeishuWebhookAdapter,
   createGoogleChatWebhookAdapter,
   createImessageWebhookAdapter,
   createIrcWebhookAdapter,
   createLineWebhookAdapter,
+  createMattermostWebhookAdapter,
   createMatrixWebhookAdapter,
   createMsteamsWebhookAdapter,
   createSignalWebhookAdapter,
@@ -266,6 +269,111 @@ describe("core channel adapters", () => {
     expect(envelope?.event).toBe("message.received");
   });
 
+  it("validates feishu token and normalizes p2p text message", () => {
+    const adapter = createFeishuWebhookAdapter();
+    const body = {
+      schema: "2.0",
+      header: {
+        event_id: "feishu-event-1",
+        token: "feishu-token",
+        create_time: "1710000200000",
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_sender_1" },
+        },
+        message: {
+          message_id: "om_feishu_1",
+          chat_id: "oc_feishu_chat_1",
+          chat_type: "p2p",
+          content: JSON.stringify({ text: "deploy now" }),
+          create_time: "1710000200000",
+          mentions: [{ id: "ou_bot_1", key: "@_user_1" }],
+        },
+      },
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("feishu", body, { query: { botOpenId: "ou_bot_1" } }),
+      accountMetadata: {
+        verificationToken: "feishu-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("feishu", body, { query: { botOpenId: "ou_bot_1" } }));
+    expect(envelope?.channelId).toBe("feishu");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.mentionMatched).toBe(true);
+    expect(envelope?.conversationId).toBe("oc_feishu_chat_1");
+  });
+
+  it("validates mattermost token and normalizes posted webhook", () => {
+    const adapter = createMattermostWebhookAdapter();
+    const body = {
+      token: "mattermost-token",
+      event: "posted",
+      data: {
+        channel_type: "D",
+        post: JSON.stringify({
+          id: "mm-post-1",
+          message: "deploy now",
+          channel_id: "D123",
+          user_id: "mm-user-1",
+          create_at: 1710000300000,
+        }),
+      },
+      broadcast: { channel_id: "D123" },
+      sender_name: "alice",
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("mattermost", body),
+      accountMetadata: {
+        ingressToken: "mattermost-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("mattermost", body));
+    expect(envelope?.channelId).toBe("mattermost");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.senderId).toBe("mm-user-1");
+  });
+
+  it("validates bluebubbles signature and normalizes message", () => {
+    const adapter = createBluebubblesWebhookAdapter();
+    const body = {
+      message: {
+        guid: "bb-msg-1",
+        text: "deploy now",
+        handle: "+15550010",
+        chatGuid: "chat123",
+        isGroup: false,
+        timestamp: "2026-02-16T12:00:00.000Z",
+      },
+      sender: {
+        displayName: "Alice",
+      },
+    };
+
+    const signature = crypto.createHmac("sha256", "bb-secret").update(JSON.stringify(body), "utf8").digest("hex");
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("bluebubbles", body, {
+        headers: { "x-bluebubbles-signature": signature },
+      }),
+      accountMetadata: {
+        webhookSecret: "bb-secret",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("bluebubbles", body));
+    expect(envelope?.channelId).toBe("bluebubbles");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.providerMessageId).toBe("bb-msg-1");
+  });
+
   it("validates msteams token and normalizes mention message", () => {
     const adapter = createMsteamsWebhookAdapter();
 
@@ -394,6 +502,9 @@ describe("core channel adapters", () => {
   it("registers dedicated adapters for core8 + selected extended and generic adapter for others", () => {
     const registry = createDefaultChannelIngressAdapterRegistry();
     const slackAdapter = registry.get("slack");
+    const feishuAdapter = registry.get("feishu");
+    const mattermostAdapter = registry.get("mattermost");
+    const bluebubblesAdapter = registry.get("bluebubbles");
     const msteamsAdapter = registry.get("msteams");
     const lineAdapter = registry.get("line");
     const matrixAdapter = registry.get("matrix");
@@ -401,6 +512,12 @@ describe("core channel adapters", () => {
 
     expect(slackAdapter).not.toBeNull();
     expect(typeof slackAdapter?.authenticateWebhook).toBe("function");
+    expect(feishuAdapter).not.toBeNull();
+    expect(typeof feishuAdapter?.authenticateWebhook).toBe("function");
+    expect(mattermostAdapter).not.toBeNull();
+    expect(typeof mattermostAdapter?.authenticateWebhook).toBe("function");
+    expect(bluebubblesAdapter).not.toBeNull();
+    expect(typeof bluebubblesAdapter?.authenticateWebhook).toBe("function");
     expect(msteamsAdapter).not.toBeNull();
     expect(typeof msteamsAdapter?.authenticateWebhook).toBe("function");
     expect(lineAdapter).not.toBeNull();

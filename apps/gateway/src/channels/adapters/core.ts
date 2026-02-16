@@ -58,6 +58,21 @@ function pickString(source: RecordObject | null, keys: string[]): string | null 
   return null;
 }
 
+function parseJsonObject(value: unknown): RecordObject | null {
+  if (typeof value !== "string") {
+    return asObject(value);
+  }
+  if (value.trim().length === 0) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return asObject(parsed);
+  } catch {
+    return null;
+  }
+}
+
 function lowercase(value: string): string {
   return value.toLowerCase();
 }
@@ -707,6 +722,113 @@ function createMatrixEnvelope(input: ChannelIngressAdapterInput): ChannelInbound
   });
 }
 
+function createFeishuEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  if (pickString(root, ["type"]) === "url_verification") {
+    return null;
+  }
+
+  const header = asObject(root.header);
+  const event = asObject(root.event) ?? root;
+  const message = asObject(event.message);
+  const sender = asObject(event.sender);
+  const senderIdObject = asObject(sender?.sender_id);
+  const content = parseJsonObject(message?.content);
+
+  const text =
+    pickString(content, ["text"]) ??
+    pickString(message, ["text", "body"]) ??
+    pickString(event, ["text", "message"]);
+  const senderId = pickString(senderIdObject, ["open_id", "user_id", "union_id"]);
+  const conversationId = pickString(message, ["chat_id"]) ?? senderId;
+  const botOpenId = readString(input.query.botOpenId);
+  const mentions = asArray(message?.mentions)
+    .map((item) => asObject(item))
+    .filter((item): item is RecordObject => item !== null);
+  const mentionMatched =
+    mentions.some((mention) => {
+      const id = pickString(mention, ["id", "open_id", "user_id"]);
+      const key = pickString(mention, ["key", "name"]);
+      return (typeof botOpenId === "string" && id === botOpenId) || (typeof botOpenId === "string" && key?.includes(botOpenId) === true);
+    }) || includesMention(text ?? "", unique([botOpenId ? `@${botOpenId}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["message_id"]) ?? pickString(header, ["event_id"]),
+    senderDisplayName: pickString(sender, ["sender_type"]),
+    receivedAt: parseTimestampMs(message?.create_time ?? header?.create_time, input.receivedAt),
+    isDirectMessage: pickString(message, ["chat_type"]) === "p2p",
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createMattermostEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const data = asObject(root.data);
+  const broadcast = asObject(root.broadcast);
+  const post = parseJsonObject(data?.post);
+  const text = pickString(post, ["message"]) ?? pickString(root, ["text", "command", "message"]);
+  const senderId = pickString(post, ["user_id"]) ?? pickString(root, ["user_id", "userId"]);
+  const conversationId =
+    pickString(post, ["channel_id"]) ??
+    pickString(broadcast, ["channel_id"]) ??
+    pickString(root, ["channel_id", "channelId"]) ??
+    senderId;
+  const channelType = pickString(data, ["channel_type"]) ?? pickString(root, ["channel_type"]);
+  const botUsername = readString(input.query.botUsername);
+  const mentionMatched = includesMention(text ?? "", unique([botUsername ? `@${botUsername}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(post, ["id"]) ?? pickString(root, ["trigger_id", "messageId", "id"]),
+    senderDisplayName: pickString(root, ["sender_name", "user_name", "username"]),
+    receivedAt: parseTimestampMs(post?.create_at ?? root.timestamp, input.receivedAt),
+    isDirectMessage: channelType === "D" || Boolean(conversationId?.startsWith("D")),
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createBluebubblesEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const message = asObject(root.message) ?? root;
+  const sender = asObject(root.sender);
+  const text = pickString(message, ["text", "message", "body"]);
+  const senderId = pickString(message, ["handle", "sender", "address", "from"]) ?? pickString(sender, ["address", "id"]);
+  const conversationId = pickString(message, ["chatGuid", "conversationId", "threadId"]) ?? senderId;
+  const isGroup = readBoolean(message.isGroup) ?? Boolean(conversationId?.startsWith("chat"));
+  const botHandle = readString(input.query.botHandle);
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["guid", "messageId", "id"]),
+    senderDisplayName: pickString(sender, ["displayName", "name"]) ?? pickString(root, ["senderName"]),
+    receivedAt: pickString(message, ["date", "timestamp"]) ?? parseTimestampMs(root.timestamp, input.receivedAt),
+    isDirectMessage: !isGroup,
+    mentionMatched: includesMention(text ?? "", unique([botHandle, "@vespid", "@bot"])),
+    rawBody: root,
+  });
+}
+
 function validateSlackSignature(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
   const signingSecret = readString(input.accountMetadata.signingSecret);
   if (!signingSecret) {
@@ -821,6 +943,39 @@ function validateBearerOrHeaderToken(input: ChannelIngressAuthInput, options: {
     metadataKey: options.metadataKey,
     reason: options.reason,
   });
+}
+
+function validateFeishuToken(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
+  const expected =
+    readString(input.accountMetadata.verificationToken) ?? readString(input.accountMetadata.verification_token);
+  if (!expected) {
+    return ok();
+  }
+  const bodyObject = asObject(input.body);
+  const header = asObject(bodyObject?.header);
+  const provided =
+    readString(bodyObject?.token) ??
+    readString(header?.token) ??
+    readString(input.headers["x-lark-token"]);
+  if (!provided || !safeEqual(provided, expected)) {
+    return failed("feishu_token_invalid");
+  }
+  return ok();
+}
+
+function validateMattermostToken(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
+  const expected = readString(input.accountMetadata.ingressToken) ?? readString(input.accountMetadata.token);
+  if (!expected) {
+    return ok();
+  }
+  const provided =
+    readString(input.headers["x-mattermost-token"]) ??
+    readString(asObject(input.body)?.token) ??
+    extractBearerToken(input.headers.authorization);
+  if (!provided || !safeEqual(provided, expected)) {
+    return failed("mattermost_token_invalid");
+  }
+  return ok();
 }
 
 export function createWhatsappWebhookAdapter(): ChannelIngressAdapter {
@@ -965,6 +1120,55 @@ export function createImessageWebhookAdapter(): ChannelIngressAdapter {
   };
 }
 
+export function createFeishuWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "feishu",
+    authenticateWebhook(input) {
+      return validateFeishuToken(input);
+    },
+    normalizeWebhook(input) {
+      return createFeishuEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createMattermostWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "mattermost",
+    authenticateWebhook(input) {
+      return validateMattermostToken(input);
+    },
+    normalizeWebhook(input) {
+      return createMattermostEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createBluebubblesWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "bluebubbles",
+    authenticateWebhook(input) {
+      const hmacDecision = validateWebhookHmac(input, {
+        secretKey: "webhookSecret",
+        signatureHeader: "x-bluebubbles-signature",
+        reasonMissing: "bluebubbles_signature_missing",
+        reasonInvalid: "bluebubbles_signature_invalid",
+      });
+      if (!hmacDecision.ok) {
+        return hmacDecision;
+      }
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-bluebubbles-token",
+        reason: "bluebubbles_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createBluebubblesEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
 export function createMsteamsWebhookAdapter(): ChannelIngressAdapter {
   return {
     channelId: "msteams",
@@ -976,7 +1180,7 @@ export function createMsteamsWebhookAdapter(): ChannelIngressAdapter {
       });
     },
     normalizeWebhook(input) {
-      return createMsteamsEnvelope(input);
+      return createMsteamsEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
     },
   };
 }
@@ -1003,7 +1207,7 @@ export function createLineWebhookAdapter(): ChannelIngressAdapter {
       return ok();
     },
     normalizeWebhook(input) {
-      return createLineEnvelope(input);
+      return createLineEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
     },
   };
 }
@@ -1019,7 +1223,7 @@ export function createMatrixWebhookAdapter(): ChannelIngressAdapter {
       });
     },
     normalizeWebhook(input) {
-      return createMatrixEnvelope(input);
+      return createMatrixEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
     },
   };
 }

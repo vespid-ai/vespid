@@ -1,11 +1,14 @@
 import { listChannelDefinitions } from "@vespid/channels";
 import type { ChannelId, ChannelInboundEnvelope } from "@vespid/shared";
 import {
+  createBluebubblesWebhookAdapter,
   createDiscordWebhookAdapter,
+  createFeishuWebhookAdapter,
   createGoogleChatWebhookAdapter,
   createImessageWebhookAdapter,
   createIrcWebhookAdapter,
   createLineWebhookAdapter,
+  createMattermostWebhookAdapter,
   createMatrixWebhookAdapter,
   createMsteamsWebhookAdapter,
   createSignalWebhookAdapter,
@@ -85,6 +88,15 @@ export function createDefaultChannelIngressAdapterRegistry(): ChannelIngressAdap
         break;
       case "imessage":
         registry.register(createImessageWebhookAdapter());
+        break;
+      case "feishu":
+        registry.register(createFeishuWebhookAdapter());
+        break;
+      case "mattermost":
+        registry.register(createMattermostWebhookAdapter());
+        break;
+      case "bluebubbles":
+        registry.register(createBluebubblesWebhookAdapter());
         break;
       case "msteams":
         registry.register(createMsteamsWebhookAdapter());
