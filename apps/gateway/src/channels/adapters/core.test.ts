@@ -42,6 +42,180 @@ function inputFor(channelId: ChannelId, body: unknown, options?: {
   };
 }
 
+const adapterFactories = [
+  { channelId: "whatsapp", create: createWhatsappWebhookAdapter },
+  { channelId: "telegram", create: createTelegramWebhookAdapter },
+  { channelId: "discord", create: createDiscordWebhookAdapter },
+  { channelId: "irc", create: createIrcWebhookAdapter },
+  { channelId: "slack", create: createSlackWebhookAdapter },
+  { channelId: "googlechat", create: createGoogleChatWebhookAdapter },
+  { channelId: "signal", create: createSignalWebhookAdapter },
+  { channelId: "imessage", create: createImessageWebhookAdapter },
+  { channelId: "feishu", create: createFeishuWebhookAdapter },
+  { channelId: "mattermost", create: createMattermostWebhookAdapter },
+  { channelId: "bluebubbles", create: createBluebubblesWebhookAdapter },
+  { channelId: "msteams", create: createMsteamsWebhookAdapter },
+  { channelId: "line", create: createLineWebhookAdapter },
+  { channelId: "nextcloud-talk", create: createNextcloudTalkWebhookAdapter },
+  { channelId: "matrix", create: createMatrixWebhookAdapter },
+  { channelId: "nostr", create: createNostrWebhookAdapter },
+  { channelId: "tlon", create: createTlonWebhookAdapter },
+  { channelId: "twitch", create: createTwitchWebhookAdapter },
+  { channelId: "zalo", create: createZaloWebhookAdapter },
+  { channelId: "zalouser", create: createZalouserWebhookAdapter },
+  { channelId: "webchat", create: createWebchatWebhookAdapter },
+] as const;
+
+const authFailureCases = [
+  {
+    channelId: "whatsapp",
+    create: createWhatsappWebhookAdapter,
+    body: { entry: [{ changes: [{ value: { messages: [{ id: "wamid-auth" }] } }] }] },
+    accountMetadata: { appSecret: "wa-secret" },
+    expected: { ok: false, reason: "whatsapp_signature_missing" },
+  },
+  {
+    channelId: "telegram",
+    create: createTelegramWebhookAdapter,
+    body: { message: { text: "deploy now" } },
+    accountMetadata: { webhookSecretToken: "tg-secret" },
+    expected: { ok: false, reason: "telegram_secret_token_invalid" },
+  },
+  {
+    channelId: "discord",
+    create: createDiscordWebhookAdapter,
+    body: { id: "discord-auth", content: "deploy now" },
+    accountMetadata: { discordPublicKey: Buffer.alloc(32, 7).toString("hex") },
+    expected: { ok: false, reason: "discord_signature_missing" },
+  },
+  {
+    channelId: "irc",
+    create: createIrcWebhookAdapter,
+    body: { message: "deploy now", nick: "alice", target: "#ops" },
+    accountMetadata: { ingressToken: "irc-token" },
+    expected: { ok: false, reason: "irc_token_invalid" },
+  },
+  {
+    channelId: "slack",
+    create: createSlackWebhookAdapter,
+    body: { event: { type: "message", text: "deploy now" } },
+    accountMetadata: { signingSecret: "slack-secret" },
+    expected: { ok: false, reason: "slack_signature_missing" },
+  },
+  {
+    channelId: "googlechat",
+    create: createGoogleChatWebhookAdapter,
+    body: { message: { text: "deploy now" } },
+    accountMetadata: { verificationToken: "gc-token" },
+    expected: { ok: false, reason: "googlechat_token_invalid" },
+  },
+  {
+    channelId: "signal",
+    create: createSignalWebhookAdapter,
+    body: { envelope: { dataMessage: { message: "deploy now" } } },
+    accountMetadata: { webhookSecret: "signal-secret" },
+    expected: { ok: false, reason: "signal_signature_missing" },
+  },
+  {
+    channelId: "imessage",
+    create: createImessageWebhookAdapter,
+    body: { text: "deploy now", handle: "+15550003" },
+    accountMetadata: { ingressToken: "imessage-token" },
+    expected: { ok: false, reason: "imessage_token_invalid" },
+  },
+  {
+    channelId: "feishu",
+    create: createFeishuWebhookAdapter,
+    body: { header: { token: "unexpected-token" } },
+    accountMetadata: { verificationToken: "feishu-token" },
+    expected: { ok: false, reason: "feishu_token_invalid" },
+  },
+  {
+    channelId: "mattermost",
+    create: createMattermostWebhookAdapter,
+    body: { event: "posted" },
+    accountMetadata: { ingressToken: "mattermost-token" },
+    expected: { ok: false, reason: "mattermost_token_invalid" },
+  },
+  {
+    channelId: "bluebubbles",
+    create: createBluebubblesWebhookAdapter,
+    body: { message: { text: "deploy now", guid: "bb-auth" } },
+    accountMetadata: { webhookSecret: "bb-secret" },
+    expected: { ok: false, reason: "bluebubbles_signature_missing" },
+  },
+  {
+    channelId: "msteams",
+    create: createMsteamsWebhookAdapter,
+    body: { text: "deploy now", conversation: { id: "conv-1" } },
+    accountMetadata: { ingressToken: "teams-token" },
+    expected: { ok: false, reason: "msteams_token_invalid" },
+  },
+  {
+    channelId: "line",
+    create: createLineWebhookAdapter,
+    body: { events: [{ message: { text: "deploy now" } }] },
+    accountMetadata: { channelSecret: "line-secret" },
+    expected: { ok: false, reason: "line_signature_missing" },
+  },
+  {
+    channelId: "nextcloud-talk",
+    create: createNextcloudTalkWebhookAdapter,
+    body: { message: { message: "deploy now", actorId: "nc-user-1" } },
+    accountMetadata: { ingressToken: "nc-token" },
+    expected: { ok: false, reason: "nextcloud_talk_token_invalid" },
+  },
+  {
+    channelId: "matrix",
+    create: createMatrixWebhookAdapter,
+    body: { content: { body: "deploy now" }, sender: "@alice:example.org" },
+    accountMetadata: { ingressToken: "matrix-token" },
+    expected: { ok: false, reason: "matrix_token_invalid" },
+  },
+  {
+    channelId: "nostr",
+    create: createNostrWebhookAdapter,
+    body: { event: { content: "deploy now", pubkey: "nostr-user-1" } },
+    accountMetadata: { ingressToken: "nostr-token" },
+    expected: { ok: false, reason: "nostr_token_invalid" },
+  },
+  {
+    channelId: "tlon",
+    create: createTlonWebhookAdapter,
+    body: { message: { text: "deploy now", ship: "~zod" } },
+    accountMetadata: { ingressToken: "tlon-token" },
+    expected: { ok: false, reason: "tlon_token_invalid" },
+  },
+  {
+    channelId: "twitch",
+    create: createTwitchWebhookAdapter,
+    body: { event: { message: { text: "deploy now" } } },
+    accountMetadata: { webhookSecret: "twitch-secret" },
+    expected: { ok: false, reason: "twitch_signature_missing" },
+  },
+  {
+    channelId: "zalo",
+    create: createZaloWebhookAdapter,
+    body: { message: { text: "deploy now" } },
+    accountMetadata: { webhookSecret: "zalo-secret" },
+    expected: { ok: false, reason: "zalo_signature_missing" },
+  },
+  {
+    channelId: "zalouser",
+    create: createZalouserWebhookAdapter,
+    body: { message: { text: "deploy now" } },
+    accountMetadata: { ingressToken: "zu-token" },
+    expected: { ok: false, reason: "zalouser_token_invalid" },
+  },
+  {
+    channelId: "webchat",
+    create: createWebchatWebhookAdapter,
+    body: { message: { text: "deploy now" } },
+    accountMetadata: { ingressToken: "wc-token" },
+    expected: { ok: false, reason: "webchat_token_invalid" },
+  },
+] as const;
+
 describe("core channel adapters", () => {
   it("normalizes whatsapp inbound payload", () => {
     const adapter = createWhatsappWebhookAdapter();
@@ -708,6 +882,21 @@ describe("core channel adapters", () => {
     expect(envelope?.channelId).toBe("matrix");
     expect(envelope?.event).toBe("message.mentioned");
     expect(envelope?.conversationId).toBe("!room:example.org");
+  });
+
+  it.each(adapterFactories)("returns null for malformed inbound payload in $channelId adapter", ({ channelId, create }) => {
+    const adapter = create();
+    const envelope = adapter.normalizeWebhook(inputFor(channelId, {}));
+    expect(envelope).toBeNull();
+  });
+
+  it.each(authFailureCases)("rejects invalid auth for $channelId adapter", ({ channelId, create, body, accountMetadata, expected }) => {
+    const adapter = create();
+    const decision = adapter.authenticateWebhook?.({
+      ...inputFor(channelId, body),
+      accountMetadata: accountMetadata as Record<string, unknown>,
+    });
+    expect(decision).toEqual(expected);
   });
 
   it("registers dedicated adapters for all channels", () => {
