@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { Fraunces } from "next/font/google";
-import { useEffect } from "react";
+import { Menu, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useSession } from "../../lib/hooks/use-session";
@@ -33,6 +34,7 @@ export default function LocaleHomePage() {
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] : params?.locale ?? "en";
   const session = useSession();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (session.isLoading) {
@@ -164,27 +166,53 @@ export default function LocaleHomePage() {
   return (
     <MarketingShell>
       <div className={`${marketingDisplay.variable} font-sans text-text`}>
-        <header className="sticky top-0 z-20 border-b border-borderSubtle/70 bg-surface0/80 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-4">
+        <header className="sticky top-0 z-20 border-b border-borderSubtle/70 bg-surface0/88 backdrop-blur">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-4">
             <Link href={`/${locale}`} className="text-lg font-semibold text-text">
               Vespid
             </Link>
-            <nav className="flex flex-wrap items-center gap-4 text-sm text-muted">
+            <nav className="hidden items-center gap-4 text-sm text-muted md:flex">
               {navItems.map((item) => (
                 <a key={item.href} href={item.href} className="hover:text-text">
                   {item.label}
                 </a>
               ))}
             </nav>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-3">
               {session.isLoading ? (
                 <span className="hidden text-xs text-muted sm:inline">{t("common.loading")}</span>
               ) : null}
-              <Button asChild variant="accent" size="md">
+              <Button asChild variant="accent" size="md" className="h-8 px-3 sm:h-9 sm:px-4">
                 <Link href={`/${locale}/auth`}>{t("marketing.hero.ctaPrimary")}</Link>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="md:hidden"
+                aria-label={mobileMenuOpen ? t("common.close") : t("common.nav")}
+                onClick={() => setMobileMenuOpen((v) => !v)}
+              >
+                {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
               </Button>
             </div>
           </div>
+          {mobileMenuOpen ? (
+            <div className="border-t border-borderSubtle/70 px-6 py-3 md:hidden">
+              <nav className="grid gap-2 text-sm text-muted">
+                {navItems.map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className="rounded-[var(--radius-sm)] border border-borderSubtle/70 bg-panel/70 px-3 py-2 hover:text-text"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    {item.label}
+                  </a>
+                ))}
+              </nav>
+            </div>
+          ) : null}
         </header>
 
         <MarketingHero

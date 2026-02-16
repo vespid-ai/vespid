@@ -40,7 +40,6 @@ import {
 import { cn } from "../../lib/cn";
 import { getLocaleFromPathname, replaceLocaleInPathname } from "../../i18n/pathnames";
 import { Button } from "../ui/button";
-import { Card } from "../ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,7 +47,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Separator } from "../ui/separator";
 import { Avatar, AvatarFallback } from "../ui/avatar";
@@ -67,7 +65,6 @@ type NavItem = {
 };
 
 const SIDEBAR_COLLAPSED_KEY = "vespid.ui.sidebarCollapsed";
-const DESKTOP_HINT_DISMISSED_KEY = "vespid.ui.desktopHintDismissed";
 
 function shortId(value: string): string {
   return value.length > 10 ? `${value.slice(0, 8)}…` : value;
@@ -89,13 +86,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [desktopHintDismissed, setDesktopHintDismissed] = useState(true);
 
   const [activeOrgId, setActiveOrgIdState] = useState<string>("");
   const [knownOrgIds, setKnownOrgIds] = useState<string[]>([]);
   const [draftOrgId, setDraftOrgId] = useState<string>("");
   const [orgSummaries, setOrgSummaries] = useState<Array<{ id: string; name: string; roleKey: string }>>([]);
-  const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
   const [hasOrgSecrets, setHasOrgSecrets] = useState(false);
   const [hasStarterResource, setHasStarterResource] = useState(false);
 
@@ -109,8 +104,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 
     const rawCollapsed = window.localStorage?.getItem(SIDEBAR_COLLAPSED_KEY);
     setSidebarCollapsed(rawCollapsed === "1");
-    const rawDesktopHint = window.localStorage?.getItem(DESKTOP_HINT_DISMISSED_KEY);
-    setDesktopHintDismissed(rawDesktopHint === "1");
 
     return subscribeActiveOrg((next) => {
       setActiveOrgIdState(next ?? "");
@@ -153,31 +146,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [session.data?.session]);
-
-  useEffect(() => {
-    if (!session.data?.session || !activeOrgId) {
-      setCreditsBalance(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const payload = await apiFetchJson<{ balanceCredits: number }>(
-          `/v1/orgs/${activeOrgId}/billing/credits`,
-          undefined,
-          { orgScoped: true }
-        );
-        if (cancelled) return;
-        setCreditsBalance(typeof payload.balanceCredits === "number" ? payload.balanceCredits : null);
-      } catch {
-        if (cancelled) return;
-        setCreditsBalance(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [session.data?.session, activeOrgId]);
 
   useEffect(() => {
     if (!session.data?.session || !activeOrgId) {
@@ -268,11 +236,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
   }
 
-  function dismissDesktopHint() {
-    setDesktopHintDismissed(true);
-    window.localStorage?.setItem(DESKTOP_HINT_DISMISSED_KEY, "1");
-  }
-
   async function logout() {
     try {
       await apiFetch("/v1/auth/logout", { method: "POST" });
@@ -283,7 +246,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     setOrgSummaries([]);
     setKnownOrgIds([]);
     setDraftOrgId("");
-    setCreditsBalance(null);
     setHasOrgSecrets(false);
     setHasStarterResource(false);
     queryClient.setQueryData(["session"], null);
@@ -306,7 +268,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     return /^\/[^/]+\/(conversations|workflows)\/[^/]+/.test(p);
   }, [pathname]);
   const onboardingVisible = mounted && hasSession && (!activeOrgId || !(hasStarterResource || hasStarterRoute));
-  const authRequiredBannerVisible = mounted && !session.isLoading && !hasSession;
   const showApiUnreachable = mounted && apiUnreachable;
 
   function SettingsDropdown({ iconOnly }: { iconOnly?: boolean }) {
@@ -361,6 +322,12 @@ export function AppShell({ children }: { children: ReactNode }) {
           <DropdownMenuItem onSelect={() => router.push(replaceLocaleInPathname(pathname ?? `/${locale}`, "zh-CN"))}>
             zh-CN
             {locale === "zh-CN" ? <Check className="ml-auto h-4 w-4 text-muted" /> : null}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <a href="https://github.com/vespid-ai/vespid" target="_blank" rel="noreferrer">
+              {t("common.docs")}
+            </a>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -428,10 +395,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           <aside
             className={cn(
-              "hidden md:block sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur",
-              "relative",
-              "before:content-[''] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/45 before:to-transparent",
-              "after:content-[''] after:absolute after:inset-x-10 after:top-0 after:h-10 after:bg-gradient-to-b after:from-brand/14 after:to-transparent after:blur-xl after:pointer-events-none"
+              "hidden md:block sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/84 shadow-elev1 backdrop-blur"
             )}
           >
           <div className={cn("flex items-center gap-2 px-3 py-3", sidebarCollapsed ? "justify-center" : "px-4")}
@@ -495,29 +459,13 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           ) : null}
 
-          <div className="mt-auto px-4 pb-4 pt-6">
-            <Separator />
-            <div className="mt-3 flex items-center justify-between text-xs text-muted">
-              <span>dev</span>
-              <a
-                className="underline-offset-2 hover:underline"
-                href="https://github.com/vespid-ai/vespid"
-                target="_blank"
-                rel="noreferrer"
-              >
-                docs
-              </a>
-            </div>
-          </div>
+          <div className="mt-auto px-4 pb-4 pt-6" />
         </aside>
 
           <section className="min-w-0">
             <header
               className={cn(
-                "sticky top-3 md:top-4 z-10 mb-3 md:mb-4 overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle bg-panel/65 shadow-elev2 backdrop-blur",
-                "relative",
-                "before:content-[''] before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-brand/45 before:to-transparent",
-                "after:content-[''] after:absolute after:inset-x-12 after:top-0 after:h-10 after:bg-gradient-to-b after:from-brand/14 after:to-transparent after:blur-xl after:pointer-events-none"
+                "sticky top-3 md:top-4 z-10 mb-3 md:mb-4 overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/84 shadow-elev1 backdrop-blur"
               )}
             >
               <div className="flex items-center justify-between gap-4 px-3 py-2 md:px-4 md:py-3 group-data-[density=compact]:py-2">
@@ -671,54 +619,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                         <kbd className="rounded border border-borderSubtle bg-panel/60 px-1.5 py-0.5">K</kbd>
                       </span>
                     </Button>
-
-                    {hasSession ? (
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button variant="outline" size="sm" className="gap-2">
-                            <Users className="h-4 w-4" />
-                            {visibleActiveOrgId ? t("org.shortLabel", { id: shortId(visibleActiveOrgId) }) : t("org.noActive")}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent align="start" className="w-[420px]">
-                          <div className="text-xs font-medium text-muted">{t("org.active")}</div>
-                          <div className="mt-2 grid gap-2">
-                            <Select
-                              value={visibleActiveOrgId || "__none__"}
-                              onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
-                                {visibleKnownOrgIds.map((id) => (
-                                  <SelectItem key={id} value={id}>
-                                    {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <input
-                              value={draftOrgId}
-                              onChange={(e) => setDraftOrgId(e.target.value)}
-                              placeholder={t("org.paste")}
-                              className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                            />
-                            <div className="flex justify-end">
-                              <Button variant="accent" onClick={() => applyOrgId(draftOrgId)}>
-                                {t("org.set")}
-                              </Button>
-                            </div>
-                          </div>
-                        </PopoverContent>
-                      </Popover>
-                    ) : null}
-                    {typeof creditsBalance === "number" ? (
-                      <Badge variant={creditsBalance > 0 ? "ok" : "warn"} className="gap-1.5">
-                        {t("billing.credits")}: {creditsBalance}
-                      </Badge>
-                    ) : null}
                   </div>
                 </div>
 
@@ -745,29 +645,14 @@ export function AppShell({ children }: { children: ReactNode }) {
 
               {showApiUnreachable ? (
                 <div className="border-t border-borderSubtle bg-panel/40 px-3 md:px-4 py-2">
-                  <div className="flex flex-wrap items-start gap-2 text-sm">
+                  <div className="flex flex-col gap-2 text-sm sm:flex-row sm:items-start">
                     <Badge variant="warn" className="gap-1.5">
                       <TriangleAlert className="h-3.5 w-3.5" />
                       {t("errors.apiUnreachable.title")}
                     </Badge>
-                    <div className="min-w-0 flex-1 text-muted">
+                    <div className="min-w-0 flex-1 break-words text-muted">
                       {t("errors.apiUnreachable.description", { base: reachability.base || getApiBase() })}
                     </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {authRequiredBannerVisible ? (
-                <div className="border-t border-borderSubtle bg-panel/40 px-3 md:px-4 py-2">
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <Badge variant="warn" className="gap-1.5">
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                      {t("errors.authRequired.title")}
-                    </Badge>
-                    <div className="min-w-0 flex-1 text-muted">{t("errors.authRequired.description")}</div>
-                    <Button asChild variant="outline" size="sm">
-                      <Link href={`/${locale}/auth`}>{t("errors.authRequired.signIn")}</Link>
-                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -809,23 +694,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
               ) : null}
             </header>
-
-            {!desktopHintDismissed ? (
-              <div className="mt-3 md:hidden">
-                <Card className="relative p-3">
-                  <div className="pr-10 text-sm text-muted">{t("common.desktopOnly")}</div>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="absolute right-2 top-2 h-8 w-8"
-                    aria-label={t("common.close")}
-                    onClick={dismissDesktopHint}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </Card>
-              </div>
-            ) : null}
 
             <main className="min-w-0">
               <div className="animate-fade-in">{children}</div>

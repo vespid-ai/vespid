@@ -16,7 +16,7 @@ const buttonVariants = cva(
         default: "bg-text text-surface0 hover:bg-text/92 shadow-elev1",
         accent:
           "bg-brand text-brandContrast shadow-elev1 hover:bg-brand/92 hover:shadow-elev2 focus-visible:ring-accent/35",
-        outline: "border border-borderSubtle/60 bg-panel/28 hover:bg-panel/55 hover:shadow-elev2",
+        outline: "border border-borderSubtle/70 bg-panel/88 hover:bg-panel hover:shadow-elev2",
         ghost: "hover:bg-panel/55",
         danger: "bg-danger text-white hover:bg-danger/92 focus-visible:ring-danger/35",
       },

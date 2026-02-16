@@ -65,7 +65,8 @@
     "desktopOnly": "当前版本主要针对桌面端优化; 移动端支持会在后续完善。",
     "debug": "调试",
     "show": "展开",
-    "hide": "收起"
+    "hide": "收起",
+    "docs": "文档"
   },
   "commandPalette": {
     "title": "搜索",
@@ -170,6 +171,13 @@
     "title": "工作流",
     "subtitle": "在对话之后，将自动化流程安全上线。",
     "createTitle": "创建工作流",
+    "createQuickHint": "先配置名称、模型和主指令，再按需打开高级配置。",
+    "nodesConfigured": "已配置 {count} 个节点",
+    "quickInstructions": "主指令",
+    "quickInstructionsHint": "用于控制首个智能体节点的默认行为。",
+    "customizeAdvanced": "自定义高级工作流",
+    "advancedTitle": "工作流高级配置",
+    "advancedDescription": "节点图、工具、团队编排与输出约束。",
     "defaultAgentModel": "默认智能体模型",
     "agentNodes": "智能体节点",
     "addAgentNode": "添加智能体节点",
@@ -419,6 +427,12 @@
     "create": {
       "title": "新建对话",
       "subtitle": "先选模型，再输入消息并发送。",
+      "quickHint": "默认仅展示必要步骤，保持创建对话的速度。",
+      "quickMode": "快速创建",
+      "advancedMode": "高级配置",
+      "configureAdvanced": "高级设置",
+      "advancedTitle": "对话高级设置",
+      "advancedDescription": "引擎、提示词、路由与工具控制。",
       "button": "创建",
       "created": "对话已创建。"
     },

@@ -3,6 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SlidersHorizontal } from "lucide-react";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
@@ -18,6 +19,8 @@ import { ModelPickerField } from "../../../../components/app/model-picker/model-
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
+import { QuickCreatePanel } from "../../../../components/app/quick-create-panel";
+import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-sheet";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings } from "../../../../lib/hooks/use-org-settings";
@@ -335,6 +338,7 @@ export default function WorkflowsPage() {
     secretId: null,
   });
   const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);
+  const [workflowAdvancedOpen, setWorkflowAdvancedOpen] = useState(false);
 
   const [recent, setRecent] = useState<string[]>([]);
   const [openWorkflowId, setOpenWorkflowId] = useState("");
@@ -481,6 +485,17 @@ export default function WorkflowsPage() {
     router.push(`/${locale}/workflows/${trimmed}`);
   }
 
+  const primaryNode = agentNodes[0] ?? null;
+
+  function setPrimaryNodeInstructions(value: string) {
+    setAgentNodes((prev) => {
+      if (prev.length === 0) {
+        return [{ ...defaultAgentNode(0, defaultAgentLlm), instructions: value }];
+      }
+      return prev.map((node, idx) => (idx === 0 ? { ...node, instructions: value } : node));
+    });
+  }
+
   if (!authSession.isLoading && !authSession.data?.session) {
     return (
       <div className="grid gap-4">
@@ -549,12 +564,12 @@ export default function WorkflowsPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("workflows.createTitle")}</CardTitle>
-            <CardDescription>{orgId ? `Org: ${orgId}` : t("workflows.createWizardHint")}</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
+        <QuickCreatePanel
+          title={t("workflows.createTitle")}
+          description={t("workflows.createQuickHint")}
+          actions={<div className="text-xs text-muted">{t("workflows.nodesConfigured", { count: agentNodes.length })}</div>}
+          contentClassName="gap-3"
+        >
             <div className="grid gap-1.5">
               <Label htmlFor="workflow-name">{t("workflows.fields.workflowName")}</Label>
               <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
@@ -567,6 +582,41 @@ export default function WorkflowsPage() {
                 <div className="text-xs text-warn">Selected provider requires secretId.</div>
               ) : null}
             </div>
+
+            <div className="grid gap-2 rounded-lg border border-borderSubtle bg-panel/70 p-3">
+              <Label htmlFor="workflow-primary-instructions">{t("workflows.quickInstructions")}</Label>
+              <Textarea
+                id="workflow-primary-instructions"
+                rows={4}
+                value={primaryNode?.instructions ?? ""}
+                onChange={(e) => setPrimaryNodeInstructions(e.target.value)}
+              />
+              <div className="text-xs text-muted">{t("workflows.quickInstructionsHint")}</div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button variant="accent" onClick={submitCreate} disabled={!canCreate || createWorkflow.isPending}>
+                {createWorkflow.isPending ? t("common.loading") : t("common.create")}
+              </Button>
+              <Button variant="outline" onClick={() => setWorkflowAdvancedOpen(true)}>
+                <SlidersHorizontal className="h-4 w-4" />
+                {t("workflows.customizeAdvanced")}
+              </Button>
+            </div>
+
+            <AdvancedConfigSheet
+              open={workflowAdvancedOpen}
+              onOpenChange={setWorkflowAdvancedOpen}
+              title={t("workflows.advancedTitle")}
+              description={t("workflows.advancedDescription")}
+              footer={
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button variant="outline" onClick={() => setWorkflowAdvancedOpen(false)}>
+                    {t("common.close")}
+                  </Button>
+                </div>
+              }
+            >
 
             <div className="grid gap-3 rounded-lg border border-border bg-panel/50 p-3">
               <div className="text-sm font-medium text-text">{t("workflows.agentNodes")}</div>
@@ -1248,14 +1298,8 @@ export default function WorkflowsPage() {
                 </div>
               </div>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button variant="accent" onClick={submitCreate} disabled={!canCreate || createWorkflow.isPending}>
-                {createWorkflow.isPending ? t("common.loading") : t("common.create")}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </AdvancedConfigSheet>
+        </QuickCreatePanel>
 
         <Card>
           <CardHeader>

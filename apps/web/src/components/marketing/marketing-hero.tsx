@@ -81,32 +81,31 @@ export function MarketingHero({
   const progressPct = panel.steps.length > 0 ? ((activeStepIndex + 1) / panel.steps.length) * 100 : 0;
 
   return (
-    <section ref={heroRef as any} className="relative pt-20 pb-16 sm:pt-28 sm:pb-20">
+    <section ref={heroRef as any} className="relative pb-14 pt-16 sm:pb-18 sm:pt-22">
       <div className="absolute inset-0 -z-10">
-        <div className="hero-orb left-[6%] top-10 h-64 w-64 bg-brand/25 blur-3xl pulse-soft" />
-        <div className="hero-orb right-[4%] top-20 h-72 w-72 bg-brand2/22 blur-3xl pulse-soft" />
-        <div className="hero-orb left-[40%] top-[55%] h-56 w-56 bg-ok/18 blur-3xl" />
+        <div className="hero-orb left-[8%] top-8 h-56 w-56 bg-brand/18 blur-3xl pulse-soft" />
+        <div className="hero-orb right-[6%] top-12 h-60 w-60 bg-brand2/14 blur-3xl" />
       </div>
 
-      <div className="mx-auto grid max-w-6xl items-center gap-12 px-6 lg:grid-cols-[1.05fr_0.95fr]">
+      <div className="mx-auto grid max-w-6xl items-center gap-10 px-6 lg:grid-cols-[1.05fr_0.95fr]">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-borderSubtle/60 bg-panel/65 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-muted shadow-inset">
             <span className="h-1.5 w-1.5 rounded-full bg-brand" />
             {eyebrow}
           </div>
-          <h1 className="mt-6 text-4xl font-semibold leading-[1.06] tracking-[-0.02em] text-text sm:text-5xl lg:text-6xl font-[var(--font-marketing)]">
+          <h1 className="mt-5 font-[var(--font-marketing)] text-4xl font-semibold leading-[1.06] tracking-[-0.02em] text-text sm:text-5xl lg:text-6xl">
             <span className="marketing-title-streak">{title}</span>
           </h1>
-          <p className="mt-5 max-w-xl text-base text-muted sm:text-lg">{subtitle}</p>
-          <div className="mt-8 flex flex-wrap gap-3">
+          <p className="mt-4 max-w-xl text-base text-muted sm:text-lg">{subtitle}</p>
+          <div className="mt-7 flex flex-wrap gap-3">
             <Button asChild variant="accent" size="lg">
               <Link href={primaryCta.href}>{primaryCta.label}</Link>
             </Button>
-            <Button asChild variant="outline" size="lg" className="border-borderStrong/70 bg-panel/55 hover:bg-panel/70">
+            <Button asChild variant="outline" size="lg" className="hidden border-borderStrong/70 bg-panel/70 hover:bg-panel sm:inline-flex">
               <Link href={secondaryCta.href}>{secondaryCta.label}</Link>
             </Button>
           </div>
-          <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          <div className="mt-8 hidden gap-4 sm:grid sm:grid-cols-3">
             {stats.map((stat) => (
               <div
                 key={stat.label}
@@ -118,7 +117,7 @@ export function MarketingHero({
           </div>
         </div>
 
-        <div className="relative">
+        <div className="relative mt-2 lg:mt-0">
           <div className="absolute inset-0 -z-10 rounded-[28px] bg-surface1/80 shadow-elev3" />
           <div className="grid gap-5 rounded-[28px] border border-borderSubtle/70 bg-surface1/80 p-6 shadow-elev2">
             <div className="flex items-center justify-between">

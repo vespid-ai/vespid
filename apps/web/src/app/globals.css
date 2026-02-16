@@ -2,14 +2,14 @@
 
 :root {
   /* RGB triples so Tailwind can do rgb(var(--token) / alpha). */
-  --surface-0: 243 247 252;
+  --surface-0: 246 248 251;
   --surface-1: 255 255 255;
-  --surface-2: 248 252 255;
-  --surface-3: 240 246 252;
+  --surface-2: 250 252 255;
+  --surface-3: 244 247 252;
   --surface-glass: 255 255 255;
 
-  --border-subtle: 217 226 238;
-  --border-strong: 191 203 221;
+  --border-subtle: 222 229 240;
+  --border-strong: 198 209 226;
 
   --text: 15 23 42;
   --muted: 71 85 105;
@@ -25,9 +25,9 @@
   --ok: 16 185 129;
 
   /* Shadow-first elevation ladder. */
-  --shadow-1: 0 1px 0 rgb(15 23 42 / 0.04), 0 10px 26px rgb(2 6 23 / 0.06);
-  --shadow-2: 0 1px 0 rgb(15 23 42 / 0.05), 0 18px 44px rgb(2 6 23 / 0.10);
-  --shadow-3: 0 2px 0 rgb(15 23 42 / 0.05), 0 30px 78px rgb(2 6 23 / 0.14);
+  --shadow-1: 0 1px 0 rgb(15 23 42 / 0.03), 0 8px 20px rgb(2 6 23 / 0.05);
+  --shadow-2: 0 1px 0 rgb(15 23 42 / 0.04), 0 14px 34px rgb(2 6 23 / 0.08);
+  --shadow-3: 0 2px 0 rgb(15 23 42 / 0.05), 0 22px 58px rgb(2 6 23 / 0.12);
   --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.70);
 
   --radius-sm: 10px;
@@ -59,14 +59,14 @@ body {
 
 /* Dark theme (applied via next-themes: html.dark). */
 .dark {
-  --surface-0: 7 9 14;
-  --surface-1: 11 15 25;
-  --surface-2: 16 22 36;
-  --surface-3: 22 30 48;
-  --surface-glass: 11 15 25;
+  --surface-0: 10 12 18;
+  --surface-1: 14 18 28;
+  --surface-2: 18 24 38;
+  --surface-3: 24 32 50;
+  --surface-glass: 14 18 28;
 
-  --border-subtle: 38 50 68;
-  --border-strong: 65 81 106;
+  --border-subtle: 44 56 76;
+  --border-strong: 70 88 114;
 
   --text: 226 232 240;
   --muted: 148 163 184;
@@ -80,36 +80,25 @@ body {
   --warn: 251 191 36;
   --ok: 52 211 153;
 
-  --shadow-1: 0 1px 0 rgb(0 0 0 / 0.25), 0 14px 34px rgb(0 0 0 / 0.36);
-  --shadow-2: 0 1px 0 rgb(0 0 0 / 0.30), 0 24px 58px rgb(0 0 0 / 0.44);
-  --shadow-3: 0 2px 0 rgb(0 0 0 / 0.35), 0 34px 92px rgb(0 0 0 / 0.50);
+  --shadow-1: 0 1px 0 rgb(0 0 0 / 0.20), 0 10px 26px rgb(0 0 0 / 0.30);
+  --shadow-2: 0 1px 0 rgb(0 0 0 / 0.24), 0 18px 44px rgb(0 0 0 / 0.38);
+  --shadow-3: 0 2px 0 rgb(0 0 0 / 0.28), 0 26px 70px rgb(0 0 0 / 0.46);
   --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.06);
 }
 
 /* Subtle grain without external assets. */
 .bg-grain {
-  /*
-    Keep this as the single source of truth for the app background.
-    If we set `background-image` here it overrides `body { background: ... }`.
-  */
   background:
-    /* organic noise (very subtle) */
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='.12'/%3E%3C/svg%3E"),
-    /* micro dots (technical texture) */
-    radial-gradient(circle at 1px 1px, rgb(var(--text) / 0.040) 1px, transparent 0),
-    /* premium mesh */
-    radial-gradient(1200px 720px at 88% -12%, rgb(var(--brand) / 0.20), transparent 60%),
-    radial-gradient(980px 760px at 12% 0%, rgb(var(--brand-2) / 0.18), transparent 58%),
-    radial-gradient(1200px 900px at 54% 115%, rgb(var(--ok) / 0.12), transparent 62%),
-    radial-gradient(920px 760px at -6% 98%, rgb(var(--warn) / 0.09), transparent 60%),
-    /* faint warmth to avoid monotony */
-    radial-gradient(860px 640px at 106% 86%, rgb(var(--danger) / 0.04), transparent 62%),
+    radial-gradient(circle at 1px 1px, rgb(var(--text) / 0.022) 1px, transparent 0),
+    radial-gradient(980px 640px at 86% -12%, rgb(var(--brand) / 0.12), transparent 60%),
+    radial-gradient(820px 620px at 8% -8%, rgb(var(--brand-2) / 0.1), transparent 58%),
+    radial-gradient(980px 700px at 54% 115%, rgb(var(--ok) / 0.07), transparent 62%),
     linear-gradient(rgb(var(--surface-0)), rgb(var(--surface-0)));
 
   background-attachment: fixed;
-  background-repeat: repeat, repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat;
-  background-size: 240px 240px, 16px 16px, auto, auto, auto, auto, auto;
-  background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0, 0 0;
+  background-repeat: repeat, no-repeat, no-repeat, no-repeat, no-repeat;
+  background-size: 18px 18px, auto, auto, auto, auto;
+  background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
 }
 
 /* Better default text rendering in dense dashboards. */
@@ -137,16 +126,17 @@ body {
 @layer utilities {
   .grid-lines {
     background-image:
-      linear-gradient(to right, rgb(var(--border-subtle) / 0.35) 1px, transparent 1px),
-      linear-gradient(to bottom, rgb(var(--border-subtle) / 0.35) 1px, transparent 1px);
-    background-size: 140px 140px;
-    mask-image: radial-gradient(circle at 50% 20%, black 0%, transparent 70%);
+      linear-gradient(to right, rgb(var(--border-subtle) / 0.24) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--border-subtle) / 0.24) 1px, transparent 1px);
+    background-size: 180px 180px;
+    mask-image: radial-gradient(circle at 50% 16%, black 0%, transparent 76%);
   }
 
   .noise-overlay {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
     background-size: 240px 240px;
     mix-blend-mode: soft-light;
+    opacity: 0.22;
   }
 
   .hero-orb {
@@ -177,7 +167,7 @@ body {
     background-size: 920px 420px;
     background-repeat: repeat;
     mix-blend-mode: multiply;
-    opacity: 0.55;
+    opacity: 0.22;
     mask-image: radial-gradient(900px 520px at 50% 10%, black 0%, transparent 68%);
   }
 }

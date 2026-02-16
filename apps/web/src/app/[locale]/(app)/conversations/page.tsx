@@ -1,6 +1,6 @@
 "use client";
 
-import { Send, Sparkles } from "lucide-react";
+import { Send, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -22,14 +22,16 @@ import { useCreateSession, useSessions } from "../../../../lib/hooks/use-session
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { providersForContext, type LlmProviderId } from "../../../../components/app/llm/model-catalog";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
-import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { isUnauthorizedError } from "../../../../lib/api";
+import { QuickCreatePanel } from "../../../../components/app/quick-create-panel";
+import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-sheet";
 
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
 
 type EngineId = "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
+type SessionCreateMode = "quick" | "advanced";
 
 function formatSessionTime(value: string | null | undefined): string {
   if (!value) {
@@ -84,6 +86,8 @@ export default function ConversationsPage() {
   const [allowShellRun, setAllowShellRun] = useState(false);
   const [allowConnectorAction, setAllowConnectorAction] = useState(true);
   const [extraToolsRaw, setExtraToolsRaw] = useState<string>("");
+  const [createMode, setCreateMode] = useState<SessionCreateMode>("quick");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5.3-codex", secretId: null });
   const llmInitRef = useRef(false);
@@ -142,6 +146,8 @@ export default function ConversationsPage() {
     setAllowShellRun(false);
     setAllowConnectorAction(true);
     setExtraToolsRaw("");
+    setCreateMode("quick");
+    setAdvancedOpen(false);
   }
 
   async function startConversation() {
@@ -196,6 +202,11 @@ export default function ConversationsPage() {
       className: isSelected ? "border-borderStrong/80 bg-panel/55" : "text-muted hover:bg-panel/45 hover:text-text",
       "aria-pressed": isSelected,
     };
+  }
+
+  function openAdvancedSettings() {
+    setCreateMode("advanced");
+    setAdvancedOpen(true);
   }
 
   if (!authSession.isLoading && !authSession.data?.session) {
@@ -307,15 +318,13 @@ export default function ConversationsPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-accent" />
-              <CardTitle>{t("sessions.create.title")}</CardTitle>
-            </div>
-            <CardDescription>{t("sessions.create.subtitle")}</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
+        <div className="grid gap-4">
+          <QuickCreatePanel
+            title={t("sessions.create.title")}
+            description={t("sessions.create.quickHint")}
+            icon={<Sparkles className="h-4 w-4 text-accent" />}
+            actions={<div className="text-xs text-muted">{createMode === "quick" ? t("sessions.create.quickMode") : t("sessions.create.advancedMode")}</div>}
+          >
             <div className="grid gap-2">
               <Label>{t("sessions.fields.model")}</Label>
               <LlmConfigField
@@ -340,8 +349,9 @@ export default function ConversationsPage() {
             </div>
 
             <div className="grid gap-2">
-              <Label>{t("sessions.chat.message")}</Label>
+              <Label htmlFor="session-message">{t("sessions.chat.message")}</Label>
               <Textarea
+                id="session-message"
                 rows={4}
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
@@ -354,7 +364,7 @@ export default function ConversationsPage() {
                   }
                 }}
               />
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="accent"
                   disabled={!canOperate || createSession.isPending || message.trim().length === 0 || llmSecretMissing}
@@ -363,27 +373,43 @@ export default function ConversationsPage() {
                   <Send className="mr-2 h-4 w-4" />
                   {t("sessions.chat.send")}
                 </Button>
-                <Button variant="outline" onClick={resetDraft} disabled={createSession.isPending}>
+                <Button variant="outline" onClick={openAdvancedSettings} disabled={!canOperate}>
+                  <SlidersHorizontal className="h-4 w-4" />
+                  {t("sessions.create.configureAdvanced")}
+                </Button>
+                <Button variant="ghost" onClick={resetDraft} disabled={createSession.isPending}>
                   {t("sessions.create.title")}
                 </Button>
               </div>
               <div className="text-xs text-muted">{t("sessions.chat.sendHint")}</div>
             </div>
+          </QuickCreatePanel>
 
-            <AdvancedSection
-              id="conversations-create-advanced"
-              title={t("advanced.title")}
-              description={t("advanced.description")}
-              labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
-            >
+          <AdvancedConfigSheet
+            open={advancedOpen}
+            onOpenChange={(next) => {
+              setAdvancedOpen(next);
+              setCreateMode(next ? "advanced" : "quick");
+            }}
+            title={t("sessions.create.advancedTitle")}
+            description={t("sessions.create.advancedDescription")}
+            footer={
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button variant="outline" onClick={() => setAdvancedOpen(false)}>
+                  {t("common.close")}
+                </Button>
+              </div>
+            }
+          >
+            <div className="grid gap-4">
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="grid gap-2">
-                  <Label>{t("sessions.fields.title")}</Label>
-                  <Input value={title} onChange={(e) => setTitle(e.target.value)} disabled={!canOperate} />
+                  <Label htmlFor="session-title">{t("sessions.fields.title")}</Label>
+                  <Input id="session-title" value={title} onChange={(e) => setTitle(e.target.value)} disabled={!canOperate} />
                 </div>
 
                 <div className="grid gap-2">
-                  <Label>{t("sessions.fields.engine")}</Label>
+                  <Label htmlFor="session-engine">{t("sessions.fields.engine")}</Label>
                   <Select
                     value={engineId}
                     onValueChange={(next) => {
@@ -393,7 +419,7 @@ export default function ConversationsPage() {
                     }}
                     disabled={!canOperate}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="session-engine">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -407,21 +433,28 @@ export default function ConversationsPage() {
               </div>
 
               <div className="grid gap-2">
-                <Label>{t("sessions.fields.instructions")}</Label>
-                <Textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={3} disabled={!canOperate} />
+                <Label htmlFor="session-instructions">{t("sessions.fields.instructions")}</Label>
+                <Textarea
+                  id="session-instructions"
+                  value={instructions}
+                  onChange={(e) => setInstructions(e.target.value)}
+                  rows={3}
+                  disabled={!canOperate}
+                />
               </div>
 
               <div className="grid gap-2">
-                <Label>{t("sessions.fields.system")}</Label>
-                <Textarea value={system} onChange={(e) => setSystem(e.target.value)} rows={3} disabled={!canOperate} />
+                <Label htmlFor="session-system">{t("sessions.fields.system")}</Label>
+                <Textarea id="session-system" value={system} onChange={(e) => setSystem(e.target.value)} rows={3} disabled={!canOperate} />
               </div>
 
               <Separator />
 
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="grid gap-2">
-                  <Label>{t("sessions.fields.toolset")}</Label>
+                  <Label htmlFor="session-toolset">{t("sessions.fields.toolset")}</Label>
                   <Input
+                    id="session-toolset"
                     value={toolsetId}
                     onChange={(e) => setToolsetId(e.target.value)}
                     placeholder={t("sessions.toolsetPlaceholder")}
@@ -433,8 +466,9 @@ export default function ConversationsPage() {
                 </div>
 
                 <div className="grid gap-2">
-                  <Label>{t("sessions.fields.selectorTag")}</Label>
+                  <Label htmlFor="session-selector-tag">{t("sessions.fields.selectorTag")}</Label>
                   <Input
+                    id="session-selector-tag"
                     value={selectorTag}
                     onChange={(e) => setSelectorTag(e.target.value)}
                     placeholder={t("sessions.selectorTagPlaceholder")}
@@ -445,7 +479,7 @@ export default function ConversationsPage() {
               </div>
 
               <div className="grid gap-2">
-                <Label>{t("sessions.fields.tools")}</Label>
+                <Label htmlFor="session-extra-tools">{t("sessions.fields.tools")}</Label>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
@@ -465,6 +499,7 @@ export default function ConversationsPage() {
                   </Button>
                 </div>
                 <Input
+                  id="session-extra-tools"
                   value={extraToolsRaw}
                   onChange={(e) => setExtraToolsRaw(e.target.value)}
                   placeholder={t("sessions.extraToolsPlaceholder")}
@@ -490,9 +525,9 @@ export default function ConversationsPage() {
                   </Button>
                 </div>
               ) : null}
-            </AdvancedSection>
-          </CardContent>
-        </Card>
+            </div>
+          </AdvancedConfigSheet>
+        </div>
       </div>
     </div>
   );
