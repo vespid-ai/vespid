@@ -9,9 +9,12 @@
   "exports": {
     ".": "./src/index.ts",
     "./auth": "./src/auth.ts",
+    "./secrets": "./src/secrets.ts",
+    "./enterprise-provider": "./src/enterprise-provider.ts",
     "./types": "./src/types.ts",
     "./errors": "./src/errors.ts",
-    "./edition": "./src/edition.ts"
+    "./edition": "./src/edition.ts",
+    "./llm/provider-registry": "./src/llm/provider-registry.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

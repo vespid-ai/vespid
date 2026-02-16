@@ -81,7 +81,7 @@ import {
   createOrganizationBillingAccount as dbCreateOrganizationBillingAccount,
 } from "@vespid/db";
 import crypto from "node:crypto";
-import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
+import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
 import type {
   AgentSessionEventRecord,
   AgentSessionRecord,

@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { useSecrets } from "../../../lib/hooks/use-secrets";
 import type { LlmProviderId } from "./model-catalog";
 
+const NONE_SECRET_VALUE = "__none__";
+
 function llmConnectorIdForProvider(providerId: LlmProviderId): string {
   const connectorId = getDefaultConnectorIdForProvider(providerId);
   if (!connectorId) return "";
@@ -43,7 +45,7 @@ export function LlmSecretField(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.orgId, props.disabled, defaultSecret?.id]);
 
-  const selected = props.value ?? "";
+  const selected = props.value ?? NONE_SECRET_VALUE;
   const canOperate = Boolean(props.orgId) && !props.disabled;
   const hasAny = list.length > 0;
   const providerNeedsNoSecret = connectorId.length === 0;
@@ -53,14 +55,14 @@ export function LlmSecretField(props: {
       <div className="grid gap-1.5">
         <Select
           value={selected}
-          onValueChange={(v) => props.onChange(v ? v : null)}
+          onValueChange={(v) => props.onChange(v === NONE_SECRET_VALUE ? null : v)}
           disabled={!canOperate || providerNeedsNoSecret || (!hasAny && !props.required)}
         >
           <SelectTrigger>
             <SelectValue placeholder={providerNeedsNoSecret ? "No secret required" : hasAny ? "Select secret" : "Not connected"} />
           </SelectTrigger>
           <SelectContent>
-            {!props.required ? <SelectItem value="">None</SelectItem> : null}
+            {!props.required ? <SelectItem value={NONE_SECRET_VALUE}>None</SelectItem> : null}
             {list.map((s) => (
               <SelectItem key={s.id} value={s.id}>
                 {s.name} ({s.id.slice(0, 8)}…)

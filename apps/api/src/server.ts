@@ -10,13 +10,8 @@ import {
   conflict,
   forbidden,
   notFound,
-  signAuthToken,
   unauthorized,
-  verifyAuthToken,
   type EnterpriseProvider,
-  loadEnterpriseProvider,
-  resolveEditionCapabilities,
-  resolveEnterpriseConnectors,
   type AppError as AppErrorType,
   validateAgentSkillBundles,
   validateMcpPlaceholderPolicy,
@@ -38,6 +33,12 @@ import {
   type LlmProviderId,
   type LlmUsageContext,
 } from "@vespid/shared";
+import {
+  loadEnterpriseProvider,
+  resolveEditionCapabilities,
+  resolveEnterpriseConnectors,
+} from "@vespid/shared/enterprise-provider";
+import { signAuthToken, verifyAuthToken } from "@vespid/shared/auth";
 import { createConnectorCatalog } from "@vespid/connectors";
 import { generateCodeVerifier, generateState } from "arctic";
 import { z } from "zod";

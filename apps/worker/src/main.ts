@@ -20,16 +20,14 @@ import {
   withTenantContext,
 } from "@vespid/db";
 import {
-  decryptSecret,
-  loadEnterpriseProvider,
-  parseKekFromEnv,
   REMOTE_EXEC_ERROR,
-  resolveWorkflowNodeExecutors,
   type LlmProviderId,
   type EnterpriseProvider,
   type WorkflowNodeExecutor,
   type WorkflowRunJobPayload,
 } from "@vespid/shared";
+import { loadEnterpriseProvider, resolveWorkflowNodeExecutors } from "@vespid/shared/enterprise-provider";
+import { decryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
 import {
   workflowDslAnySchema,
   validateV3GraphConstraints,

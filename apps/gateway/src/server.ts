@@ -31,7 +31,8 @@ import type {
   GatewayDispatchRequest,
   GatewayDispatchResponse,
 } from "@vespid/shared";
-import { REMOTE_EXEC_ERROR, verifyAuthToken } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import { verifyAuthToken } from "@vespid/shared/auth";
 import type { WorkflowContinuationJobPayload } from "@vespid/shared";
 import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "./results-store.js";
 
