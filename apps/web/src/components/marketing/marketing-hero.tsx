@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "../ui/button";
 
@@ -36,12 +36,14 @@ export function MarketingHero({
   panel,
 }: MarketingHeroProps) {
   const heroRef = useRef<HTMLElement | null>(null);
-  const [isInView, setIsInView] = useState(true);
+  const [isInView, setIsInView] = useState(false);
+  const [isClientReady, setIsClientReady] = useState(false);
   const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(true);
 
-  const prefersReducedMotion = useMemo(() => {
-    if (typeof window === "undefined") return true;
-    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? true;
+  useEffect(() => {
+    setIsClientReady(true);
+    setPrefersReducedMotion(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? true);
   }, []);
 
   useEffect(() => {
@@ -134,7 +136,7 @@ export function MarketingHero({
                 <div
                   key={step}
                   className={`flex items-center gap-4 rounded-2xl border bg-panel/70 px-4 py-3 text-sm text-muted shadow-inset transition will-change-transform ${
-                    index === activeStepIndex && isInView && !prefersReducedMotion
+                    index === activeStepIndex && isClientReady && isInView && !prefersReducedMotion
                       ? "border-brand/35 bg-surface2/70 shadow-elev2"
                       : "border-borderSubtle/60 hover:-translate-y-0.5 hover:border-borderStrong/70"
                   }`}

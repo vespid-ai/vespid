@@ -160,14 +160,16 @@ body {
   }
 
   .marketing-title-streak {
+    color: rgb(var(--text));
     background:
-      linear-gradient(90deg, rgb(var(--text) / 1), rgb(var(--text) / 1)),
       radial-gradient(120px 18px at 24px 100%, rgb(var(--brand) / 0.22), transparent 70%),
       radial-gradient(140px 20px at 190px 100%, rgb(var(--brand-2) / 0.20), transparent 72%);
     background-repeat: no-repeat;
-    background-size: 100% 100%, 340px 28px, 420px 30px;
-    background-position: 0 0, 0 100%, 30% 100%;
+    background-size: 340px 28px, 420px 30px;
+    background-position: 0 100%, 30% 100%;
     padding-bottom: 10px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
   }
 
   .marketing-wing-veil {
