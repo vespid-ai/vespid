@@ -134,6 +134,19 @@ export default function SessionsPage() {
 
   const selectedToolset = toolsets.find((ts: any) => ts.id === toolsetId) ?? null;
 
+  // UX rule: a bordered pill indicates the selected option.
+  function choiceButtonProps(isSelected: boolean): {
+    variant: "outline" | "ghost";
+    className: string;
+    "aria-pressed": boolean;
+  } {
+    return {
+      variant: isSelected ? "outline" : "ghost",
+      className: isSelected ? "border-borderStrong/80 bg-panel/55" : "text-muted hover:bg-panel/45 hover:text-text",
+      "aria-pressed": isSelected,
+    };
+  }
+
   return (
     <div className="grid gap-4">
       <div>
@@ -158,7 +171,7 @@ export default function SessionsPage() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  variant={engineId === "gateway.loop.v2" ? "accent" : "outline"}
+                  {...choiceButtonProps(engineId === "gateway.loop.v2")}
                   onClick={() => setEngineId("gateway.loop.v2")}
                   disabled={!canOperate}
                 >
@@ -166,7 +179,7 @@ export default function SessionsPage() {
                 </Button>
                 <Button
                   size="sm"
-                  variant={engineId === "gateway.codex.v2" ? "accent" : "outline"}
+                  {...choiceButtonProps(engineId === "gateway.codex.v2")}
                   onClick={() => setEngineId("gateway.codex.v2")}
                   disabled={!canOperate}
                 >
@@ -174,7 +187,7 @@ export default function SessionsPage() {
                 </Button>
                 <Button
                   size="sm"
-                  variant={engineId === "gateway.claude.v2" ? "accent" : "outline"}
+                  {...choiceButtonProps(engineId === "gateway.claude.v2")}
                   onClick={() => setEngineId("gateway.claude.v2")}
                   disabled={!canOperate}
                 >
@@ -253,7 +266,7 @@ export default function SessionsPage() {
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
-                variant={allowConnectorAction ? "accent" : "outline"}
+                {...choiceButtonProps(allowConnectorAction)}
                 onClick={() => setAllowConnectorAction((v) => !v)}
                 disabled={!canOperate}
               >
@@ -261,7 +274,7 @@ export default function SessionsPage() {
               </Button>
               <Button
                 size="sm"
-                variant={allowShellRun ? "accent" : "outline"}
+                {...choiceButtonProps(allowShellRun)}
                 onClick={() => setAllowShellRun((v) => !v)}
                 disabled={!canOperate}
               >
