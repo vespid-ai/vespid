@@ -77,6 +77,30 @@ Expected response:
 
 - `202` with `{ ok: true, accepted: boolean, reason, sessionRouted, workflowsTriggered }`
 
+### Full channel matrix smoke
+
+Use the built-in smoke script to validate all 21 channels with:
+
+- one channel-specific happy-path ingress payload (expects workflow run +1)
+- one malformed payload (expects `normalize_failed` and no new workflow run)
+
+```bash
+CHANNEL_SMOKE_API_BASE_URL=http://localhost:3001 \
+CHANNEL_SMOKE_GATEWAY_BASE_URL=http://localhost:3002 \
+pnpm smoke:channels
+```
+
+Useful options:
+
+- Reuse existing session/org:
+  - `CHANNEL_SMOKE_TOKEN=<bearer-token>`
+  - `CHANNEL_SMOKE_ORG_ID=<org-id>`
+- Run subset only:
+
+```bash
+pnpm smoke:channels -- --channels=telegram,slack,msteams
+```
+
 ### Runtime event sources
 
 - `channel_events`

@@ -15,6 +15,7 @@
     "migrate:check": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db migrate:check",
     "db:rollback": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db rollback",
     "sync:openclaw-model-catalog": "pnpm exec tsx scripts/sync-openclaw-model-catalog.ts",
+    "smoke:channels": "pnpm exec tsx scripts/channel-smoke-matrix.ts",
     "check:boundary": "bash scripts/check-no-enterprise-imports.sh",
     "check:licenses": "node scripts/check-license-spdx.mjs",
     "check:mirror": "node scripts/check-oss-mirror-dry-run.mjs",
