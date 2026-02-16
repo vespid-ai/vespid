@@ -184,7 +184,7 @@ function asNumber(value: unknown, fallback: number): number {
 function readOrgDefaultAgentLlm(settings: any): LlmConfigValue {
   const d = settings?.llm?.defaults?.workflowAgentRun;
   const providerId = typeof d?.provider === "string" ? d.provider : "openai";
-  const modelId = typeof d?.model === "string" ? d.model : "gpt-4.1-mini";
+  const modelId = typeof d?.model === "string" ? d.model : "gpt-5.3-codex";
   const secretId = typeof d?.secretId === "string" ? d.secretId : null;
   return { providerId: providerId as any, modelId, secretId };
 }
@@ -409,8 +409,8 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("form");
 
   const bulkInitRef = useRef(false);
-  const [bulkAgentLlm, setBulkAgentLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-4.1-mini", secretId: null });
-  const [bulkTeammateModel, setBulkTeammateModel] = useState<string>("gpt-4.1-mini");
+  const [bulkAgentLlm, setBulkAgentLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5.3-codex", secretId: null });
+  const [bulkTeammateModel, setBulkTeammateModel] = useState<string>("gpt-5.3-codex");
 
   const issueNodeIds = useMemo(
     () => new Set(issues.map((i) => i.nodeId).filter((v): v is string => typeof v === "string" && v.length > 0)),
@@ -783,7 +783,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
 
     const llmValue: LlmConfigValue = {
       providerId: (typeof llm["provider"] === "string" ? llm["provider"] : "openai") as any,
-      modelId: asString(llm["model"], "gpt-4.1-mini"),
+      modelId: asString(llm["model"], "gpt-5.3-codex"),
       secretId: typeof llmAuth["secretId"] === "string" ? (llmAuth["secretId"] as string) : null,
     };
 
@@ -2289,7 +2289,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                             const auth = asObject((llm as any)["auth"]) ?? {};
                             const nextBulk: LlmConfigValue = {
                               providerId: (typeof llm["provider"] === "string" ? llm["provider"] : "openai") as any,
-                              modelId: asString(llm["model"], "gpt-4.1-mini"),
+                              modelId: asString(llm["model"], "gpt-5.3-codex"),
                               secretId: typeof auth["secretId"] === "string" ? (auth["secretId"] as string) : null,
                             };
                             setBulkAgentLlm(nextBulk);

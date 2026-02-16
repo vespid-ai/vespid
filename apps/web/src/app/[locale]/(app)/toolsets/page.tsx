@@ -786,7 +786,7 @@ export default function ToolsetsPage() {
     setAiStep("start");
     setAiIntent("");
     setAiProvider("openai");
-    setAiModel("gpt-4.1-mini");
+    setAiModel("gpt-5.3-codex");
     setAiSecretId("");
     setAiSessionId(null);
     setAiAssistant("");
@@ -816,7 +816,7 @@ export default function ToolsetsPage() {
       if (typeof d.model === "string" && d.model.trim().length > 0) {
         setAiModel(d.model);
       } else if (typeof d.provider === "string") {
-        setAiModel(getDefaultModelForProvider(d.provider) ?? "gpt-4.1-mini");
+        setAiModel(getDefaultModelForProvider(d.provider) ?? "gpt-5.3-codex");
       }
       if (typeof d.secretId === "string") {
         setAiSecretId(d.secretId);

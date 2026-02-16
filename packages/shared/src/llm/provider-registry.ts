@@ -98,7 +98,7 @@ const PROVIDERS: Record<LlmProviderId, LlmProviderMeta> = {
     apiKind: "openai-compatible",
     authMode: "api-key",
     oauthFlow: "none",
-    defaultModelId: "gpt-4.1-mini",
+    defaultModelId: "gpt-5.3-codex",
     defaultConnectorId: "llm.openai",
     aliases: [],
     contexts: { session: true, workflowAgentRun: true, toolsetBuilder: true },

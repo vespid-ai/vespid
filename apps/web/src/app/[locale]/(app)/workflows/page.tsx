@@ -70,7 +70,7 @@ function defaultTeammate(index: number): TeammateForm {
     displayName: "",
     instructions: "Help the lead agent by completing the delegated task.",
     system: "",
-    model: "gpt-4.1-mini",
+    model: "gpt-5.3-codex",
     toolGithubIssueCreate: false,
     outputMode: "text",
     jsonSchema: "",
@@ -86,7 +86,7 @@ function defaultAgentNode(index: number, defaults?: Partial<LlmConfigValue>): Ag
     llmUseDefault: true,
     llmOverride: {
       providerId: (defaults?.providerId ?? "openai") as any,
-      modelId: defaults?.modelId ?? "gpt-4.1-mini",
+      modelId: defaults?.modelId ?? "gpt-5.3-codex",
       secretId: defaults?.secretId ?? null,
     },
     toolGithubIssueCreate: false,
@@ -331,7 +331,7 @@ export default function WorkflowsPage() {
   const [workflowName, setWorkflowName] = useState("Issue triage");
   const [defaultAgentLlm, setDefaultAgentLlm] = useState<LlmConfigValue>({
     providerId: "openai",
-    modelId: "gpt-4.1-mini",
+    modelId: "gpt-5.3-codex",
     secretId: null,
   });
   const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);

@@ -62,12 +62,12 @@ function SecretsPageContent() {
 
   const [defaultSessionLlm, setDefaultSessionLlm] = useState<LlmConfigValue>({
     providerId: "openai",
-    modelId: "gpt-4.1-mini",
+    modelId: "gpt-5.3-codex",
     secretId: null,
   });
   const [defaultWorkflowAgentRunLlm, setDefaultWorkflowAgentRunLlm] = useState<LlmConfigValue>({
     providerId: "openai",
-    modelId: "gpt-4.1-mini",
+    modelId: "gpt-5.3-codex",
     secretId: null,
   });
   const [defaultToolsetBuilderLlm, setDefaultToolsetBuilderLlm] = useState<LlmConfigValue>({

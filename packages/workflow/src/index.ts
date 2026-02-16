@@ -98,7 +98,7 @@ const agentRunNodeSchema = z.object({
     toolsetId: z.string().uuid().optional(),
     llm: z.object({
       provider: llmProviderSchema.default(defaultAgentLlmProvider),
-      model: z.string().min(1).max(120).default("gpt-4.1-mini"),
+      model: z.string().min(1).max(120).default("gpt-5.3-codex"),
       auth: z
         .object({
           secretId: z.string().uuid().optional(),

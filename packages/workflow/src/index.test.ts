@@ -29,7 +29,7 @@ describe("workflow dsl", () => {
           type: "agent.run",
           config: {
             toolsetId: "00000000-0000-0000-0000-000000000000",
-            llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
             execution: { mode: "gateway" },
             prompt: { instructions: "Say hello." },
             tools: {
@@ -93,7 +93,7 @@ describe("workflow dsl", () => {
           id: "n1",
           type: "agent.run",
           config: {
-            llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
             execution: { mode: "gateway" },
             engine: { id: "gateway.codex.v2" },
             prompt: { instructions: "Say hello." },
@@ -163,7 +163,7 @@ describe("workflow dsl", () => {
           id: "n1",
           type: "agent.run",
           config: {
-            llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
             prompt: { instructions: "Call no tools." },
             tools: { allow: [], execution: "cloud" },
             limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
