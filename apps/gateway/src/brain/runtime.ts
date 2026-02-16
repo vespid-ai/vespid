@@ -19,8 +19,6 @@ import {
 import { runAgentLoop } from "@vespid/agent-runtime";
 import {
   REMOTE_EXEC_ERROR,
-  decryptSecret,
-  parseKekFromEnv,
   type ExecutorSelectorV1,
   type GatewayBrainSessionEventV2,
   type GatewayDispatchResponse,
@@ -28,6 +26,7 @@ import {
   type GatewayToolKind,
   type WorkflowContinuationJobPayload,
 } from "@vespid/shared";
+import { decryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
 import type { LlmInvokeInput, LlmInvokeResult } from "@vespid/agent-runtime";
 import { replyKey, sessionBrainKey, sessionEdgesKey, streamToBrain, streamToEdge } from "../bus/keys.js";
 import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";

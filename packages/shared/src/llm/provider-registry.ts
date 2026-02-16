@@ -1,4 +1,6 @@
-import snapshot from "./model-catalog.snapshot.json" with { type: "json" };
+// Webpack in apps/web currently fails at runtime with import attributes for this snapshot.
+// @ts-ignore TS1543: NodeNext expects a JSON import attribute, but plain import is required here.
+import snapshot from "./model-catalog.snapshot.json";
 
 export const LLM_PROVIDER_IDS = [
   "openai",

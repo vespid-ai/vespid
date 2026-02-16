@@ -338,7 +338,7 @@ describe("workflow worker", () => {
   it("loads enterprise provider module dynamically and applies executor override", async () => {
     const fixturePath = path.resolve(process.cwd(), "../../tests/fixtures/enterprise-provider.mjs");
     const fixtureUrl = pathToFileURL(fixturePath).toString();
-    const { loadEnterpriseProvider } = await import("@vespid/shared");
+    const { loadEnterpriseProvider } = await import("@vespid/shared/enterprise-provider");
 
     const provider = await loadEnterpriseProvider({ modulePath: fixtureUrl });
 

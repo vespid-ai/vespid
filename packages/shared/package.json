@@ -9,6 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./auth": "./src/auth.ts",
+    "./secrets": "./src/secrets.ts",
+    "./enterprise-provider": "./src/enterprise-provider.ts",
     "./types": "./src/types.ts",
     "./errors": "./src/errors.ts",
     "./edition": "./src/edition.ts",

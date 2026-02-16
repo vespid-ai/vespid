@@ -29,7 +29,8 @@ import type {
   GatewayToolEventV2,
   GatewayToolResultV2,
 } from "@vespid/shared";
-import { REMOTE_EXEC_ERROR, verifyAuthToken } from "@vespid/shared";
+import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import { verifyAuthToken } from "@vespid/shared/auth";
 import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "../results-store.js";
 import { executorRouteKey, replyKey, sessionEdgesKey, streamToBrain, streamToEdge } from "../bus/keys.js";
 import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";

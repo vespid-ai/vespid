@@ -6,6 +6,8 @@ import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { useSecrets } from "../../../lib/hooks/use-secrets";
 
+const NONE_SECRET_VALUE = "__none__";
+
 export function SecretSelectField(props: {
   orgId: string | null;
   connectorId: string;
@@ -35,18 +37,18 @@ export function SecretSelectField(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.orgId, props.disabled, defaultSecret?.id]);
 
-  const selected = props.value ?? "";
+  const selected = props.value ?? NONE_SECRET_VALUE;
   const canOperate = Boolean(props.orgId) && !props.disabled;
   const hasAny = list.length > 0;
 
   return (
     <div className="grid gap-2">
-      <Select value={selected} onValueChange={(v) => props.onChange(v ? v : null)} disabled={!canOperate}>
+      <Select value={selected} onValueChange={(v) => props.onChange(v === NONE_SECRET_VALUE ? null : v)} disabled={!canOperate}>
         <SelectTrigger>
           <SelectValue placeholder={hasAny ? "Select secret" : "Not connected"} />
         </SelectTrigger>
         <SelectContent>
-          {!props.required ? <SelectItem value="">None</SelectItem> : null}
+          {!props.required ? <SelectItem value={NONE_SECRET_VALUE}>None</SelectItem> : null}
           {list.map((s) => (
             <SelectItem key={s.id} value={s.id}>
               {s.name} ({s.id.slice(0, 8)}…)
@@ -68,4 +70,3 @@ export function SecretSelectField(props: {
     </div>
   );
 }
-
