@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../components
 import { Textarea } from "../../../../components/ui/textarea";
 import { CodeBlock } from "../../../../components/ui/code-block";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
+import { LlmConfigField } from "../../../../components/app/llm/llm-config-field";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useSecrets } from "../../../../lib/hooks/use-secrets";
@@ -762,6 +763,7 @@ export default function ToolsetsPage() {
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
 
   function resetAiBuilder() {
+    aiDefaultsInitRef.current = false;
     setAiStep("start");
     setAiIntent("");
     setAiProvider("anthropic");
@@ -778,6 +780,29 @@ export default function ToolsetsPage() {
 
   const toolsets = toolsetsQuery.data?.toolsets ?? [];
   const defaultToolsetId = settingsQuery.data?.settings?.toolsets?.defaultToolsetId ?? null;
+
+  const aiDefaultsInitRef = useRef(false);
+  useEffect(() => {
+    if (!aiOpen) {
+      aiDefaultsInitRef.current = false;
+      return;
+    }
+    if (aiStep !== "start") return;
+    if (aiDefaultsInitRef.current) return;
+    const d = (settingsQuery.data?.settings?.llm?.defaults?.toolsetBuilder as any) ?? null;
+    if (d && typeof d === "object") {
+      if (typeof d.provider === "string" && (d.provider === "openai" || d.provider === "anthropic")) {
+        setAiProvider(d.provider);
+      }
+      if (typeof d.model === "string" && d.model.trim().length > 0) {
+        setAiModel(d.model);
+      }
+      if (typeof d.secretId === "string") {
+        setAiSecretId(d.secretId);
+      }
+    }
+    aiDefaultsInitRef.current = true;
+  }, [aiOpen, aiStep, settingsQuery.data?.settings]);
 
   const [publishSlug, setPublishSlug] = useState("");
   const [publishId, setPublishId] = useState<string | null>(null);
@@ -1112,9 +1137,6 @@ export default function ToolsetsPage() {
           </DialogHeader>
 
           {(() => {
-            const allSecrets = (secretsQuery.data?.secrets ?? []) as Array<{ id: string; connectorId: string; name: string }>;
-            const expectedConnectorId = aiProvider === "anthropic" ? "llm.anthropic" : "llm.openai";
-            const providerSecrets = allSecrets.filter((s) => s.connectorId === expectedConnectorId);
             const loading = createBuilderSession.isPending || chatBuilderSession.isPending || finalizeBuilderSession.isPending;
 
             if (aiStep === "start") {
@@ -1124,47 +1146,19 @@ export default function ToolsetsPage() {
                     {t("toolsets.ai.guardrail")}
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="grid gap-1.5">
-                      <Label>{t("toolsets.ai.providerLabel")}</Label>
-                      <select
-                        className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                        value={aiProvider}
-                        onChange={(e) => {
-                          const nextProvider = e.target.value === "openai" ? "openai" : "anthropic";
-                          setAiProvider(nextProvider);
-                          setAiSecretId("");
-                          setAiModel(nextProvider === "anthropic" ? "claude-3-5-sonnet-latest" : "gpt-4.1-mini");
-                        }}
-                      >
-                        <option value="anthropic">anthropic</option>
-                        <option value="openai">openai</option>
-                      </select>
-                    </div>
-
-                    <div className="grid gap-1.5">
-                      <Label>{t("toolsets.ai.modelLabel")}</Label>
-                      <Input value={aiModel} onChange={(e) => setAiModel(e.target.value)} />
-                    </div>
-                  </div>
-
                   <div className="grid gap-1.5">
-                    <Label>{t("toolsets.ai.secretLabel")}</Label>
-                    <select
-                      className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                      value={aiSecretId}
-                      onChange={(e) => setAiSecretId(e.target.value)}
-                    >
-                      <option value="">{t("toolsets.ai.secretPlaceholder")}</option>
-                      {providerSecrets.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
-                    {providerSecrets.length === 0 ? (
-                      <div className="text-xs text-muted">{t("toolsets.ai.noSecretsHint")}</div>
-                    ) : null}
+                    <Label>{t("toolsets.ai.modelLabel")}</Label>
+                    <LlmConfigField
+                      orgId={orgId}
+                      mode="toolsetBuilder"
+                      value={{ providerId: aiProvider, modelId: aiModel, secretId: aiSecretId || null } as any}
+                      onChange={(next) => {
+                        setAiProvider(next.providerId === "openai" ? "openai" : "anthropic");
+                        setAiModel(next.modelId);
+                        setAiSecretId(next.secretId ?? "");
+                      }}
+                      disabled={loading}
+                    />
                   </div>
 
                   <div className="grid gap-1.5">

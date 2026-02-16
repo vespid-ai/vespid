@@ -86,7 +86,7 @@ export function useCreateSession(orgId: string | null) {
       title?: string;
       engineId?: "vespid.loop.v1" | "codex.sdk.v1";
       toolsetId?: string;
-      llm: { provider: "openai" | "anthropic"; model: string };
+      llm: { provider: "openai" | "anthropic" | "gemini"; model: string };
       prompt: { system?: string; instructions: string };
       tools: { allow: string[] };
       selector?: { tag: string } | { group: string };
@@ -102,4 +102,3 @@ export function useCreateSession(orgId: string | null) {
     },
   });
 }
-

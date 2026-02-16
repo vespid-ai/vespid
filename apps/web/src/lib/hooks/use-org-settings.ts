@@ -6,6 +6,21 @@ import { apiFetchJson } from "../api";
 export type OrgSettings = {
   tools: { shellRunEnabled: boolean };
   toolsets: { defaultToolsetId: string | null };
+  llm?: {
+    defaults?: {
+      session?: { provider?: "openai" | "anthropic" | "gemini" | null; model?: string | null };
+      workflowAgentRun?: {
+        provider?: "openai" | "anthropic" | "gemini" | "vertex" | null;
+        model?: string | null;
+        secretId?: string | null;
+      };
+      toolsetBuilder?: {
+        provider?: "openai" | "anthropic" | null;
+        model?: string | null;
+        secretId?: string | null;
+      };
+    };
+  };
 };
 
 export function useOrgSettings(orgId: string | null) {
@@ -33,4 +48,3 @@ export function useUpdateOrgSettings(orgId: string | null) {
     },
   });
 }
-

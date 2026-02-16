@@ -173,16 +173,78 @@ const orgSettingsSchema = z
       })
       .strict()
       .optional(),
+    llm: z
+      .object({
+        defaults: z
+          .object({
+            session: z
+              .object({
+                // Nullable so persisted settings can represent "explicitly cleared" defaults.
+                provider: z.enum(["openai", "anthropic", "gemini"]).nullable().optional(),
+                model: z.string().min(1).max(120).nullable().optional(),
+              })
+              .strict()
+              .optional(),
+            workflowAgentRun: z
+              .object({
+                provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).nullable().optional(),
+                model: z.string().min(1).max(120).nullable().optional(),
+                secretId: z.string().uuid().nullable().optional(),
+              })
+              .strict()
+              .optional(),
+            toolsetBuilder: z
+              .object({
+                provider: z.enum(["openai", "anthropic"]).nullable().optional(),
+                model: z.string().min(1).max(120).nullable().optional(),
+                secretId: z.string().uuid().nullable().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
-function normalizeOrgSettings(input: unknown): { tools: { shellRunEnabled: boolean }; toolsets: { defaultToolsetId: string | null } } {
+function normalizeOrgSettings(input: unknown): {
+  tools: { shellRunEnabled: boolean };
+  toolsets: { defaultToolsetId: string | null };
+  llm: {
+    defaults: {
+      session: { provider: "openai" | "anthropic" | "gemini" | null; model: string | null };
+      workflowAgentRun: { provider: "openai" | "anthropic" | "gemini" | "vertex" | null; model: string | null; secretId: string | null };
+      toolsetBuilder: { provider: "openai" | "anthropic" | null; model: string | null; secretId: string | null };
+    };
+  };
+} {
   const parsed = orgSettingsSchema.safeParse(input);
   return {
     tools: { shellRunEnabled: parsed.success ? Boolean(parsed.data.tools?.shellRunEnabled) : false },
     toolsets: {
       defaultToolsetId:
         parsed.success && typeof parsed.data.toolsets?.defaultToolsetId === "string" ? parsed.data.toolsets.defaultToolsetId : null,
+    },
+    llm: {
+      defaults: {
+        session: {
+          provider: parsed.success ? (parsed.data.llm?.defaults?.session?.provider ?? null) : null,
+          model: parsed.success ? (parsed.data.llm?.defaults?.session?.model ?? null) : null,
+        },
+        workflowAgentRun: {
+          provider: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.provider ?? null) : null,
+          model: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.model ?? null) : null,
+          secretId: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.secretId ?? null) : null,
+        },
+        toolsetBuilder: {
+          provider: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.provider ?? null) : null,
+          model: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.model ?? null) : null,
+          secretId: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.secretId ?? null) : null,
+        },
+      },
     },
   };
 }
@@ -1799,9 +1861,6 @@ export async function buildServer(input?: {
     }
 
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
-    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage org settings");
-    }
 
     const settings = await store.getOrganizationSettings({
       organizationId: orgContext.organizationId,
@@ -1833,6 +1892,7 @@ export async function buildServer(input?: {
       actorUserId: auth.userId,
     });
     const normalizedExisting = normalizeOrgSettings(existing);
+    const llmDefaultsPatch = parsed.data.llm?.defaults;
     const next = {
       tools: {
         shellRunEnabled:
@@ -1845,6 +1905,39 @@ export async function buildServer(input?: {
           parsed.data.toolsets && "defaultToolsetId" in parsed.data.toolsets
             ? (parsed.data.toolsets.defaultToolsetId ?? null)
             : normalizedExisting.toolsets.defaultToolsetId,
+      },
+      llm: {
+        defaults: {
+          session:
+            llmDefaultsPatch && "session" in llmDefaultsPatch
+              ? {
+                  provider: llmDefaultsPatch.session?.provider ?? null,
+                  model: llmDefaultsPatch.session?.model ?? null,
+                }
+              : normalizedExisting.llm.defaults.session,
+          workflowAgentRun:
+            llmDefaultsPatch && "workflowAgentRun" in llmDefaultsPatch
+              ? {
+                  provider: llmDefaultsPatch.workflowAgentRun?.provider ?? null,
+                  model: llmDefaultsPatch.workflowAgentRun?.model ?? null,
+                  secretId:
+                    llmDefaultsPatch.workflowAgentRun && "secretId" in llmDefaultsPatch.workflowAgentRun
+                      ? (llmDefaultsPatch.workflowAgentRun.secretId ?? null)
+                      : null,
+                }
+              : normalizedExisting.llm.defaults.workflowAgentRun,
+          toolsetBuilder:
+            llmDefaultsPatch && "toolsetBuilder" in llmDefaultsPatch
+              ? {
+                  provider: llmDefaultsPatch.toolsetBuilder?.provider ?? null,
+                  model: llmDefaultsPatch.toolsetBuilder?.model ?? null,
+                  secretId:
+                    llmDefaultsPatch.toolsetBuilder && "secretId" in llmDefaultsPatch.toolsetBuilder
+                      ? (llmDefaultsPatch.toolsetBuilder.secretId ?? null)
+                      : null,
+                }
+              : normalizedExisting.llm.defaults.toolsetBuilder,
+        },
       },
     };
 
@@ -2354,7 +2447,7 @@ export async function buildServer(input?: {
         engineId: z.enum(["vespid.loop.v1", "codex.sdk.v1", "claude.agent-sdk.v1"]).optional(),
         toolsetId: z.string().uuid().optional(),
         llm: z.object({
-          provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
+          provider: z.enum(["openai", "anthropic", "gemini"]).default("openai"),
           model: z.string().min(1).max(120),
         }),
         prompt: z.object({

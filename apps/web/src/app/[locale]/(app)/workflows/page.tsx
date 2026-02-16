@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Badge } from "../../../../components/ui/badge";
@@ -13,7 +13,9 @@ import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Textarea } from "../../../../components/ui/textarea";
 import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
+import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { type Workflow, useCreateWorkflow, useWorkflows } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
 
@@ -34,8 +36,8 @@ type AgentNodeForm = {
   id: string;
   instructions: string;
   system: string;
-  model: string;
-  llmSecretId: string;
+  llmUseDefault: boolean;
+  llmOverride: LlmConfigValue;
 
   toolGithubIssueCreate: boolean;
   toolShellRun: boolean;
@@ -69,14 +71,18 @@ function defaultTeammate(index: number): TeammateForm {
   };
 }
 
-function defaultAgentNode(index: number): AgentNodeForm {
+function defaultAgentNode(index: number, defaults?: Partial<LlmConfigValue>): AgentNodeForm {
   const id = `agent-${index + 1}`;
   return {
     id,
     instructions: "Summarize the run input and decide what to do next.",
     system: "",
-    model: "gpt-4.1-mini",
-    llmSecretId: "",
+    llmUseDefault: true,
+    llmOverride: {
+      providerId: (defaults?.providerId ?? "openai") as any,
+      modelId: defaults?.modelId ?? "gpt-4.1-mini",
+      secretId: defaults?.secretId ?? null,
+    },
     toolGithubIssueCreate: false,
     toolShellRun: false,
     runToolsOnNodeAgent: false,
@@ -93,7 +99,7 @@ function defaultAgentNode(index: number): AgentNodeForm {
   };
 }
 
-function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
+function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }): unknown {
   const nodes: Array<Record<string, unknown>> = params.nodes.map((node) => {
     const toolAllowPolicy: string[] = [];
     if (node.toolGithubIssueCreate) {
@@ -110,6 +116,8 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
       }
     }
     const toolAllow = Array.from(new Set(toolAllowPolicy));
+
+    const effectiveLlm = node.llmUseDefault ? params.defaultLlm : node.llmOverride;
 
     const toolHints: string[] = [];
     if (node.teamEnabled) {
@@ -250,10 +258,10 @@ function buildDsl(params: { nodes: AgentNodeForm[] }): unknown {
       type: "agent.run",
       config: {
         llm: {
-          provider: "openai",
-          model: node.model,
+          provider: effectiveLlm.providerId,
+          model: effectiveLlm.modelId,
           auth: {
-            ...(node.llmSecretId.trim().length > 0 ? { secretId: node.llmSecretId.trim() } : {}),
+            ...(effectiveLlm.secretId ? { secretId: effectiveLlm.secretId } : {}),
             fallbackToEnv: true,
           },
         },
@@ -310,8 +318,14 @@ export default function WorkflowsPage() {
   const orgId = useActiveOrgId();
   const createWorkflow = useCreateWorkflow(orgId);
   const workflowsQuery = useWorkflows(orgId);
+  const settingsQuery = useOrgSettings(orgId);
 
   const [workflowName, setWorkflowName] = useState("Issue triage");
+  const [defaultAgentLlm, setDefaultAgentLlm] = useState<LlmConfigValue>({
+    providerId: "openai",
+    modelId: "gpt-4.1-mini",
+    secretId: null,
+  });
   const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);
 
   const [recent, setRecent] = useState<string[]>([]);
@@ -331,7 +345,22 @@ export default function WorkflowsPage() {
       return !needsGithub || n.githubSecretId.trim().length > 0;
     });
 
-  const dslPreview = useMemo(() => buildDsl({ nodes: agentNodes }), [agentNodes]);
+  const defaultLlmInitRef = useRef(false);
+  useEffect(() => {
+    if (defaultLlmInitRef.current) return;
+    const defaults = (settingsQuery.data?.settings?.llm?.defaults?.workflowAgentRun as any) ?? null;
+    if (!defaults || typeof defaults !== "object") return;
+    setDefaultAgentLlm((prev) => ({
+      ...prev,
+      ...(typeof defaults.provider === "string" ? { providerId: defaults.provider } : {}),
+      ...(typeof defaults.model === "string" ? { modelId: defaults.model } : {}),
+      ...(typeof defaults.secretId === "string" ? { secretId: defaults.secretId } : {}),
+    }));
+    defaultLlmInitRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsQuery.data?.settings]);
+
+  const dslPreview = useMemo(() => buildDsl({ nodes: agentNodes, defaultLlm: defaultAgentLlm }), [agentNodes, defaultAgentLlm]);
 
   const workflowsLatestByFamily = useMemo(() => {
     const rows = workflowsQuery.data?.workflows ?? [];
@@ -414,6 +443,18 @@ export default function WorkflowsPage() {
       return;
     }
 
+    const missingVertexSecret =
+      defaultAgentLlm.providerId === "vertex" && !defaultAgentLlm.secretId
+        ? true
+        : agentNodes.some((n) => {
+            const effective = n.llmUseDefault ? defaultAgentLlm : n.llmOverride;
+            return effective.providerId === "vertex" && !effective.secretId;
+          });
+    if (missingVertexSecret) {
+      toast.error(t("workflows.errors.vertexSecretRequired"));
+      return;
+    }
+
     const payload = await createWorkflow.mutateAsync({ name: workflowName, dsl: dslPreview });
     const id = payload.workflow.id;
     addRecentWorkflowId(id);
@@ -450,6 +491,14 @@ export default function WorkflowsPage() {
             <div className="grid gap-1.5">
               <Label htmlFor="workflow-name">{t("workflows.fields.workflowName")}</Label>
               <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
+            </div>
+
+            <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+              <div className="text-sm font-medium text-text">{t("workflows.defaultAgentModel")}</div>
+              <LlmConfigField orgId={orgId} mode="workflowAgentRun" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
+              {defaultAgentLlm.providerId === "vertex" && !defaultAgentLlm.secretId ? (
+                <div className="text-xs text-warn">{t("workflows.vertexSecretRequiredHint")}</div>
+              ) : null}
             </div>
 
             <div className="grid gap-3 rounded-lg border border-border bg-panel/50 p-3">
@@ -530,29 +579,39 @@ export default function WorkflowsPage() {
                         />
                       </div>
 
-                        <div className="grid gap-2 md:grid-cols-2">
-                        <div className="grid gap-1.5">
-                          <Label htmlFor={`agent-model-${node.id}`}>{t("workflows.model")}</Label>
-                          <ModelPickerField
-                            value={node.model}
+                      <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="text-sm font-medium text-text">{t("workflows.model")}</div>
+                          <label className="flex items-center gap-2 text-sm text-muted">
+                            <input
+                              type="checkbox"
+                              checked={node.llmUseDefault}
+                              onChange={(e) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, llmUseDefault: e.target.checked } : n))
+                                )
+                              }
+                            />
+                            {t("workflows.useDefaultModel")}
+                          </label>
+                        </div>
+                        {node.llmUseDefault ? (
+                          <div className="text-xs text-muted">
+                            {t("workflows.usingDefaultModel", { provider: defaultAgentLlm.providerId, model: defaultAgentLlm.modelId })}
+                          </div>
+                        ) : (
+                          <LlmConfigField
+                            orgId={orgId}
+                            mode="workflowAgentRun"
+                            value={node.llmOverride}
                             onChange={(next) =>
-                              setAgentNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, model: next } : n)))
+                              setAgentNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, llmOverride: next } : n)))
                             }
                           />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <Label htmlFor={`agent-llm-secret-${node.id}`}>{t("workflows.llmSecretId")}</Label>
-                          <Input
-                            id={`agent-llm-secret-${node.id}`}
-                            value={node.llmSecretId}
-                            onChange={(e) =>
-                              setAgentNodes((prev) =>
-                                prev.map((n) => (n.id === node.id ? { ...n, llmSecretId: e.target.value } : n))
-                              )
-                            }
-                            placeholder='Create a secret with connectorId="llm.openai"'
-                          />
-                        </div>
+                        )}
+                        {!node.llmUseDefault && node.llmOverride.providerId === "vertex" && !node.llmOverride.secretId ? (
+                          <div className="text-xs text-warn">{t("workflows.vertexSecretRequiredHint")}</div>
+                        ) : null}
                       </div>
 
                       <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
@@ -1103,7 +1162,7 @@ export default function WorkflowsPage() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
-                    onClick={() => setAgentNodes((prev) => [...prev, defaultAgentNode(prev.length)])}
+                    onClick={() => setAgentNodes((prev) => [...prev, defaultAgentNode(prev.length, defaultAgentLlm)])}
                     disabled={agentNodes.length >= 10}
                   >
                     {t("workflows.addAgentNode")}

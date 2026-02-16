@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -13,8 +13,12 @@ import { Label } from "../../../../components/ui/label";
 import { Separator } from "../../../../components/ui/separator";
 import { Textarea } from "../../../../components/ui/textarea";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
+import { useMe } from "../../../../lib/hooks/use-me";
+import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions, type AgentSession } from "../../../../lib/hooks/use-sessions";
+import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 
 export default function SessionsPage() {
   const t = useTranslations();
@@ -23,9 +27,13 @@ export default function SessionsPage() {
   const locale = Array.isArray(params?.locale) ? params.locale[0] : params?.locale ?? "en";
 
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const meQuery = useMe(Boolean(authSession.data?.session));
   const sessionsQuery = useSessions(orgId);
   const toolsetsQuery = useToolsets(orgId);
   const createSession = useCreateSession(orgId);
+  const settingsQuery = useOrgSettings(orgId);
+  const updateSettings = useUpdateOrgSettings(orgId);
 
   const sessions = sessionsQuery.data?.sessions ?? [];
   const toolsets = toolsetsQuery.data?.toolsets ?? [];
@@ -35,8 +43,7 @@ export default function SessionsPage() {
   const [toolsetId, setToolsetId] = useState<string>("");
   const [selectorTag, setSelectorTag] = useState<string>("");
 
-  const [provider, setProvider] = useState<"openai" | "anthropic">("openai");
-  const [model, setModel] = useState<string>("gpt-4.1-mini");
+  const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-4.1-mini", secretId: null });
   const [system, setSystem] = useState<string>("");
   const [instructions, setInstructions] = useState<string>("Help me accomplish my task safely and efficiently.");
 
@@ -55,6 +62,34 @@ export default function SessionsPage() {
       .filter(Boolean);
     return Array.from(new Set([...base, ...extras]));
   }, [allowShellRun, allowConnectorAction, extraToolsRaw]);
+
+  const roleKey = meQuery.data?.orgs?.find((o) => o.id === orgId)?.roleKey ?? null;
+  const canEditOrgSettings = roleKey === "owner" || roleKey === "admin";
+
+  const llmInitRef = useRef(false);
+  useEffect(() => {
+    // Initialize from org defaults once.
+    if (llmInitRef.current) return;
+    const sessionDefaults = settingsQuery.data?.settings?.llm?.defaults?.session as any;
+    const provider = sessionDefaults && typeof sessionDefaults.provider === "string" ? sessionDefaults.provider : null;
+    const model = sessionDefaults && typeof sessionDefaults.model === "string" ? sessionDefaults.model : null;
+    if (provider || model) {
+      setLlm((prev) => ({
+        ...prev,
+        ...(provider ? { providerId: provider } : {}),
+        ...(model ? { modelId: model } : {}),
+      }));
+    }
+    llmInitRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsQuery.data?.settings]);
+
+  useEffect(() => {
+    // codex.sdk.v1 uses OpenAI provider only.
+    if (engineId === "codex.sdk.v1") {
+      setLlm((prev) => ({ ...prev, providerId: "openai" }));
+    }
+  }, [engineId]);
 
   const columns = useMemo(() => {
     return [
@@ -143,34 +178,18 @@ export default function SessionsPage() {
 
           <div className="grid gap-3 md:grid-cols-2">
             <div className="grid gap-2">
-              <Label>{t("sessions.fields.provider")}</Label>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  variant={provider === "openai" ? "accent" : "outline"}
-                  onClick={() => setProvider("openai")}
-                  disabled={!canOperate || engineId === "codex.sdk.v1"}
-                >
-                  OpenAI
-                </Button>
-                <Button
-                  size="sm"
-                  variant={provider === "anthropic" ? "accent" : "outline"}
-                  onClick={() => setProvider("anthropic")}
-                  disabled={!canOperate || engineId === "codex.sdk.v1"}
-                >
-                  Anthropic
-                </Button>
-              </div>
-              {engineId === "codex.sdk.v1" ? (
-                <div className="text-xs text-muted">{t("sessions.codexProviderHint")}</div>
-              ) : null}
-            </div>
-
-            <div className="grid gap-2">
               <Label>{t("sessions.fields.model")}</Label>
-              <Input value={model} onChange={(e) => setModel(e.target.value)} disabled={!canOperate} />
-              <div className="text-xs text-muted">{t("sessions.modelHint")}</div>
+              <LlmConfigField
+                orgId={orgId}
+                mode="session"
+                value={llm}
+                allowedProviders={engineId === "codex.sdk.v1" ? ["openai"] : ["openai", "anthropic", "gemini"]}
+                onChange={(next) => setLlm(next)}
+                disabled={!canOperate}
+              />
+              <div className="text-xs text-muted">
+                {engineId === "codex.sdk.v1" ? t("sessions.codexProviderHint") : t("sessions.modelHint")}
+              </div>
             </div>
           </div>
 
@@ -244,7 +263,7 @@ export default function SessionsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="accent"
-              disabled={!canOperate || createSession.isPending || model.trim().length === 0 || instructions.trim().length === 0}
+              disabled={!canOperate || createSession.isPending || llm.modelId.trim().length === 0 || instructions.trim().length === 0}
               onClick={async () => {
                 if (!orgId) return;
                 try {
@@ -253,8 +272,11 @@ export default function SessionsPage() {
                     engineId,
                     ...(toolsetId.trim().length > 0 ? { toolsetId: toolsetId.trim() } : {}),
                     llm: {
-                      provider: engineId === "codex.sdk.v1" ? "openai" : provider,
-                      model: model.trim(),
+                      provider:
+                        engineId === "codex.sdk.v1"
+                          ? "openai"
+                          : (llm.providerId === "vertex" ? "openai" : llm.providerId),
+                      model: llm.modelId.trim(),
                     },
                     prompt: {
                       ...(system.trim().length > 0 ? { system: system.trim() } : {}),
@@ -277,6 +299,23 @@ export default function SessionsPage() {
             >
               {t("sessions.create.button")}
             </Button>
+
+            {canEditOrgSettings ? (
+              <Button
+                variant="outline"
+                disabled={!canOperate || updateSettings.isPending || llm.modelId.trim().length === 0}
+                onClick={async () => {
+                  if (!orgId) return;
+                  const provider = llm.providerId === "vertex" ? "openai" : llm.providerId;
+                  await updateSettings.mutateAsync({
+                    llm: { defaults: { session: { provider, model: llm.modelId.trim() } } },
+                  });
+                  toast.success(t("common.saved"));
+                }}
+              >
+                {t("sessions.saveAsOrgDefault")}
+              </Button>
+            ) : null}
           </div>
         </CardContent>
       </Card>

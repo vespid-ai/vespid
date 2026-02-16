@@ -76,9 +76,10 @@
   },
   "models": {
     "title": "模型",
-    "subtitle": "搜索并选择模型。由 OpenRouter 提供模型目录（自动更新）。",
+    "subtitle": "搜索并选择模型。使用内置推荐或直接输入自定义模型 ID。",
     "manage": "管理",
     "manageHint": "隐藏不常用的模型。被隐藏的模型不会出现在选择器中。",
+    "recent": "最近",
     "searchPlaceholder": "搜索模型（名称或 ID）...",
     "noResults": "暂无匹配模型。",
     "recommended": "推荐",
@@ -161,11 +162,15 @@
     "title": "工作流",
     "subtitle": "Fluent 风格 SaaS 壳 + 运行驾驶舱。从模板开始, 再逐步完善。",
     "createTitle": "创建工作流",
+    "defaultAgentModel": "默认智能体模型",
     "agentNodes": "智能体节点",
     "addAgentNode": "添加智能体节点",
     "instructions": "指令",
     "model": "模型",
+    "useDefaultModel": "使用默认",
+    "usingDefaultModel": "使用默认: {provider} / {model}",
     "llmSecretId": "LLM secretId（可选）",
+    "vertexSecretRequiredHint": "Vertex 需要配置 vertex OAuth secretId。",
     "tools": "工具",
     "teamTitle": "团队",
     "teamEnable": "启用团队（主管 + 队友）",
@@ -241,6 +246,7 @@
     "errors": {
       "orgRequired": "请先选择当前组织。",
       "githubSecretRequired": "包含 GitHub 节点时需要提供 secretId。",
+      "vertexSecretRequired": "Vertex 需要配置 secretId（Vertex OAuth）。",
       "workflowIdRequired": "需要填写工作流 ID"
     },
     "toast": {
@@ -422,6 +428,7 @@
     "engineHint": "当前版本会话支持 vespid.loop.v1 和 codex.sdk.v1。",
     "codexProviderHint": "codex.sdk.v1 仅支持 OpenAI 鉴权。",
     "modelHint": "需与节点主机可用的 provider/engine 匹配。",
+    "saveAsOrgDefault": "保存为组织默认",
     "toolsetPlaceholder": "uuid（可选）",
     "toolsetResolved": "已解析",
     "toolsetHint": "设置后，工具集 skills 会作为只读上下文注入到节点主机。",
@@ -618,6 +625,13 @@
       "pasteApiKey": "粘贴 API Key...",
       "saved": "已保存",
       "rotated": "已轮换"
+    },
+    "modelDefaults": {
+      "title": "模型默认值",
+      "subtitle": "组织级默认值，用于预填会话与工作流，减少重复配置。",
+      "session": "会话",
+      "workflowAgentRun": "工作流（agent.run）",
+      "toolsetBuilder": "工具集生成器"
     },
     "vertex": {
       "title": "高级：Vertex AI（OAuth）",

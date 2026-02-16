@@ -84,6 +84,54 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
+  it("rejects vertex provider when llm.auth.secretId is missing", () => {
+    expect(() =>
+      workflowDslSchema.parse({
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [
+          {
+            id: "n1",
+            type: "agent.run",
+            config: {
+              llm: { provider: "vertex", model: "gemini-2.0-flash-001", auth: { fallbackToEnv: true } },
+              prompt: { instructions: "Say hello." },
+              tools: { allow: [], execution: "cloud" },
+              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+              output: { mode: "text" },
+            },
+          },
+        ],
+      })
+    ).toThrow();
+  });
+
+  it("accepts vertex provider when llm.auth.secretId is present", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            llm: {
+              provider: "vertex",
+              model: "gemini-2.0-flash-001",
+              auth: { secretId: "00000000-0000-0000-0000-000000000000", fallbackToEnv: true },
+            },
+            prompt: { instructions: "Say hello." },
+            tools: { allow: [], execution: "cloud" },
+            limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+            output: { mode: "text" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
+  });
+
   it("rejects external engine when execution.mode is not node", () => {
     expect(() =>
       workflowDslSchema.parse({

@@ -102,6 +102,7 @@
     "engineHint": "In this edition, sessions support vespid.loop.v1 and codex.sdk.v1.",
     "codexProviderHint": "codex.sdk.v1 uses OpenAI auth only.",
     "modelHint": "This must match the provider and engine available on the node host.",
+    "saveAsOrgDefault": "Save as org default",
     "toolsetPlaceholder": "uuid (optional)",
     "toolsetResolved": "Resolved",
     "toolsetHint": "If set, toolset skills are injected as read-only context on node hosts.",
@@ -147,9 +148,10 @@
   },
   "models": {
     "title": "Models",
-    "subtitle": "Search and select a model. Powered by OpenRouter (auto-updated).",
+    "subtitle": "Search and select a model. Use curated suggestions or type a custom model ID.",
     "manage": "Manage",
     "manageHint": "Hide models you never use. Hidden models won't appear in the picker.",
+    "recent": "Recent",
     "searchPlaceholder": "Search models (name or ID)...",
     "noResults": "No matching models.",
     "recommended": "Recommended",
@@ -232,11 +234,15 @@
     "title": "Workflows",
     "subtitle": "Fluent-style SaaS shell + agent cockpit. Start from a template, then refine.",
     "createTitle": "Create workflow",
+    "defaultAgentModel": "Default agent model",
     "agentNodes": "Agent nodes",
     "addAgentNode": "Add agent node",
     "instructions": "Instructions",
     "model": "Model",
+    "useDefaultModel": "Use default",
+    "usingDefaultModel": "Using default: {provider} / {model}",
     "llmSecretId": "LLM secretId (optional)",
+    "vertexSecretRequiredHint": "Vertex requires a vertex OAuth secretId.",
     "tools": "Tools",
     "teamTitle": "Team",
     "teamEnable": "Enable team (supervisor + teammates)",
@@ -312,6 +318,7 @@
     "errors": {
       "orgRequired": "Set an active org first.",
       "githubSecretRequired": "Provide a GitHub secretId to include the GitHub node.",
+      "vertexSecretRequired": "Vertex requires a secretId (Vertex OAuth).",
       "workflowIdRequired": "Workflow ID required"
     },
     "toast": {
@@ -618,6 +625,13 @@
       "pasteApiKey": "Paste API key...",
       "saved": "Saved",
       "rotated": "Rotated"
+    },
+    "modelDefaults": {
+      "title": "Model defaults",
+      "subtitle": "Org-level defaults used to prefill sessions and workflows so you don't configure models repeatedly.",
+      "session": "Sessions",
+      "workflowAgentRun": "Workflows (agent.run)",
+      "toolsetBuilder": "Toolset builder"
     },
     "vertex": {
       "title": "Advanced: Vertex AI (OAuth)",

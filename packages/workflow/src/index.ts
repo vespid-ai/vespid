@@ -191,6 +191,13 @@ const agentRunNodeSchema = z.object({
           path: ["execution", "mode"],
         });
       }
+      if (value.llm.provider === "vertex" && !value.llm.auth?.secretId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "vertex provider requires llm.auth.secretId",
+          path: ["llm", "auth", "secretId"],
+        });
+      }
     }),
 });
 
