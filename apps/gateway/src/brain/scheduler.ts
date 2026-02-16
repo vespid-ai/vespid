@@ -6,7 +6,8 @@ import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";
 const routeSchema = z.object({
   edgeId: z.string().min(1),
   executorId: z.string().uuid(),
-  organizationId: z.string().uuid(),
+  pool: z.enum(["managed", "byon"]),
+  organizationId: z.string().uuid().nullable().optional(),
   labels: z.array(z.string()).optional(),
   maxInFlight: z.number().int().min(1).optional(),
   kinds: z.array(z.enum(["connector.action", "agent.execute"])).optional(),
@@ -40,7 +41,10 @@ async function scanKeys(redis: Redis, pattern: string, limit = 5000): Promise<st
   }
 }
 
-export async function listExecutorRoutes(redis: Redis, input?: { organizationId?: string | null }): Promise<ExecutorRoute[]> {
+export async function listExecutorRoutes(
+  redis: Redis,
+  input?: { organizationId?: string | null; pool?: "managed" | "byon" | null }
+): Promise<ExecutorRoute[]> {
   const keys = await scanKeys(redis, "executor:route:*");
   if (keys.length === 0) return [];
   const raw = await redis.mget(...keys);
@@ -49,6 +53,7 @@ export async function listExecutorRoutes(redis: Redis, input?: { organizationId?
     if (!value) continue;
     const parsed = routeSchema.safeParse(safeJsonParse(value));
     if (!parsed.success) continue;
+    if (input?.pool && parsed.data.pool !== input.pool) continue;
     if (input?.organizationId && parsed.data.organizationId !== input.organizationId) continue;
     out.push(parsed.data);
   }
@@ -75,22 +80,40 @@ local execVal = tonumber(redis.call("GET", execKey) or "0")
 local orgVal = tonumber(redis.call("GET", orgKey) or "0")
 
 if execVal + 1 > execMax then
-  return 0
+  return 1
 end
 if orgVal + 1 > orgMax then
-  return 0
+  return 2
 end
 
 execVal = redis.call("INCR", execKey)
 orgVal = redis.call("INCR", orgKey)
 redis.call("PEXPIRE", execKey, ttlMs)
 redis.call("PEXPIRE", orgKey, ttlMs)
-return 1
+return 0
 `;
 
-export async function reserveCapacity(redis: Redis, input: { executorId: string; organizationId: string; executorMaxInFlight: number; orgMaxInFlight: number; ttlMs: number }): Promise<boolean> {
-  const ok = await redis.eval(reserveLua, 2, executorInFlightKey(input.executorId), orgInFlightKey(input.organizationId), String(input.executorMaxInFlight), String(input.orgMaxInFlight), String(input.ttlMs));
-  return ok === 1;
+export type ReserveCapacityResult =
+  | { ok: true }
+  | { ok: false; reason: "EXECUTOR_OVER_CAPACITY" | "ORG_QUOTA_EXCEEDED" | "UNKNOWN" };
+
+export async function reserveCapacity(
+  redis: Redis,
+  input: { executorId: string; organizationId: string; executorMaxInFlight: number; orgMaxInFlight: number; ttlMs: number }
+): Promise<ReserveCapacityResult> {
+  const out = await redis.eval(
+    reserveLua,
+    2,
+    executorInFlightKey(input.executorId),
+    orgInFlightKey(input.organizationId),
+    String(input.executorMaxInFlight),
+    String(input.orgMaxInFlight),
+    String(input.ttlMs)
+  );
+  if (out === 0) return { ok: true };
+  if (out === 1) return { ok: false, reason: "EXECUTOR_OVER_CAPACITY" };
+  if (out === 2) return { ok: false, reason: "ORG_QUOTA_EXCEEDED" };
+  return { ok: false, reason: "UNKNOWN" };
 }
 
 export async function releaseCapacity(redis: Redis, input: { executorId: string; organizationId: string }) {

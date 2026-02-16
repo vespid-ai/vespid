@@ -20,9 +20,11 @@ const shellRunArgsSchema = z.object({
     .optional(),
   selector: z
     .object({
+      pool: z.enum(["managed", "byon"]).default("managed"),
+      labels: z.array(z.string().min(1).max(64)).max(50).optional(),
       tag: z.string().min(1).max(64).optional(),
-      agentId: z.string().uuid().optional(),
       group: z.string().min(1).max(64).optional(),
+      executorId: z.string().uuid().optional(),
     })
     .optional(),
 });
@@ -32,8 +34,8 @@ export const shellRunTool: AgentToolDefinition = {
   description: "Run a shell script on a node-agent sandbox (node-only).",
   inputSchema: shellRunArgsSchema,
   async execute(ctx, input): Promise<AgentToolExecuteResult> {
-    if (input.mode !== "node") {
-      return { status: "failed", error: "SHELL_TOOL_REQUIRES_NODE_EXECUTION" };
+    if (input.mode !== "executor") {
+      return { status: "failed", error: "SHELL_TOOL_REQUIRES_EXECUTOR_EXECUTION" };
     }
 
     const parsed = shellRunArgsSchema.safeParse(input.args);
@@ -47,7 +49,7 @@ export const shellRunTool: AgentToolDefinition = {
       id: nodeId,
       type: "agent.execute",
       config: {
-        execution: { mode: "node" },
+        execution: { mode: "executor" },
         task: {
           type: "shell",
           script: parsed.data.script,
@@ -69,9 +71,7 @@ export const shellRunTool: AgentToolDefinition = {
           workflowId: ctx.workflowId,
           attemptCount: ctx.attemptCount,
         },
-        ...(selector?.tag ? { selectorTag: selector.tag } : {}),
-        ...(selector?.agentId ? { selectorAgentId: selector.agentId } : {}),
-        ...(selector?.group ? { selectorGroup: selector.group } : {}),
+        ...(selector ? { executorSelector: selector } : {}),
         ...(typeof parsed.data.sandbox?.timeoutMs === "number" && Number.isFinite(parsed.data.sandbox.timeoutMs)
           ? { timeoutMs: parsed.data.sandbox.timeoutMs }
           : {}),
@@ -79,4 +79,3 @@ export const shellRunTool: AgentToolDefinition = {
     };
   },
 };
-

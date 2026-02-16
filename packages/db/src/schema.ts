@@ -304,11 +304,17 @@ export const executorPairingTokens = pgTable("executor_pairing_tokens", {
 export const managedExecutors = pgTable("managed_executors", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull().default(""),
+  tokenHash: text("token_hash"),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  maxInFlight: integer("max_in_flight").notNull().default(50),
   labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
   capabilities: jsonb("capabilities"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
+  managedExecutorsTokenHashUnique: uniqueIndex("managed_executors_token_hash_unique").on(table.tokenHash),
   managedExecutorsCreatedAtIdx: index("managed_executors_created_at_idx").on(table.createdAt, table.id),
+  managedExecutorsRevokedSeenIdx: index("managed_executors_revoked_seen_idx").on(table.revokedAt, table.lastSeenAt, table.id),
 }));
 
 export const agentToolsets = pgTable("agent_toolsets", {

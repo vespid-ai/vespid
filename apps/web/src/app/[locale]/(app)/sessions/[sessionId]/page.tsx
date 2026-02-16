@@ -22,7 +22,7 @@ type GatewayClientMessage =
 
 type GatewayServerMessage =
   | {
-      type: "session_event";
+      type: "session_event_v2";
       sessionId: string;
       seq: number;
       eventType: string;
@@ -135,7 +135,7 @@ export default function SessionDetailPage() {
           toast.error(`${msg.code}: ${msg.message}`);
           return;
         }
-        if (msg.type !== "session_event") return;
+        if (msg.type !== "session_event_v2") return;
         if (msg.sessionId !== sessionId) return;
         const e: AgentSessionEvent = {
           id: `${msg.sessionId}:${msg.seq}`,
@@ -326,7 +326,14 @@ export default function SessionDetailPage() {
           </div>
           <div className="grid gap-1 md:grid-cols-2">
             <div className="text-muted">{t("sessions.details.selector")}</div>
-            <div className="font-mono">{session?.selectorTag ?? session?.selectorGroup ?? "-"}</div>
+            <div className="font-mono">
+              {session?.executorSelector?.executorId ??
+                session?.executorSelector?.tag ??
+                session?.executorSelector?.group ??
+                (Array.isArray(session?.executorSelector?.labels) && session?.executorSelector?.labels.length > 0
+                  ? session?.executorSelector?.labels.join(",")
+                  : "-")}
+            </div>
           </div>
         </CardContent>
       </Card>

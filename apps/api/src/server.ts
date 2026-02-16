@@ -2480,11 +2480,14 @@ export async function buildServer(input?: {
           allow: z.array(z.string().min(1).max(120)).max(200).default([]),
         }),
         limits: z.unknown().optional(),
-        selector: z
-          .union([
-            z.object({ tag: z.string().min(1).max(64) }),
-            z.object({ group: z.string().min(1).max(64) }),
-          ])
+        executorSelector: z
+          .object({
+            pool: z.enum(["managed", "byon"]).default("managed"),
+            labels: z.array(z.string().min(1).max(64)).max(50).optional(),
+            group: z.string().min(1).max(64).optional(),
+            tag: z.string().min(1).max(64).optional(),
+            executorId: z.string().uuid().optional(),
+          })
           .optional(),
       })
       .safeParse(request.body);
@@ -2504,7 +2507,7 @@ export async function buildServer(input?: {
       prompt: { system: body.data.prompt.system ?? null, instructions: body.data.prompt.instructions },
       tools: body.data.tools,
       limits: body.data.limits ?? {},
-      selector: body.data.selector ?? null,
+      executorSelector: body.data.executorSelector ?? { pool: "managed" },
     });
 
     await store.appendAgentSessionEvent({

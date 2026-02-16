@@ -1,4 +1,5 @@
 import type { ZodTypeAny } from "zod";
+import type { ExecutorSelectorV1 } from "@vespid/shared";
 
 export type AgentToolExecutionMode = "cloud" | "executor";
 
@@ -49,9 +50,7 @@ export type AgentToolExecuteResult =
         kind: "connector.action" | "agent.execute";
         payload: unknown;
         secret?: string;
-        selectorTag?: string;
-        selectorAgentId?: string;
-        selectorGroup?: string;
+        executorSelector?: ExecutorSelectorV1;
         timeoutMs?: number;
       };
     };

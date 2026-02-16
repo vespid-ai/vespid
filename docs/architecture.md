@@ -4,8 +4,9 @@
 - `apps/api`: Fastify API for auth/org/rbac foundation endpoints.
 - `apps/web`: Next.js bootstrap UI for auth and org onboarding.
 - `apps/worker`: queue worker for async workflow run execution with retry/backoff.
-- `apps/gateway`: execution gateway for node-agent remote execution (WS for agents + internal dispatch from worker).
-- `apps/node-agent`: CLI node execution agent that connects to gateway.
+- `apps/gateway`: split execution gateway (`edge` + `brain`) for executor remote tool execution.
+- `apps/node-agent`: CLI executor agent that connects to gateway.
+- `apps/engine-runner`: isolated LLM inference service used by gateway brain.
 - `apps/api`: supports optional enterprise provider injection (`VESPID_ENTERPRISE_PROVIDER_MODULE`) with community fallback.
 
 ## Packages
@@ -31,7 +32,7 @@
 - Connector secrets are encrypted at rest and scoped per organization (`connector_secrets`).
   - Encryption uses an environment-provided KEK (`SECRETS_KEK_ID`, `SECRETS_KEK_BASE64`).
 - Remote execution (MVP):
-  - Workflows may set `execution.mode="node"` for `agent.execute` and `connector.action`.
+  - Workflows may set `execution.mode="executor"` for `agent.execute` and `connector.action`.
   - `apps/worker` dispatches work to `apps/gateway` asynchronously and persists a blocked cursor in `workflow_runs`:
     - `blocked_request_id` (deterministic request id)
     - `cursor_node_index` (next node position)
@@ -42,11 +43,11 @@
 - Node-agent sandbox backends:
   - Community edition supports a Docker backend for `agent.execute` shell tasks (hardened container, strict limits).
   - A provider backend hook is reserved for enterprise to integrate fast-start sandboxes (e.g. e2b.dev-style), loaded dynamically at runtime.
-- Node host connectivity (sessions, MVP):
+- Session connectivity (gateway brain, MVP):
   - Interactive sessions are stored in PostgreSQL (`agent_sessions`, `agent_session_events`) and are tenant-scoped under RLS.
   - Control clients connect to the gateway (WS) to stream session events and send messages.
-  - Sessions are pinned to a node host for consistent context; routing may use control-plane tags.
-  - Sessions are BYOK on node hosts: the gateway does not deliver provider credentials.
+  - Session brains run in gateway; tool calls route to managed/BYON executors via selector and quota policy.
+  - LLM inference is delegated to `apps/engine-runner`; provider credentials are never sent to shell tools.
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.

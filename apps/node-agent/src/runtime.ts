@@ -9,6 +9,7 @@ import { resolveSandboxBackend, type SandboxBackend } from "./sandbox/index.js";
 import { ensureWorkspaceExtracted, snapshotAndUploadWorkspace, verifyWorkspaceDependencies } from "./workspaces/snapshot-cache.js";
 
 export type NodeAgentConfig = {
+  pool?: "managed" | "byon";
   // v2 names
   executorId?: string;
   executorToken?: string;
@@ -20,7 +21,7 @@ export type NodeAgentConfig = {
   name?: string;
   agentVersion?: string;
 
-  organizationId: string;
+  organizationId?: string;
   gatewayWsUrl: string;
   apiBaseUrl: string;
   capabilities: Record<string, unknown>;
@@ -176,18 +177,34 @@ function safeSend(ws: WebSocket | null, message: unknown): boolean {
   }
 }
 
-function normalizeConfig(config: NodeAgentConfig): Required<Pick<NodeAgentConfig, "executorId" | "executorToken" | "organizationId" | "gatewayWsUrl" | "apiBaseUrl" | "executorName" | "executorVersion" | "capabilities">> {
+function normalizeConfig(config: NodeAgentConfig): {
+  pool: "managed" | "byon";
+  executorId: string;
+  executorToken: string;
+  organizationId: string | null;
+  gatewayWsUrl: string;
+  apiBaseUrl: string;
+  executorName: string;
+  executorVersion: string;
+  capabilities: Record<string, unknown>;
+} {
   const executorId = config.executorId ?? config.agentId ?? "";
   const executorToken = config.executorToken ?? config.agentToken ?? "";
   const executorName = config.executorName ?? config.name ?? "executor";
   const executorVersion = config.executorVersion ?? config.agentVersion ?? "0.0.0";
+  const pool = config.pool ?? "byon";
+  const organizationId = typeof config.organizationId === "string" && config.organizationId.trim().length > 0 ? config.organizationId : null;
   if (!executorId || !executorToken) {
     throw new Error("EXECUTOR_CONFIG_INVALID");
   }
+  if (pool === "byon" && !organizationId) {
+    throw new Error("EXECUTOR_CONFIG_INVALID");
+  }
   return {
+    pool,
     executorId,
     executorToken,
-    organizationId: config.organizationId,
+    organizationId,
     gatewayWsUrl: config.gatewayWsUrl,
     apiBaseUrl: config.apiBaseUrl,
     executorName,
@@ -369,8 +386,8 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
     type: "executor_hello_v2",
     executorVersion: normalized.executorVersion,
     executorId: normalized.executorId,
-    pool: "byon" as const,
-    organizationId: normalized.organizationId,
+    pool: normalized.pool,
+    ...(normalized.pool === "byon" && normalized.organizationId ? { organizationId: normalized.organizationId } : {}),
     name: normalized.executorName,
     labels,
     maxInFlight: Number((normalized.capabilities as any)?.maxInFlight ?? 10),
@@ -419,7 +436,12 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           readyResolve();
           readyResolve = null;
         }
-        jsonLog("info", { event: "executor_connected", orgId: normalized.organizationId, executorId: normalized.executorId });
+        jsonLog("info", {
+          event: "executor_connected",
+          pool: normalized.pool,
+          orgId: normalized.organizationId,
+          executorId: normalized.executorId,
+        });
       });
 
       ws.on("message", async (data) => {

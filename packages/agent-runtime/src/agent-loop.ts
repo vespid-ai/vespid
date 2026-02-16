@@ -3,10 +3,8 @@ import type { ValidateFunction } from "ajv";
 import type { WorkflowNodeExecutorResult } from "@vespid/shared";
 import { z } from "zod";
 import type { OpenAiChatMessage } from "./openai.js";
-import { openAiChatCompletion } from "./openai.js";
-import { anthropicChatCompletion } from "./anthropic.js";
-import { geminiGenerateContent } from "./gemini.js";
-import { vertexGenerateContent } from "./vertex.js";
+import type { LlmInvokeAuth, LlmInvokeInput, LlmInvokeResult } from "./llm-invoke.js";
+import { runLlmInference } from "./llm-invoke.js";
 import { resolveAgentTool } from "./tools/index.js";
 import type { AgentToolExecutionMode } from "./tools/types.js";
 
@@ -88,6 +86,7 @@ export type AgentLoopInput = {
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
   fetchImpl: typeof fetch;
   config: AgentLoopConfig;
+  llmInvoke?: (input: Omit<LlmInvokeInput, "fetchImpl">) => Promise<LlmInvokeResult>;
   managedCredits?: {
     ensureAvailable: (input: { minCredits: number }) => Promise<boolean>;
     charge: (input: {
@@ -310,8 +309,7 @@ function compileJsonSchema(schema: unknown): { ok: true; validate: ValidateFunct
 }
 
 type ResolvedLlmAuth =
-  | { kind: "api_key"; apiKey: string }
-  | { kind: "vertex_oauth"; refreshToken: string; projectId: string; location: string };
+  LlmInvokeAuth;
 
 async function resolveLlmAuth(input: {
   llm: AgentLoopConfig["llm"];
@@ -552,6 +550,14 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     return { status: "failed", error: "LLM_AUTH_NOT_CONFIGURED" };
   }
 
+  const llmInvoke =
+    input.llmInvoke ??
+    (async (invokeInput: Omit<LlmInvokeInput, "fetchImpl">) =>
+      await runLlmInference({
+        ...invokeInput,
+        fetchImpl: input.fetchImpl,
+      }));
+
   const usesManagedCredits = input.config.llm.provider !== "vertex" && !input.config.llm.auth.secretId && Boolean(input.managedCredits);
 
   for (;;) {
@@ -600,60 +606,14 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       },
       });
 
-    const llm = await (async () => {
-      const timeoutMs = Math.max(1000, deadline - Date.now());
-
-      if (input.config.llm.provider === "vertex") {
-        if (llmAuth.kind !== "vertex_oauth") {
-          return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
-        }
-        return vertexGenerateContent({
-          refreshToken: llmAuth.refreshToken,
-          projectId: llmAuth.projectId,
-          location: llmAuth.location,
-          model: input.config.llm.model,
-          messages: messages as any,
-          timeoutMs,
-          maxOutputChars: input.config.limits.maxOutputChars,
-          fetchImpl: input.fetchImpl,
-        });
-      }
-
-      if (llmAuth.kind !== "api_key") {
-        return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
-      }
-
-      if (input.config.llm.provider === "anthropic") {
-        return anthropicChatCompletion({
-          apiKey: llmAuth.apiKey,
-          model: input.config.llm.model,
-          messages,
-          timeoutMs,
-          maxOutputChars: input.config.limits.maxOutputChars,
-          fetchImpl: input.fetchImpl,
-        });
-      }
-
-      if (input.config.llm.provider === "gemini") {
-        return geminiGenerateContent({
-          apiKey: llmAuth.apiKey,
-          model: input.config.llm.model,
-          messages: messages as any,
-          timeoutMs,
-          maxOutputChars: input.config.limits.maxOutputChars,
-          fetchImpl: input.fetchImpl,
-        });
-      }
-
-      return openAiChatCompletion({
-        apiKey: llmAuth.apiKey,
-        model: input.config.llm.model,
-        messages,
-        timeoutMs,
-        maxOutputChars: input.config.limits.maxOutputChars,
-        fetchImpl: input.fetchImpl,
-      });
-    })();
+    const llm = await llmInvoke({
+      provider: input.config.llm.provider,
+      model: input.config.llm.model,
+      messages,
+      timeoutMs: Math.max(1000, deadline - Date.now()),
+      maxOutputChars: input.config.limits.maxOutputChars,
+      auth: llmAuth,
+    });
 
     if (!llm.ok) {
       await persistState();

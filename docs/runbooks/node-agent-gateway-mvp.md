@@ -1,8 +1,9 @@
 # Node-Agent + Gateway (MVP) Runbook
 
 This runbook documents the MVP remote execution stack:
-- `apps/gateway`: routes execution requests to connected node-agents.
-- `apps/node-agent`: connects to gateway over WebSocket and executes `connector.action`, `agent.execute`, and node-executed `agent.run` nodes.
+- `apps/gateway`: runs the agent brain loop and routes tool invocations to connected executors.
+- `apps/node-agent`: connects to gateway over WebSocket and executes only tool workloads (`connector.action`, `agent.execute`) in sandbox.
+- `apps/engine-runner`: isolated internal HTTP service for LLM inference used by gateway brain.
 
 The goal is to support private-network or customer-controlled runtime execution while keeping tenancy strict and secrets safe.
 
@@ -17,14 +18,19 @@ The goal is to support private-network or customer-controlled runtime execution 
 Gateway:
 - `GATEWAY_HOST` (default `0.0.0.0`)
 - `GATEWAY_PORT` (default `3002`)
+- `GATEWAY_ROLE` (`edge|brain|all`, default `all`)
 - `GATEWAY_LOG_LEVEL` (default `info`)
 - `GATEWAY_AGENT_STALE_MS` (default `60000`; disconnects stale WS sessions)
-- `GATEWAY_AGENT_SELECTION` (default `least_in_flight_lru`; optional `round_robin`)
 - `GATEWAY_SERVICE_TOKEN` (required in non-test; used by worker -> gateway internal dispatch)
 - `GATEWAY_HTTP_URL` (default `http://localhost:3002`)
-- `GATEWAY_WS_URL` (default `ws://localhost:3002/ws`)
+- `GATEWAY_WS_URL` (default `ws://localhost:3002/ws/executor`)
 - `GATEWAY_RESULTS_TTL_SEC` (default `900`; stores execution results for recovery across gateway restarts)
-- `GATEWAY_CONTINUATION_PUSH` (default `1`; when enabled and `REDIS_URL` is set, gateway pushes remote execution updates to the worker continuation queue)
+- `GATEWAY_ORG_MAX_INFLIGHT` (default per-org executor tool-call quota)
+
+Engine runner:
+- `ENGINE_RUNNER_BASE_URL` (required in production; e.g. `http://engine-runner:3003`)
+- `ENGINE_RUNNER_TOKEN` (required; shared secret between gateway brain and engine-runner)
+- `ENGINE_RUNNER_TIMEOUT_MS` (optional, default `30000`)
 
 Worker:
 - `NODE_EXEC_TIMEOUT_MS` (default `60000`)
@@ -55,7 +61,7 @@ Notes:
 ## Verifying Remote Execution
 1. Create a workflow containing a `connector.action` node with:
 ```json
-{ "execution": { "mode": "node" } }
+{ "execution": { "mode": "executor" } }
 ```
 2. Publish and run the workflow.
 3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.

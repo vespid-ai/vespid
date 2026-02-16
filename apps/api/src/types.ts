@@ -1,4 +1,4 @@
-import type { AgentSkillBundle, McpServerConfig, ToolsetVisibility } from "@vespid/shared";
+import type { AgentSkillBundle, ExecutorSelectorV1, McpServerConfig, ToolsetVisibility } from "@vespid/shared";
 
 export type UserRecord = {
   id: string;
@@ -36,6 +36,11 @@ export type OrganizationSettings = {
         model?: string | null;
         secretId?: string | null;
       };
+    };
+  };
+  execution?: {
+    quotas?: {
+      maxExecutorInFlight?: number;
     };
   };
 };
@@ -252,6 +257,7 @@ export type AgentSessionRecord = {
   title: string;
   status: "active" | "archived";
   pinnedAgentId: string | null;
+  executorSelector: ExecutorSelectorV1 | null;
   selectorTag: string | null;
   selectorGroup: string | null;
   engineId: string;
@@ -679,7 +685,7 @@ export interface AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
-    selector?: { tag?: string; group?: string } | null;
+    executorSelector?: ExecutorSelectorV1 | null;
   }): Promise<AgentSessionRecord>;
   listAgentSessions(input: {
     organizationId: string;

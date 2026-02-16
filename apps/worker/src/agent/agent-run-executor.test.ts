@@ -40,7 +40,8 @@ describe("agent.run executor", () => {
 
     expect(result.status).toBe("blocked");
     expect(result.block?.kind).toBe("agent.run");
-    expect((result.block as any)?.selectorTag).toBe("west");
+    expect((result.block as any)?.executorSelector?.tag).toBe("west");
+    expect((result.block as any)?.executorSelector?.pool).toBe("managed");
     expect(loadSecretValue).not.toHaveBeenCalled();
   });
 

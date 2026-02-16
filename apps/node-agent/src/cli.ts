@@ -55,6 +55,15 @@ const argsSchema = z.discriminatedUnion("command", [
   z.object({
     command: z.literal("start"),
     configPath: z.string().min(1).optional(),
+    pool: z.enum(["managed", "byon"]).optional(),
+    executorId: z.string().uuid().optional(),
+    executorToken: z.string().min(1).optional(),
+    organizationId: z.string().uuid().optional(),
+    gatewayWsUrl: z.string().url().optional(),
+    apiBase: z.string().url().optional(),
+    name: z.string().min(1).max(120).optional(),
+    labels: z.array(z.string().min(1).max(64)).max(50).optional(),
+    maxInFlight: z.number().int().min(1).max(200).optional(),
   }),
 ]);
 
@@ -86,6 +95,18 @@ function parseArgs(argv: string[]): z.infer<typeof argsSchema> {
   return argsSchema.parse({
     command,
     configPath: flags["config-path"],
+    pool: flags["pool"] as "managed" | "byon" | undefined,
+    executorId: flags["executor-id"],
+    executorToken: flags["executor-token"],
+    organizationId: flags["organization-id"],
+    gatewayWsUrl: flags["gateway-ws-url"],
+    apiBase: flags["api-base"],
+    name: flags["name"],
+    labels: parseCsvList(flags["labels"] ?? flags["tags"] ?? process.env.VESPID_AGENT_TAGS),
+    maxInFlight:
+      typeof flags["max-in-flight"] === "string" && flags["max-in-flight"].trim().length > 0
+        ? Number(flags["max-in-flight"])
+        : undefined,
   });
 }
 
@@ -169,6 +190,7 @@ async function main(): Promise<void> {
     });
 
     const config: NodeAgentConfig = {
+      pool: "byon",
       executorId: paired.executorId,
       executorToken: paired.executorToken,
       organizationId: paired.organizationId,
@@ -189,7 +211,27 @@ async function main(): Promise<void> {
   }
 
   const configPath = parsed.configPath ?? defaultConfigPath();
-  const config = await loadConfig(configPath);
+  const preconfigured =
+    parsed.executorId && parsed.executorToken && parsed.gatewayWsUrl
+      ? ({
+          pool: parsed.pool ?? "managed",
+          executorId: parsed.executorId,
+          executorToken: parsed.executorToken,
+          ...(parsed.organizationId ? { organizationId: parsed.organizationId } : {}),
+          gatewayWsUrl: parsed.gatewayWsUrl,
+          apiBaseUrl: parsed.apiBase ?? process.env.VESPID_API_BASE ?? "http://localhost:3001",
+          executorName: parsed.name ?? os.hostname() ?? `executor-${crypto.randomBytes(4).toString("hex")}`,
+          executorVersion: await readPackageVersion(),
+          capabilities: {
+            kinds: ["connector.action", "agent.execute"],
+            ...(parsed.labels && parsed.labels.length > 0 ? { labels: parsed.labels } : {}),
+            ...(typeof parsed.maxInFlight === "number" && Number.isFinite(parsed.maxInFlight)
+              ? { maxInFlight: Math.max(1, Math.floor(parsed.maxInFlight)) }
+              : {}),
+          },
+        } satisfies NodeAgentConfig)
+      : null;
+  const config = preconfigured ?? (await loadConfig(configPath));
   const started = await startNodeAgent(config);
   await started.ready;
 }

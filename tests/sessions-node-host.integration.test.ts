@@ -243,7 +243,7 @@ describe("sessions node-host connectivity (integration)", () => {
       headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
       payload: {
         title: "Test session",
-        engineId: "vespid.loop.v1",
+        engineId: "gateway.loop.v2",
         toolsetId,
         llm: { provider: "openai", model: "gpt-4.1-mini" },
         prompt: { instructions: "Say ok." },

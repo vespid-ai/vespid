@@ -1,6 +1,7 @@
 import { getCommunityConnectorAction } from "@vespid/connectors";
 import { z } from "zod";
 import type { AgentToolDefinition, AgentToolExecuteResult } from "./types.js";
+import type { ExecutorSelectorV1 } from "@vespid/shared";
 
 const connectorToolArgsSchema = z.object({
   connectorId: z.string().min(1),
@@ -13,12 +14,25 @@ const connectorToolArgsSchema = z.object({
     .optional(),
   selector: z
     .object({
-      tag: z.string().min(1).max(64).optional(),
-      agentId: z.string().uuid().optional(),
+      pool: z.enum(["managed", "byon"]).default("managed"),
+      labels: z.array(z.string().min(1).max(64)).max(50).optional(),
       group: z.string().min(1).max(64).optional(),
+      tag: z.string().min(1).max(64).optional(),
+      executorId: z.string().uuid().optional(),
     })
     .optional(),
 });
+
+function normalizeSelector(selector: z.infer<typeof connectorToolArgsSchema>["selector"]): ExecutorSelectorV1 | undefined {
+  if (!selector) return undefined;
+  return {
+    pool: selector.pool,
+    ...(Array.isArray(selector.labels) && selector.labels.length > 0 ? { labels: selector.labels } : {}),
+    ...(typeof selector.group === "string" && selector.group.length > 0 ? { group: selector.group } : {}),
+    ...(typeof selector.tag === "string" && selector.tag.length > 0 ? { tag: selector.tag } : {}),
+    ...(typeof selector.executorId === "string" && selector.executorId.length > 0 ? { executorId: selector.executorId } : {}),
+  };
+}
 
 export const connectorActionTool: AgentToolDefinition = {
   id: "connector.action",
@@ -59,7 +73,7 @@ export const connectorActionTool: AgentToolDefinition = {
         : null;
 
     if (input.mode === "executor") {
-      const selector = parsed.data.selector;
+      const selector = normalizeSelector(parsed.data.selector);
       return {
         status: "blocked",
         block: {
@@ -70,9 +84,7 @@ export const connectorActionTool: AgentToolDefinition = {
             input: actionInputParsed.data,
             env: { githubApiBaseUrl: ctx.githubApiBaseUrl },
           },
-          ...(selector?.tag ? { selectorTag: selector.tag } : {}),
-          ...(selector?.agentId ? { selectorAgentId: selector.agentId } : {}),
-          ...(selector?.group ? { selectorGroup: selector.group } : {}),
+          ...(selector ? { executorSelector: selector } : {}),
           ...(secret ? { secret } : {}),
         },
       };

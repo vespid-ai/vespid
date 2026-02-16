@@ -13,9 +13,11 @@ const connectorToolArgsSchema = z.object({
     .optional(),
   selector: z
     .object({
+      pool: z.enum(["managed", "byon"]).default("managed"),
+      labels: z.array(z.string().min(1).max(64)).max(50).optional(),
       tag: z.string().min(1).max(64).optional(),
-      agentId: z.string().uuid().optional(),
       group: z.string().min(1).max(64).optional(),
+      executorId: z.string().uuid().optional(),
     })
     .optional(),
 });
@@ -58,7 +60,7 @@ export const connectorActionTool: AgentToolDefinition = {
           })
         : null;
 
-    if (input.mode === "node") {
+    if (input.mode === "executor") {
       const selector = parsed.data.selector;
       return {
         status: "blocked",
@@ -70,9 +72,7 @@ export const connectorActionTool: AgentToolDefinition = {
             input: actionInputParsed.data,
             env: { githubApiBaseUrl: ctx.githubApiBaseUrl },
           },
-          ...(selector?.tag ? { selectorTag: selector.tag } : {}),
-          ...(selector?.agentId ? { selectorAgentId: selector.agentId } : {}),
-          ...(selector?.group ? { selectorGroup: selector.group } : {}),
+          ...(selector ? { executorSelector: selector } : {}),
           ...(secret ? { secret } : {}),
         },
       };
