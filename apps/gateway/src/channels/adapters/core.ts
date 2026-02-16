@@ -829,6 +829,113 @@ function createBluebubblesEnvelope(input: ChannelIngressAdapterInput): ChannelIn
   });
 }
 
+function createNextcloudTalkEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const message = asObject(root.message) ?? root;
+  const conversation = asObject(root.conversation);
+  const text = pickString(message, ["message", "text", "content", "body"]);
+  const senderId = pickString(message, ["actorId", "senderId", "userId", "from"]);
+  const conversationId = pickString(conversation, ["token", "id"]) ?? pickString(message, ["token", "conversationId"]) ?? senderId;
+  const conversationType = pickString(conversation, ["type"]) ?? pickString(message, ["conversationType"]);
+  const botUserId = readString(input.query.botUserId);
+  const mentions = asArray(message.mentions)
+    .map((item) => asObject(item))
+    .filter((item): item is RecordObject => item !== null);
+  const mentionMatched =
+    mentions.some((mention) => {
+      const id = pickString(mention, ["id", "userId"]);
+      return typeof botUserId === "string" && id === botUserId;
+    }) || includesMention(text ?? "", unique([botUserId ? `@${botUserId}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["id", "messageId"]),
+    senderDisplayName: pickString(message, ["actorDisplayName", "senderDisplayName"]),
+    receivedAt: parseTimestampMs(message.timestamp ?? root.timestamp, input.receivedAt),
+    isDirectMessage: conversationType === "oneToOne" || conversationType === "direct",
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createTwitchEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  if (pickString(root, ["challenge"])) {
+    return null;
+  }
+
+  const event = asObject(root.event) ?? root;
+  const message = asObject(event.message);
+  const fragments = asArray(message?.fragments)
+    .map((fragment) => asObject(fragment))
+    .filter((fragment): fragment is RecordObject => fragment !== null);
+  const botUserId = readString(input.query.botUserId);
+  const text = pickString(message, ["text"]) ?? pickString(event, ["text", "message"]);
+  const mentionMatched =
+    fragments.some((fragment) => {
+      const mention = asObject(fragment.mention);
+      const mentionId = pickString(mention, ["user_id", "id"]);
+      return typeof botUserId === "string" && mentionId === botUserId;
+    }) || includesMention(text ?? "", unique([botUserId ? `@${botUserId}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId: pickString(event, ["chatter_user_id", "senderId", "userId"]),
+    conversationId: pickString(event, ["broadcaster_user_id", "conversationId"]),
+    providerMessageId: pickString(event, ["message_id", "id"]),
+    senderDisplayName: pickString(event, ["chatter_user_name", "senderDisplayName"]),
+    receivedAt: parseTimestampMs(root.timestamp, input.receivedAt),
+    isDirectMessage: false,
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createWebchatEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const message = asObject(root.message) ?? root;
+  const author = asObject(message.author);
+  const room = asObject(message.room);
+  const text = pickString(message, ["text", "content", "body", "message"]);
+  const senderId = pickString(author, ["id", "userId"]) ?? pickString(message, ["senderId", "from"]);
+  const conversationId = pickString(room, ["id", "roomId"]) ?? pickString(message, ["conversationId", "threadId"]) ?? senderId;
+  const botUserId = readString(input.query.botUserId);
+  const mentions = asArray(message.mentions)
+    .map((item) => asObject(item))
+    .filter((item): item is RecordObject => item !== null);
+  const mentionMatched =
+    mentions.some((mention) => {
+      const id = pickString(mention, ["id", "userId"]);
+      return typeof botUserId === "string" && id === botUserId;
+    }) || includesMention(text ?? "", unique([botUserId ? `@${botUserId}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["id", "messageId"]),
+    senderDisplayName: pickString(author, ["name", "displayName"]),
+    receivedAt: pickString(message, ["createdAt", "timestamp"]) ?? input.receivedAt.toISOString(),
+    isDirectMessage: pickString(room, ["type"]) === "direct" || Boolean(conversationId?.startsWith("dm:")),
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
 function validateSlackSignature(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
   const signingSecret = readString(input.accountMetadata.signingSecret);
   if (!signingSecret) {
@@ -974,6 +1081,27 @@ function validateMattermostToken(input: ChannelIngressAuthInput): ChannelIngress
     extractBearerToken(input.headers.authorization);
   if (!provided || !safeEqual(provided, expected)) {
     return failed("mattermost_token_invalid");
+  }
+  return ok();
+}
+
+function validateTwitchSignature(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
+  const secret = readString(input.accountMetadata.webhookSecret);
+  if (!secret) {
+    return ok();
+  }
+
+  const messageId = readString(input.headers["twitch-eventsub-message-id"]);
+  const timestamp = readString(input.headers["twitch-eventsub-message-timestamp"]);
+  const signature = readString(input.headers["twitch-eventsub-message-signature"]);
+  if (!messageId || !timestamp || !signature) {
+    return failed("twitch_signature_missing");
+  }
+
+  const body = JSON.stringify(input.body ?? {});
+  const expected = `sha256=${crypto.createHmac("sha256", secret).update(`${messageId}${timestamp}${body}`, "utf8").digest("hex")}`;
+  if (!safeEqual(signature, expected)) {
+    return failed("twitch_signature_invalid");
   }
   return ok();
 }
@@ -1165,6 +1293,58 @@ export function createBluebubblesWebhookAdapter(): ChannelIngressAdapter {
     },
     normalizeWebhook(input) {
       return createBluebubblesEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createNextcloudTalkWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "nextcloud-talk",
+    authenticateWebhook(input) {
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-nextcloud-talk-token",
+        reason: "nextcloud_talk_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createNextcloudTalkEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createTwitchWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "twitch",
+    authenticateWebhook(input) {
+      const signatureDecision = validateTwitchSignature(input);
+      if (!signatureDecision.ok) {
+        return signatureDecision;
+      }
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-twitch-token",
+        reason: "twitch_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createTwitchEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createWebchatWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "webchat",
+    authenticateWebhook(input) {
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-webchat-token",
+        reason: "webchat_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createWebchatEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
     },
   };
 }

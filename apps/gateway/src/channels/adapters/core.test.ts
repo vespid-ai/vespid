@@ -12,9 +12,12 @@ import {
   createMattermostWebhookAdapter,
   createMatrixWebhookAdapter,
   createMsteamsWebhookAdapter,
+  createNextcloudTalkWebhookAdapter,
   createSignalWebhookAdapter,
   createSlackWebhookAdapter,
   createTelegramWebhookAdapter,
+  createTwitchWebhookAdapter,
+  createWebchatWebhookAdapter,
   createWhatsappWebhookAdapter,
 } from "./core.js";
 import { createDefaultChannelIngressAdapterRegistry } from "../registry.js";
@@ -374,6 +377,106 @@ describe("core channel adapters", () => {
     expect(envelope?.providerMessageId).toBe("bb-msg-1");
   });
 
+  it("validates nextcloud-talk token and normalizes oneToOne message", () => {
+    const adapter = createNextcloudTalkWebhookAdapter();
+    const body = {
+      message: {
+        id: "nc-msg-1",
+        message: "deploy now",
+        actorId: "nc-user-1",
+        actorDisplayName: "Alice",
+        chat_id: "nc-chat-1",
+        conversationType: "oneToOne",
+        timestamp: 1710000400000,
+      },
+      conversation: { token: "nc-chat-1", type: "oneToOne" },
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("nextcloud-talk", body, {
+        headers: { "x-nextcloud-talk-token": "nc-token" },
+      }),
+      accountMetadata: {
+        ingressToken: "nc-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("nextcloud-talk", body));
+    expect(envelope?.channelId).toBe("nextcloud-talk");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.senderId).toBe("nc-user-1");
+  });
+
+  it("validates twitch signature and normalizes chat message", () => {
+    const adapter = createTwitchWebhookAdapter();
+    const body = {
+      subscription: { type: "channel.chat.message" },
+      event: {
+        message_id: "tw-msg-1",
+        broadcaster_user_id: "broadcaster-1",
+        chatter_user_id: "chatter-1",
+        chatter_user_name: "alice",
+        message: {
+          text: "deploy now @vespid",
+          fragments: [{ type: "text", text: "deploy now @vespid" }],
+        },
+      },
+    };
+    const messageId = "evt-1";
+    const timestamp = "2026-02-16T12:00:00.000Z";
+    const signature = `sha256=${crypto
+      .createHmac("sha256", "twitch-secret")
+      .update(`${messageId}${timestamp}${JSON.stringify(body)}`, "utf8")
+      .digest("hex")}`;
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("twitch", body, {
+        headers: {
+          "twitch-eventsub-message-id": messageId,
+          "twitch-eventsub-message-timestamp": timestamp,
+          "twitch-eventsub-message-signature": signature,
+        },
+      }),
+      accountMetadata: {
+        webhookSecret: "twitch-secret",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("twitch", body));
+    expect(envelope?.channelId).toBe("twitch");
+    expect(envelope?.event).toBe("message.mentioned");
+    expect(envelope?.conversationId).toBe("broadcaster-1");
+  });
+
+  it("validates webchat token and normalizes direct message", () => {
+    const adapter = createWebchatWebhookAdapter();
+    const body = {
+      message: {
+        id: "wc-msg-1",
+        text: "deploy now",
+        author: { id: "wc-user-1", name: "Alice" },
+        room: { id: "dm:wc-user-1", type: "direct" },
+      },
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("webchat", body, {
+        headers: { "x-webchat-token": "wc-token" },
+      }),
+      accountMetadata: {
+        ingressToken: "wc-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("webchat", body));
+    expect(envelope?.channelId).toBe("webchat");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.conversationId).toBe("dm:wc-user-1");
+  });
+
   it("validates msteams token and normalizes mention message", () => {
     const adapter = createMsteamsWebhookAdapter();
 
@@ -508,7 +611,10 @@ describe("core channel adapters", () => {
     const msteamsAdapter = registry.get("msteams");
     const lineAdapter = registry.get("line");
     const matrixAdapter = registry.get("matrix");
+    const nextcloudTalkAdapter = registry.get("nextcloud-talk");
+    const twitchAdapter = registry.get("twitch");
     const webchatAdapter = registry.get("webchat");
+    const zalouserAdapter = registry.get("zalouser");
 
     expect(slackAdapter).not.toBeNull();
     expect(typeof slackAdapter?.authenticateWebhook).toBe("function");
@@ -525,6 +631,12 @@ describe("core channel adapters", () => {
     expect(matrixAdapter).not.toBeNull();
     expect(typeof matrixAdapter?.authenticateWebhook).toBe("function");
     expect(webchatAdapter).not.toBeNull();
-    expect(webchatAdapter?.authenticateWebhook).toBeUndefined();
+    expect(typeof webchatAdapter?.authenticateWebhook).toBe("function");
+    expect(nextcloudTalkAdapter).not.toBeNull();
+    expect(typeof nextcloudTalkAdapter?.authenticateWebhook).toBe("function");
+    expect(twitchAdapter).not.toBeNull();
+    expect(typeof twitchAdapter?.authenticateWebhook).toBe("function");
+    expect(zalouserAdapter).not.toBeNull();
+    expect(zalouserAdapter?.authenticateWebhook).toBeUndefined();
   });
 });

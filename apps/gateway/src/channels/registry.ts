@@ -11,9 +11,12 @@ import {
   createMattermostWebhookAdapter,
   createMatrixWebhookAdapter,
   createMsteamsWebhookAdapter,
+  createNextcloudTalkWebhookAdapter,
   createSignalWebhookAdapter,
   createSlackWebhookAdapter,
   createTelegramWebhookAdapter,
+  createTwitchWebhookAdapter,
+  createWebchatWebhookAdapter,
   createWhatsappWebhookAdapter,
 } from "./adapters/core.js";
 import { createGenericWebhookAdapter } from "./adapters/webhook.js";
@@ -104,8 +107,17 @@ export function createDefaultChannelIngressAdapterRegistry(): ChannelIngressAdap
       case "line":
         registry.register(createLineWebhookAdapter());
         break;
+      case "nextcloud-talk":
+        registry.register(createNextcloudTalkWebhookAdapter());
+        break;
       case "matrix":
         registry.register(createMatrixWebhookAdapter());
+        break;
+      case "twitch":
+        registry.register(createTwitchWebhookAdapter());
+        break;
+      case "webchat":
+        registry.register(createWebchatWebhookAdapter());
         break;
       default:
         registry.register(createGenericWebhookAdapter(channel.id));
