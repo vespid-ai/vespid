@@ -5,6 +5,9 @@ import {
   createGoogleChatWebhookAdapter,
   createImessageWebhookAdapter,
   createIrcWebhookAdapter,
+  createLineWebhookAdapter,
+  createMatrixWebhookAdapter,
+  createMsteamsWebhookAdapter,
   createSignalWebhookAdapter,
   createSlackWebhookAdapter,
   createTelegramWebhookAdapter,
@@ -82,6 +85,15 @@ export function createDefaultChannelIngressAdapterRegistry(): ChannelIngressAdap
         break;
       case "imessage":
         registry.register(createImessageWebhookAdapter());
+        break;
+      case "msteams":
+        registry.register(createMsteamsWebhookAdapter());
+        break;
+      case "line":
+        registry.register(createLineWebhookAdapter());
+        break;
+      case "matrix":
+        registry.register(createMatrixWebhookAdapter());
         break;
       default:
         registry.register(createGenericWebhookAdapter(channel.id));

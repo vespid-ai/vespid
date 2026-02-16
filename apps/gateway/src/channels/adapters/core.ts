@@ -118,6 +118,18 @@ function verifyHexHmac(input: {
   return safeEqual(provided, expected);
 }
 
+function verifyBase64Hmac(input: {
+  payload: unknown;
+  secret: string;
+  signature: string;
+  algorithm?: "sha1" | "sha256" | "sha512";
+}): boolean {
+  const algorithm = input.algorithm ?? "sha256";
+  const body = JSON.stringify(input.payload ?? {});
+  const expected = crypto.createHmac(algorithm, input.secret).update(body, "utf8").digest("base64");
+  return safeEqual(input.signature, expected);
+}
+
 function parseTimestampMs(value: unknown, fallback: Date): string {
   const numeric = readNumber(value);
   if (numeric === null) {
@@ -577,6 +589,124 @@ function createImessageEnvelope(input: ChannelIngressAdapterInput): ChannelInbou
   });
 }
 
+function createMsteamsEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const event = asObject(root.value) ?? root;
+  const from = asObject(event.from);
+  const conversation = asObject(event.conversation);
+  const recipient = asObject(event.recipient);
+  const entities = asArray(event.entities);
+
+  const text = pickString(event, ["text", "summary"]);
+  const conversationType = pickString(conversation, ["conversationType"]);
+  const isDirectMessage = conversationType === "personal" || readBoolean(event.isGroup) === false;
+
+  const botId = readString(input.query.botId) ?? pickString(recipient, ["id"]);
+  const mentionMatched =
+    entities.some((entity) => {
+      const entityObject = asObject(entity);
+      if (!entityObject) {
+        return false;
+      }
+      if (pickString(entityObject, ["type"]) !== "mention") {
+        return false;
+      }
+      const mentioned = asObject(entityObject.mentioned);
+      const mentionedId = pickString(mentioned, ["id"]);
+      return Boolean(botId) && mentionedId === botId;
+    }) || includesMention(text ?? "", unique([botId ? `<at>${botId}</at>` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId: pickString(from, ["id", "aadObjectId", "name"]),
+    conversationId: pickString(conversation, ["id"]),
+    providerMessageId: pickString(event, ["id", "activityId"]),
+    senderDisplayName: pickString(from, ["name"]),
+    receivedAt: pickString(event, ["timestamp"]) ?? input.receivedAt.toISOString(),
+    isDirectMessage,
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createLineEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const firstEvent = asObject(asArray(root.events)[0]);
+  if (!firstEvent) {
+    return null;
+  }
+
+  const message = asObject(firstEvent.message);
+  const source = asObject(firstEvent.source);
+
+  const text = pickString(message, ["text"]);
+  const sourceType = pickString(source, ["type"]);
+  const senderId = pickString(source, ["userId", "groupId", "roomId"]);
+  const conversationId = pickString(source, ["groupId", "roomId", "userId"]) ?? senderId;
+  const mentionCandidates = asArray(asObject(message?.mention)?.mentions)
+    .map((item) => asObject(item))
+    .filter((item): item is RecordObject => item !== null)
+    .map((item) => asObject(item.mentioned))
+    .filter((item): item is RecordObject => item !== null)
+    .map((item) => pickString(item, ["userId"]))
+    .filter((value): value is string => Boolean(value));
+  const botUserId = readString(input.query.botUserId);
+  const mentionMatched =
+    mentionCandidates.some((id) => Boolean(botUserId) && id === botUserId) ||
+    includesMention(text ?? "", unique([botUserId ? `@${botUserId}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["id"]) ?? pickString(firstEvent, ["webhookEventId"]),
+    senderDisplayName: pickString(firstEvent, ["displayName"]),
+    receivedAt: parseTimestampMs(firstEvent.timestamp, input.receivedAt),
+    isDirectMessage: sourceType === "user",
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createMatrixEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const event = asObject(root.event) ?? root;
+  const content = asObject(event.content);
+  const text = pickString(content, ["body", "formatted_body", "text"]) ?? pickString(event, ["body", "text"]);
+  const senderId = pickString(event, ["sender", "user_id", "from"]);
+  const conversationId = pickString(event, ["room_id", "conversationId"]) ?? senderId;
+  const botUserId = readString(input.query.botUserId);
+  const mentionUserIds = asArray(asObject(content?.["m.mentions"])?.user_ids)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const mentionMatched =
+    mentionUserIds.some((id) => Boolean(botUserId) && id === botUserId) ||
+    includesMention(text ?? "", unique([botUserId, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(event, ["event_id", "id"]),
+    senderDisplayName: pickString(root, ["senderDisplayName"]),
+    receivedAt: parseTimestampMs(event.origin_server_ts ?? root.timestamp, input.receivedAt),
+    isDirectMessage: Boolean(conversationId?.startsWith("!dm:") || pickString(event, ["type"]) === "m.direct"),
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
 function validateSlackSignature(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
   const signingSecret = readString(input.accountMetadata.signingSecret);
   if (!signingSecret) {
@@ -831,6 +961,65 @@ export function createImessageWebhookAdapter(): ChannelIngressAdapter {
     },
     normalizeWebhook(input) {
       return createImessageEnvelope(input);
+    },
+  };
+}
+
+export function createMsteamsWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "msteams",
+    authenticateWebhook(input) {
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-msteams-token",
+        reason: "msteams_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createMsteamsEnvelope(input);
+    },
+  };
+}
+
+export function createLineWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "line",
+    authenticateWebhook(input) {
+      const secret = readString(input.accountMetadata.channelSecret);
+      if (!secret) {
+        return validateBearerOrHeaderToken(input, {
+          metadataKey: "ingressToken",
+          headerName: "x-line-token",
+          reason: "line_token_invalid",
+        });
+      }
+      const signature = readString(input.headers["x-line-signature"]);
+      if (!signature) {
+        return failed("line_signature_missing");
+      }
+      if (!verifyBase64Hmac({ payload: input.body, secret, signature })) {
+        return failed("line_signature_invalid");
+      }
+      return ok();
+    },
+    normalizeWebhook(input) {
+      return createLineEnvelope(input);
+    },
+  };
+}
+
+export function createMatrixWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "matrix",
+    authenticateWebhook(input) {
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-matrix-token",
+        reason: "matrix_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createMatrixEnvelope(input);
     },
   };
 }

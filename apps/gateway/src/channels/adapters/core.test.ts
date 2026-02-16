@@ -6,6 +6,9 @@ import {
   createGoogleChatWebhookAdapter,
   createImessageWebhookAdapter,
   createIrcWebhookAdapter,
+  createLineWebhookAdapter,
+  createMatrixWebhookAdapter,
+  createMsteamsWebhookAdapter,
   createSignalWebhookAdapter,
   createSlackWebhookAdapter,
   createTelegramWebhookAdapter,
@@ -263,13 +266,147 @@ describe("core channel adapters", () => {
     expect(envelope?.event).toBe("message.received");
   });
 
-  it("registers dedicated adapters for core8 and generic adapter for others", () => {
+  it("validates msteams token and normalizes mention message", () => {
+    const adapter = createMsteamsWebhookAdapter();
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor(
+        "msteams",
+        {
+          type: "message",
+          id: "teams-msg-1",
+          text: "<at>bot-1</at> deploy now",
+          from: { id: "29:user-1", name: "Alice" },
+          recipient: { id: "bot-1", name: "Vespid Bot" },
+          conversation: { id: "conv-1", conversationType: "channel" },
+          entities: [{ type: "mention", mentioned: { id: "bot-1", name: "Vespid Bot" } }],
+          timestamp: "2026-02-16T11:59:00.000Z",
+        },
+        {
+          headers: { "x-msteams-token": "teams-token" },
+          query: { botId: "bot-1" },
+        }
+      ),
+      accountMetadata: {
+        ingressToken: "teams-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(
+      inputFor(
+        "msteams",
+        {
+          type: "message",
+          id: "teams-msg-1",
+          text: "<at>bot-1</at> deploy now",
+          from: { id: "29:user-1", name: "Alice" },
+          recipient: { id: "bot-1", name: "Vespid Bot" },
+          conversation: { id: "conv-1", conversationType: "channel" },
+          entities: [{ type: "mention", mentioned: { id: "bot-1", name: "Vespid Bot" } }],
+          timestamp: "2026-02-16T11:59:00.000Z",
+        },
+        { query: { botId: "bot-1" } }
+      )
+    );
+    expect(envelope?.channelId).toBe("msteams");
+    expect(envelope?.event).toBe("message.mentioned");
+    expect(envelope?.conversationId).toBe("conv-1");
+  });
+
+  it("validates line signature and normalizes direct message", () => {
+    const adapter = createLineWebhookAdapter();
+    const body = {
+      destination: "Ubot",
+      events: [
+        {
+          type: "message",
+          timestamp: 1710000100000,
+          source: { type: "user", userId: "U123" },
+          message: { id: "line-msg-1", type: "text", text: "deploy now" },
+          webhookEventId: "line-event-1",
+        },
+      ],
+    };
+    const signature = crypto.createHmac("sha256", "line-secret").update(JSON.stringify(body), "utf8").digest("base64");
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("line", body, { headers: { "x-line-signature": signature } }),
+      accountMetadata: {
+        channelSecret: "line-secret",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("line", body));
+    expect(envelope?.channelId).toBe("line");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.senderId).toBe("U123");
+  });
+
+  it("validates matrix token and normalizes room mention", () => {
+    const adapter = createMatrixWebhookAdapter();
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor(
+        "matrix",
+        {
+          event_id: "$abc",
+          sender: "@alice:example.org",
+          room_id: "!room:example.org",
+          origin_server_ts: 1710000110000,
+          content: {
+            body: "@vespid deploy now",
+            "m.mentions": { user_ids: ["@bot:example.org"] },
+          },
+        },
+        {
+          headers: { "x-matrix-token": "matrix-token" },
+          query: { botUserId: "@bot:example.org" },
+        }
+      ),
+      accountMetadata: {
+        ingressToken: "matrix-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(
+      inputFor(
+        "matrix",
+        {
+          event_id: "$abc",
+          sender: "@alice:example.org",
+          room_id: "!room:example.org",
+          origin_server_ts: 1710000110000,
+          content: {
+            body: "@vespid deploy now",
+            "m.mentions": { user_ids: ["@bot:example.org"] },
+          },
+        },
+        { query: { botUserId: "@bot:example.org" } }
+      )
+    );
+    expect(envelope?.channelId).toBe("matrix");
+    expect(envelope?.event).toBe("message.mentioned");
+    expect(envelope?.conversationId).toBe("!room:example.org");
+  });
+
+  it("registers dedicated adapters for core8 + selected extended and generic adapter for others", () => {
     const registry = createDefaultChannelIngressAdapterRegistry();
     const slackAdapter = registry.get("slack");
+    const msteamsAdapter = registry.get("msteams");
+    const lineAdapter = registry.get("line");
+    const matrixAdapter = registry.get("matrix");
     const webchatAdapter = registry.get("webchat");
 
     expect(slackAdapter).not.toBeNull();
     expect(typeof slackAdapter?.authenticateWebhook).toBe("function");
+    expect(msteamsAdapter).not.toBeNull();
+    expect(typeof msteamsAdapter?.authenticateWebhook).toBe("function");
+    expect(lineAdapter).not.toBeNull();
+    expect(typeof lineAdapter?.authenticateWebhook).toBe("function");
+    expect(matrixAdapter).not.toBeNull();
+    expect(typeof matrixAdapter?.authenticateWebhook).toBe("function");
     expect(webchatAdapter).not.toBeNull();
     expect(webchatAdapter?.authenticateWebhook).toBeUndefined();
   });
