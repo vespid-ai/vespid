@@ -14,8 +14,10 @@ import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import {
   useApprovePairingRequest,
   useChannelAccount,
+  useChannelCatalog,
   useChannelAllowlistEntries,
   useChannelAccountStatus,
+  useChannelTestSend,
   useChannelPairingRequests,
   useCreateChannelSecret,
   useDeleteChannelAllowlistEntry,
@@ -35,6 +37,7 @@ export default function ChannelAccountDetailPage() {
 
   const orgId = useActiveOrgId();
   const accountQuery = useChannelAccount(orgId, accountId || null);
+  const catalogQuery = useChannelCatalog();
   const statusQuery = useChannelAccountStatus(orgId, accountId || null);
   const allowlistQuery = useChannelAllowlistEntries(orgId, accountId || null);
   const pairingQuery = useChannelPairingRequests(orgId, { accountId, status: "pending" });
@@ -42,6 +45,7 @@ export default function ChannelAccountDetailPage() {
   const updateAccount = useUpdateChannelAccount(orgId, accountId || null);
   const createSecret = useCreateChannelSecret(orgId, accountId || null);
   const runAction = useRunChannelAccountAction(orgId, accountId || null);
+  const testSend = useChannelTestSend(orgId, accountId || null);
   const deleteAccount = useDeleteChannelAccount(orgId);
   const putAllowlist = usePutChannelAllowlistEntry(orgId, accountId || null);
   const deleteAllowlist = useDeleteChannelAllowlistEntry(orgId, accountId || null);
@@ -49,9 +53,11 @@ export default function ChannelAccountDetailPage() {
   const rejectPairing = useRejectPairingRequest(orgId);
 
   const account = accountQuery.data?.account ?? null;
+  const selectedChannel = catalogQuery.data?.channels.find((channel) => channel.id === account?.channelId) ?? null;
   const status = statusQuery.data?.status ?? null;
   const pendingRequests = pairingQuery.data?.requests ?? [];
   const allowlistEntries = allowlistQuery.data?.entries ?? [];
+  const docsBaseUrl = "https://docs.openclaw.ai";
 
   const [displayName, setDisplayName] = useState("");
   const [webhookUrl, setWebhookUrl] = useState("");
@@ -64,6 +70,9 @@ export default function ChannelAccountDetailPage() {
   const [secretValue, setSecretValue] = useState("");
   const [allowlistScope, setAllowlistScope] = useState("sender");
   const [allowlistSubject, setAllowlistSubject] = useState("");
+  const [testConversationId, setTestConversationId] = useState("");
+  const [testText, setTestText] = useState("health check");
+  const [testReplyToProviderMessageId, setTestReplyToProviderMessageId] = useState("");
 
   useEffect(() => {
     if (!account) {
@@ -77,6 +86,20 @@ export default function ChannelAccountDetailPage() {
     setRequireMentionInGroup(account.requireMentionInGroup);
     setMetadataRaw(JSON.stringify(account.metadata ?? {}, null, 2));
   }, [account]);
+
+  useEffect(() => {
+    if (testConversationId.trim().length > 0) {
+      return;
+    }
+    const firstConversationId = status?.latestEvents?.find((event) => event.conversationId)?.conversationId ?? "";
+    if (firstConversationId) {
+      setTestConversationId(firstConversationId);
+      return;
+    }
+    if (account?.accountKey) {
+      setTestConversationId(`dm:${account.accountKey}`);
+    }
+  }, [status?.latestEvents, account?.accountKey, testConversationId]);
 
   const createdAt = useMemo(() => {
     if (!account?.createdAt) {
@@ -183,6 +206,32 @@ export default function ChannelAccountDetailPage() {
     try {
       await deleteAllowlist.mutateAsync({ scope, subject });
       toast.success(t("channels.detail.allowlistDeleted"));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+    }
+  }
+
+  async function onTestSend() {
+    const conversationId = testConversationId.trim();
+    const text = testText.trim();
+    if (!conversationId || !text) {
+      toast.error(t("channels.errors.testSendRequired"));
+      return;
+    }
+    try {
+      const response = await testSend.mutateAsync({
+        conversationId,
+        text,
+        ...(testReplyToProviderMessageId.trim()
+          ? { replyToProviderMessageId: testReplyToProviderMessageId.trim() }
+          : {}),
+      });
+      toast.success(
+        t("channels.detail.testSendDone", {
+          status: response.result.status,
+          delivered: response.result.delivered ? "true" : "false",
+        })
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("common.unknownError"));
     }
@@ -323,6 +372,45 @@ export default function ChannelAccountDetailPage() {
             <div className="text-muted">{t("common.created")}</div>
             <div className="font-mono">{createdAt}</div>
           </div>
+          {selectedChannel ? (
+            <>
+              <div className="grid gap-1 text-sm md:grid-cols-2">
+                <div className="text-muted">{t("channels.detail.onboardingMode")}</div>
+                <div className="font-mono">{selectedChannel.onboardingMode}</div>
+              </div>
+              <div className="grid gap-1 text-sm md:grid-cols-2">
+                <div className="text-muted">{t("channels.detail.connectionModel")}</div>
+                <div className="font-mono">
+                  {selectedChannel.supportsWebhook
+                    ? "webhook"
+                    : selectedChannel.supportsSocketMode
+                      ? "socket"
+                      : selectedChannel.supportsLongPolling
+                        ? "polling"
+                        : "custom"}
+                </div>
+              </div>
+              {Array.isArray(selectedChannel.runtimeDependencies) && selectedChannel.runtimeDependencies.length > 0 ? (
+                <div className="grid gap-1 text-sm md:grid-cols-2">
+                  <div className="text-muted">{t("channels.create.dependencies")}</div>
+                  <div className="font-mono">{selectedChannel.runtimeDependencies.join(", ")}</div>
+                </div>
+              ) : null}
+              <div className="grid gap-1 text-sm md:grid-cols-2">
+                <div className="text-muted">{t("channels.detail.docs")}</div>
+                <div>
+                  <a
+                    href={`${docsBaseUrl}${selectedChannel.docsPath}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-xs underline underline-offset-2"
+                  >
+                    {`${docsBaseUrl}${selectedChannel.docsPath}`}
+                  </a>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           <Separator />
 
@@ -332,6 +420,34 @@ export default function ChannelAccountDetailPage() {
             <Button size="sm" variant="outline" onClick={() => void onRunAction("reconnect")}>reconnect</Button>
             <Button size="sm" variant="outline" onClick={() => void onRunAction("login")}>login</Button>
             <Button size="sm" variant="outline" onClick={() => void onRunAction("logout")}>logout</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("channels.detail.testSendTitle")}</CardTitle>
+          <CardDescription>{t("channels.detail.testSendSubtitle")}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-2">
+              <Label>{t("channels.detail.testSendConversation")}</Label>
+              <Input value={testConversationId} onChange={(e) => setTestConversationId(e.target.value)} />
+            </div>
+            <div className="grid gap-2">
+              <Label>{t("channels.detail.testSendReplyTo")}</Label>
+              <Input value={testReplyToProviderMessageId} onChange={(e) => setTestReplyToProviderMessageId(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("channels.detail.testSendText")}</Label>
+            <Textarea value={testText} onChange={(e) => setTestText(e.target.value)} rows={3} />
+          </div>
+          <div className="flex justify-end">
+            <Button variant="accent" onClick={() => void onTestSend()} disabled={testSend.isPending}>
+              {t("channels.detail.testSendButton")}
+            </Button>
           </div>
         </CardContent>
       </Card>

@@ -1019,7 +1019,8 @@
       "subtitle": "每个账号均为组织作用域。入站租户上下文仅通过账号映射解析。",
       "button": "创建账号",
       "created": "渠道账号已创建。",
-      "dependencies": "依赖"
+      "dependencies": "依赖",
+      "docs": "打开渠道文档"
     },
     "fields": {
       "channel": "渠道",
@@ -1073,6 +1074,16 @@
       "createSecret": "创建密钥",
       "secretsCount": "密钥数量",
       "pendingPairings": "待处理配对",
+      "onboardingMode": "接入模式",
+      "connectionModel": "连接模型",
+      "docs": "文档",
+      "testSendTitle": "测试发信",
+      "testSendSubtitle": "通过网关渠道运行时发送一条测试出站消息。",
+      "testSendConversation": "会话 ID",
+      "testSendReplyTo": "回复目标消息 ID（可选）",
+      "testSendText": "消息内容",
+      "testSendButton": "发送测试消息",
+      "testSendDone": "测试发信完成（状态: {status}, delivered: {delivered}）。",
       "eventsTitle": "最近事件",
       "eventsSubtitle": "最新标准化渠道运行事件。",
       "eventsEmpty": "暂无事件。",
@@ -1093,7 +1104,9 @@
     "errors": {
       "accountKeyRequired": "账号键不能为空。",
       "secretRequired": "密钥名和值不能为空。",
-      "allowlistRequired": "白名单范围和主体不能为空。"
+      "allowlistRequired": "白名单范围和主体不能为空。",
+      "metadataRequired": "必填元数据字段缺失: {key}。",
+      "testSendRequired": "会话 ID 和消息内容不能为空。"
     }
   }
 }

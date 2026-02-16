@@ -1,0 +1,121 @@
+name: Channels Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vespid
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/vespid
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 3001
+      API_HOST: 127.0.0.1
+      GATEWAY_PORT: 3002
+      GATEWAY_HOST: 127.0.0.1
+      GATEWAY_HTTP_URL: http://127.0.0.1:3002
+      API_HTTP_URL: http://127.0.0.1:3001
+      AUTH_TOKEN_SECRET: ci-token-secret
+      INTERNAL_API_SERVICE_TOKEN: ci-gateway-token
+      GATEWAY_SERVICE_TOKEN: ci-gateway-token
+      SECRETS_KEK_ID: ci-kek-v1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Generate secrets KEK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SECRETS_KEK_BASE64="$(node -p 'require("crypto").randomBytes(32).toString("base64")')"
+          echo "SECRETS_KEK_BASE64=${SECRETS_KEK_BASE64}" >> "$GITHUB_ENV"
+
+      - name: Apply migrations
+        run: pnpm migrate
+
+      - name: Start API and Gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @vespid/api dev > /tmp/vespid-api.log 2>&1 &
+          echo $! > /tmp/vespid-api.pid
+          pnpm --filter @vespid/gateway dev > /tmp/vespid-gateway.log 2>&1 &
+          echo $! > /tmp/vespid-gateway.pid
+
+      - name: Wait for services
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..90}; do
+            if curl -fsS "http://127.0.0.1:3001/healthz" >/dev/null && curl -fsS "http://127.0.0.1:3002/healthz" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API/Gateway failed to become healthy in time"
+          exit 1
+
+      - name: Run channel smoke matrix
+        env:
+          CHANNEL_SMOKE_API_BASE_URL: http://127.0.0.1:3001
+          CHANNEL_SMOKE_GATEWAY_BASE_URL: http://127.0.0.1:3002
+        run: pnpm smoke:channels
+
+      - name: Dump API and gateway logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          echo "=== API log ==="
+          tail -n 200 /tmp/vespid-api.log || true
+          echo "=== Gateway log ==="
+          tail -n 200 /tmp/vespid-gateway.log || true
+
+      - name: Stop API and gateway
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f /tmp/vespid-api.pid ]; then kill "$(cat /tmp/vespid-api.pid)" || true; fi
+          if [ -f /tmp/vespid-gateway.pid ]; then kill "$(cat /tmp/vespid-gateway.pid)" || true; fi

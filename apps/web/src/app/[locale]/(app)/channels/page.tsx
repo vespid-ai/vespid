@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -37,6 +37,7 @@ export default function ChannelsPage() {
   const [dmPolicy, setDmPolicy] = useState<"pairing" | "allowlist" | "open" | "disabled">("pairing");
   const [groupPolicy, setGroupPolicy] = useState<"allowlist" | "open" | "disabled">("allowlist");
   const [requireMentionInGroup, setRequireMentionInGroup] = useState<boolean>(true);
+  const [metadataInputs, setMetadataInputs] = useState<Record<string, string>>({});
 
   const accountsQuery = useChannelAccounts(orgId);
   const pairingQuery = useChannelPairingRequests(orgId, { status: "pending" });
@@ -49,6 +50,38 @@ export default function ChannelsPage() {
   const accounts = accountsQuery.data?.accounts ?? [];
   const pendingRequests = pairingQuery.data?.requests ?? [];
   const selectedChannel = channels.find((item) => item.id === channelId) ?? null;
+  const docsBaseUrl = "https://docs.openclaw.ai";
+
+  const selectedMetadataSpecs = selectedChannel?.metadataSpecs ?? [];
+
+  function initializeMetadataInputs(nextChannelId: string): Record<string, string> {
+    const selected = channels.find((channel) => channel.id === nextChannelId);
+    if (!selected || !Array.isArray(selected.metadataSpecs)) {
+      return {};
+    }
+    const next: Record<string, string> = {};
+    for (const spec of selected.metadataSpecs) {
+      next[spec.key] = "";
+    }
+    return next;
+  }
+
+  useEffect(() => {
+    if (channels.length === 0) {
+      return;
+    }
+    if (!channels.some((channel) => channel.id === channelId)) {
+      const first = channels[0]!;
+      setChannelId(first.id);
+      setDmPolicy((first.defaultDmPolicy as any) ?? "pairing");
+      setRequireMentionInGroup(Boolean(first.defaultRequireMentionInGroup));
+      setMetadataInputs(initializeMetadataInputs(first.id));
+      return;
+    }
+    if (Object.keys(metadataInputs).length === 0 && selectedMetadataSpecs.length > 0) {
+      setMetadataInputs(initializeMetadataInputs(channelId));
+    }
+  }, [channels, channelId, metadataInputs, selectedMetadataSpecs.length]);
 
   const channelById = useMemo(() => {
     const map = new Map<string, { label: string; category: string }>();
@@ -69,6 +102,17 @@ export default function ChannelsPage() {
       return;
     }
     try {
+      for (const spec of selectedMetadataSpecs) {
+        if (spec.required && (metadataInputs[spec.key] ?? "").trim().length === 0) {
+          toast.error(t("channels.errors.metadataRequired", { key: spec.key }));
+          return;
+        }
+      }
+      const metadata = Object.fromEntries(
+        Object.entries(metadataInputs)
+          .map(([key, value]) => [key, value.trim()] as const)
+          .filter(([, value]) => value.length > 0)
+      );
       const payload: {
         channelId: string;
         accountKey: string;
@@ -78,6 +122,7 @@ export default function ChannelsPage() {
         groupPolicy: "allowlist" | "open" | "disabled";
         requireMentionInGroup: boolean;
         webhookUrl?: string;
+        metadata?: Record<string, string>;
       } = {
         channelId,
         accountKey: trimmedKey,
@@ -87,12 +132,14 @@ export default function ChannelsPage() {
         requireMentionInGroup,
         ...(displayName.trim() ? { displayName: displayName.trim() } : {}),
         ...(webhookUrl.trim() ? { webhookUrl: webhookUrl.trim() } : {}),
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       };
       await createAccount.mutateAsync(payload);
       toast.success(t("channels.create.created"));
       setAccountKey("");
       setDisplayName("");
       setWebhookUrl("");
+      setMetadataInputs(initializeMetadataInputs(channelId));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("common.unknownError"));
     }
@@ -135,12 +182,14 @@ export default function ChannelsPage() {
               <select
                 value={channelId}
                 onChange={(e) => {
-                  setChannelId(e.target.value);
-                  const selected = channels.find((channel) => channel.id === e.target.value);
+                  const nextChannelId = e.target.value;
+                  setChannelId(nextChannelId);
+                  const selected = channels.find((channel) => channel.id === nextChannelId);
                   if (selected) {
                     setDmPolicy((selected.defaultDmPolicy as any) ?? "pairing");
                     setRequireMentionInGroup(Boolean(selected.defaultRequireMentionInGroup));
                   }
+                  setMetadataInputs(initializeMetadataInputs(nextChannelId));
                 }}
                 className="h-10 rounded-xl border border-borderSubtle bg-panel/45 px-3 text-sm"
               >
@@ -159,25 +208,55 @@ export default function ChannelsPage() {
           </div>
 
           {selectedChannel ? (
-            <div className="rounded-xl border border-borderSubtle bg-panel/35 p-3 text-xs text-muted">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">{selectedChannel.category}</span>
-                <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">
-                  {selectedChannel.supportsWebhook ? "webhook" : selectedChannel.supportsSocketMode ? "socket" : "polling"}
-                </span>
-                {selectedChannel.requiresExternalRuntime ? (
-                  <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">external-runtime</span>
-                ) : null}
-              </div>
-              {Array.isArray((selectedChannel as any).runtimeDependencies) && (selectedChannel as any).runtimeDependencies.length > 0 ? (
+              <div className="rounded-xl border border-borderSubtle bg-panel/35 p-3 text-xs text-muted">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">{selectedChannel.category}</span>
+                  <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">
+                    {selectedChannel.supportsWebhook ? "webhook" : selectedChannel.supportsSocketMode ? "socket" : "polling"}
+                  </span>
+                  <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">{selectedChannel.onboardingMode}</span>
+                  {selectedChannel.requiresExternalRuntime ? (
+                    <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">external-runtime</span>
+                  ) : null}
+                </div>
+              {Array.isArray(selectedChannel.runtimeDependencies) && selectedChannel.runtimeDependencies.length > 0 ? (
                 <div className="mt-2">
                   {t("channels.create.dependencies")}:{" "}
-                  <span className="font-mono">{((selectedChannel as any).runtimeDependencies as string[]).join(", ")}</span>
+                  <span className="font-mono">{selectedChannel.runtimeDependencies.join(", ")}</span>
                 </div>
               ) : null}
-              {Array.isArray((selectedChannel as any).onboardingHints) && (selectedChannel as any).onboardingHints.length > 0 ? (
-                <div className="mt-1">{((selectedChannel as any).onboardingHints as string[])[0]}</div>
+              {Array.isArray(selectedChannel.onboardingHints) && selectedChannel.onboardingHints.length > 0 ? (
+                <div className="mt-1">{selectedChannel.onboardingHints[0]}</div>
               ) : null}
+                <div className="mt-1">
+                  <a
+                    href={`${docsBaseUrl}${selectedChannel.docsPath}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    {t("channels.create.docs")}
+                  </a>
+                </div>
+              </div>
+          ) : null}
+
+          {selectedMetadataSpecs.length > 0 ? (
+            <div className="grid gap-3 rounded-xl border border-borderSubtle bg-panel/35 p-3 md:grid-cols-2">
+              {selectedMetadataSpecs.map((spec) => (
+                <div key={spec.key} className="grid gap-2">
+                  <Label>
+                    {spec.label}
+                    {spec.required ? " *" : ""}
+                  </Label>
+                  <Input
+                    value={metadataInputs[spec.key] ?? ""}
+                    onChange={(e) => setMetadataInputs((current) => ({ ...current, [spec.key]: e.target.value }))}
+                    placeholder={spec.placeholder ?? spec.key}
+                  />
+                  {spec.description ? <div className="text-xs text-muted">{spec.description}</div> : null}
+                </div>
+              ))}
             </div>
           ) : null}
 

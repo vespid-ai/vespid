@@ -60,6 +60,7 @@ Recommended operational model:
 - `GET /v1/meta/channels`
 - `GET /v1/orgs/:orgId/channels/accounts`
 - `GET /v1/orgs/:orgId/channels/accounts/:accountId/status`
+- `POST /v1/orgs/:orgId/channels/accounts/:accountId/test-send`
 
 ### Gateway checks
 
@@ -118,6 +119,10 @@ Automated coverage for channel runtime currently includes:
     - `tests/channels-auth.integration.test.ts`
 - Operator smoke execution script:
   - `scripts/channel-smoke-matrix.ts`
+- CI smoke gate:
+  - `.github/workflows/channels-smoke.yml`
+  - Runs nightly and via manual dispatch.
+  - Boots API + Gateway + Postgres + Redis, then executes `pnpm smoke:channels`.
 
 ### Runtime event sources
 

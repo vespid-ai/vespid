@@ -51,6 +51,14 @@ type SessionReplyInput = {
   text: string;
 };
 
+type SessionReplyResult = {
+  delivered: boolean;
+  status: "accepted" | "dead_letter" | "failed" | "channel_disabled" | "account_unavailable";
+  attemptCount: number;
+  providerMessageId: string;
+  error: string | null;
+};
+
 type SessionRoute = {
   sessionId: string;
   userId: string;
@@ -180,7 +188,7 @@ async function postOutboundWebhook(input: {
 
 export type ChannelRuntimeManager = {
   handleWebhook(input: ChannelWebhookInput): Promise<ChannelWebhookResult>;
-  sendSessionReply(input: SessionReplyInput): Promise<void>;
+  sendSessionReply(input: SessionReplyInput): Promise<SessionReplyResult>;
 };
 
 export function createChannelRuntimeManager(input: ManagerDeps): ChannelRuntimeManager {
@@ -690,9 +698,16 @@ export function createChannelRuntimeManager(input: ManagerDeps): ChannelRuntimeM
     };
   }
 
-  async function sendSessionReply(payload: SessionReplyInput): Promise<void> {
+  async function sendSessionReply(payload: SessionReplyInput): Promise<SessionReplyResult> {
+    const providerMessageId = `session:${payload.sessionId}:${payload.sessionEventSeq}`;
     if (!isChannelRuntimeEnabled(payload.source.channelId)) {
-      return;
+      return {
+        delivered: false,
+        status: "channel_disabled",
+        attemptCount: 0,
+        providerMessageId,
+        error: "CHANNEL_DISABLED",
+      };
     }
 
     const account = await withTenantContext(
@@ -706,10 +721,15 @@ export function createChannelRuntimeManager(input: ManagerDeps): ChannelRuntimeM
     );
 
     if (!account || !account.enabled) {
-      return;
+      return {
+        delivered: false,
+        status: "account_unavailable",
+        attemptCount: 0,
+        providerMessageId,
+        error: "ACCOUNT_UNAVAILABLE",
+      };
     }
 
-    const providerMessageId = `session:${payload.sessionId}:${payload.sessionEventSeq}`;
     const webhookUrl = parseString(account.webhookUrl);
 
     const outboundPayload = {
@@ -726,7 +746,7 @@ export function createChannelRuntimeManager(input: ManagerDeps): ChannelRuntimeM
       generatedAt: new Date().toISOString(),
     };
 
-    let status = "queued";
+    let status: SessionReplyResult["status"] = "failed";
     let errorMessage: string | null = null;
     let attemptCount = 0;
     let delivered = false;
@@ -825,6 +845,14 @@ export function createChannelRuntimeManager(input: ManagerDeps): ChannelRuntimeM
         });
       }
     );
+
+    return {
+      delivered,
+      status,
+      attemptCount,
+      providerMessageId,
+      error: errorMessage,
+    };
   }
 
   return {

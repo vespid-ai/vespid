@@ -1019,7 +1019,8 @@
       "subtitle": "Each account is org-scoped. Inbound org context is resolved from account mapping only.",
       "button": "Create account",
       "created": "Channel account created.",
-      "dependencies": "Dependencies"
+      "dependencies": "Dependencies",
+      "docs": "Open channel docs"
     },
     "fields": {
       "channel": "Channel",
@@ -1073,6 +1074,16 @@
       "createSecret": "Create secret",
       "secretsCount": "Secret count",
       "pendingPairings": "Pending pairings",
+      "onboardingMode": "Onboarding mode",
+      "connectionModel": "Connection model",
+      "docs": "Docs",
+      "testSendTitle": "Test send",
+      "testSendSubtitle": "Send a test outbound message via gateway channel runtime.",
+      "testSendConversation": "Conversation ID",
+      "testSendReplyTo": "Reply-to provider message ID (optional)",
+      "testSendText": "Message text",
+      "testSendButton": "Send test message",
+      "testSendDone": "Test send completed (status: {status}, delivered: {delivered}).",
       "eventsTitle": "Recent events",
       "eventsSubtitle": "Latest normalized channel runtime events.",
       "eventsEmpty": "No events yet.",
@@ -1093,7 +1104,9 @@
     "errors": {
       "accountKeyRequired": "Account key is required.",
       "secretRequired": "Secret name and value are required.",
-      "allowlistRequired": "Allowlist scope and subject are required."
+      "allowlistRequired": "Allowlist scope and subject are required.",
+      "metadataRequired": "Metadata field is required: {key}.",
+      "testSendRequired": "Conversation ID and message text are required."
     }
   }
 }

@@ -608,7 +608,7 @@ describe("channel runtime manager", () => {
       serviceToken: "svc-token",
     });
 
-    await manager.sendSessionReply({
+    const result = await manager.sendSessionReply({
       organizationId: "org-1",
       sessionId: "session-1",
       sessionEventSeq: 203,
@@ -624,6 +624,9 @@ describe("channel runtime manager", () => {
       text: "ack",
     });
 
+    expect(result.delivered).toBe(false);
+    expect(result.status).toBe("dead_letter");
+    expect(result.error).toContain("CHANNEL_OUTBOUND_FAILED:500");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(dbMocks.createChannelMessage).toHaveBeenCalledWith(
       expect.anything(),

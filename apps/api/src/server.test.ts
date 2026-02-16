@@ -435,6 +435,115 @@ describe("api hardening foundation", () => {
     expect(after.entries.some((entry) => entry.scope === "sender" && entry.subject === "user-1")).toBe(false);
   });
 
+  it("proxies channel test-send to gateway internal endpoint", async () => {
+    const priorFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          result: {
+            delivered: true,
+            status: "accepted",
+            attemptCount: 1,
+            providerMessageId: "session:channel-test:1",
+            error: null,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+    globalThis.fetch = fetchMock as any;
+
+    try {
+      const ownerSignup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: {
+          email: `test-send-owner-${Date.now()}@example.com`,
+          password: "Password123",
+        },
+      });
+      expect(ownerSignup.statusCode).toBe(201);
+      const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+      const orgRes = await server.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: {
+          name: "Test Send Org",
+          slug: `test-send-org-${Date.now()}`,
+        },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+      const createAccount = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/channels/accounts`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          channelId: "telegram",
+          accountKey: "main",
+          displayName: "Telegram Main",
+          webhookUrl: "https://channel.example/outbound",
+        },
+      });
+      expect(createAccount.statusCode).toBe(201);
+      const account = (createAccount.json() as { account: { id: string; channelId: string; accountKey: string } }).account;
+
+      const sendRes = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/channels/accounts/${account.id}/test-send`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          conversationId: "dm:user-1",
+          text: "health check",
+        },
+      });
+      expect(sendRes.statusCode).toBe(200);
+      const sendBody = sendRes.json() as {
+        ok: boolean;
+        result: { delivered: boolean; status: string; attemptCount: number; providerMessageId: string; error: string | null };
+      };
+      expect(sendBody.ok).toBe(true);
+      expect(sendBody.result.delivered).toBe(true);
+      expect(sendBody.result.status).toBe("accepted");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const firstCall = fetchMock.mock.calls[0];
+      expect(firstCall).toBeDefined();
+      const [url, init] = firstCall as unknown as [string | URL, RequestInit | undefined];
+      const requestUrl = typeof url === "string" ? url : url.toString();
+      const requestInit = (init ?? {}) as RequestInit & { headers?: Record<string, string>; body?: string };
+      expect(requestUrl).toContain("/internal/v1/channels/test-send");
+      expect(requestInit.method).toBe("POST");
+      expect(requestInit.headers?.["x-gateway-token"]).toBe("dev-gateway-token");
+      const forwarded = JSON.parse(requestInit.body ?? "{}") as {
+        organizationId: string;
+        channelId: string;
+        accountId: string;
+        accountKey: string;
+        conversationId: string;
+        text: string;
+      };
+      expect(forwarded.organizationId).toBe(orgId);
+      expect(forwarded.channelId).toBe("telegram");
+      expect(forwarded.accountId).toBe(account.id);
+      expect(forwarded.accountKey).toBe(account.accountKey);
+      expect(forwarded.conversationId).toBe("dm:user-1");
+      expect(forwarded.text).toBe("health check");
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
   it("supports cookie refresh and revocable sessions", async () => {
     const signup = await server.inject({
       method: "POST",

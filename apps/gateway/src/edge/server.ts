@@ -239,6 +239,18 @@ const dispatchRequestSchema = z.object({
   timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
 });
 
+const internalChannelTestSendSchema = z
+  .object({
+    organizationId: z.string().uuid(),
+    channelId: channelIdSchema,
+    accountId: z.string().uuid(),
+    accountKey: z.string().min(1).max(120),
+    conversationId: z.string().min(1).max(240),
+    text: z.string().min(1).max(10_000),
+    replyToProviderMessageId: z.string().min(1).max(240).optional(),
+  })
+  .strict();
+
 export async function buildGatewayEdgeServer(input?: {
   pool?: ReturnType<typeof createPool>;
   serviceToken?: string;
@@ -481,6 +493,40 @@ export async function buildGatewayEdgeServer(input?: {
 
   // Start edge command loop in background.
   void startEdgeCommandLoop();
+
+  server.post("/internal/v1/channels/test-send", async (request, reply) => {
+    const token = request.headers["x-gateway-token"];
+    if (typeof token !== "string" || token.length === 0 || token !== serviceToken) {
+      return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid gateway service token" });
+    }
+
+    const parsed = internalChannelTestSendSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid channel test-send payload" });
+    }
+
+    const nowSeq = Date.now();
+    const result = await channelManager.sendSessionReply({
+      organizationId: parsed.data.organizationId,
+      sessionId: `channel-test:${parsed.data.accountId}`,
+      sessionEventSeq: nowSeq,
+      source: {
+        channelId: parsed.data.channelId,
+        accountId: parsed.data.accountId,
+        accountKey: parsed.data.accountKey,
+        conversationId: parsed.data.conversationId,
+        providerMessageId: parsed.data.replyToProviderMessageId ?? `channel-test:${nowSeq}`,
+        mentionMatched: false,
+        event: "message.dm",
+      },
+      text: parsed.data.text,
+    });
+
+    return reply.status(200).send({
+      ok: true,
+      result,
+    });
+  });
 
   server.post("/internal/v1/dispatch", async (request, reply) => {
     const token = request.headers["x-gateway-token"];

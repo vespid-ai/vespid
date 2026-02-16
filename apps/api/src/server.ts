@@ -129,6 +129,9 @@ const ORG_CONTEXT_ENFORCEMENT = z
   .parse(process.env.ORG_CONTEXT_ENFORCEMENT ?? "strict");
 const INTERNAL_API_SERVICE_TOKEN =
   process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? process.env.GATEWAY_SERVICE_TOKEN ?? "dev-gateway-token";
+const GATEWAY_HTTP_URL = process.env.GATEWAY_HTTP_URL ?? "http://localhost:3002";
+const GATEWAY_INTERNAL_SERVICE_TOKEN =
+  process.env.GATEWAY_SERVICE_TOKEN ?? process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? "dev-gateway-token";
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -328,6 +331,14 @@ const channelAllowlistEntrySchema = z
   .object({
     scope: z.string().min(1).max(64),
     subject: z.string().min(1).max(240),
+  })
+  .strict();
+
+const channelTestSendSchema = z
+  .object({
+    conversationId: z.string().min(1).max(240),
+    text: z.string().min(1).max(10_000),
+    replyToProviderMessageId: z.string().min(1).max(240).optional(),
   })
   .strict();
 
@@ -670,6 +681,14 @@ function orgAccessDenied(message = "You are not a member of this organization"):
 
 function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
   return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
+}
+
+function channelDeliveryUnavailable(message = "Channel delivery gateway is unavailable"): AppError {
+  return new AppError(503, { code: "CHANNEL_DELIVERY_UNAVAILABLE", message });
+}
+
+function channelDeliveryFailed(message = "Channel delivery request failed", details?: unknown): AppError {
+  return new AppError(502, { code: "CHANNEL_DELIVERY_FAILED", message, details });
 }
 
 function secretsNotConfigured(): AppError {
@@ -3631,6 +3650,90 @@ export async function buildServer(input?: {
       throw notFound("Channel account not found");
     }
     return { ok: true, action: action.data, account };
+  });
+
+  server.post("/v1/orgs/:orgId/channels/accounts/:accountId/test-send", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const parsed = channelTestSendSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid channel test-send payload", parsed.error.flatten());
+    }
+
+    const account = await store.getChannelAccountById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+    });
+    if (!account) {
+      throw notFound("Channel account not found");
+    }
+
+    const gatewayPayload = {
+      organizationId: orgContext.organizationId,
+      channelId: account.channelId,
+      accountId: account.id,
+      accountKey: account.accountKey,
+      conversationId: parsed.data.conversationId,
+      text: parsed.data.text,
+      ...(parsed.data.replyToProviderMessageId ? { replyToProviderMessageId: parsed.data.replyToProviderMessageId } : {}),
+    };
+
+    let gatewayResponse: Response;
+    try {
+      gatewayResponse = await fetch(new URL("/internal/v1/channels/test-send", GATEWAY_HTTP_URL).toString(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-gateway-token": GATEWAY_INTERNAL_SERVICE_TOKEN,
+        },
+        body: JSON.stringify(gatewayPayload),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw channelDeliveryUnavailable(error instanceof Error ? error.message : "Gateway request failed");
+    }
+
+    if (!gatewayResponse.ok) {
+      const body = await gatewayResponse.text();
+      throw channelDeliveryFailed(`Gateway returned ${gatewayResponse.status} for channel test-send`, {
+        status: gatewayResponse.status,
+        body: body.slice(0, 500),
+      });
+    }
+
+    let gatewayJson: unknown = null;
+    try {
+      gatewayJson = await gatewayResponse.json();
+    } catch {
+      throw channelDeliveryFailed("Gateway returned non-JSON response for channel test-send");
+    }
+
+    const gatewayResult = z
+      .object({
+        ok: z.boolean(),
+        result: z.object({
+          delivered: z.boolean(),
+          status: z.enum(["accepted", "dead_letter", "failed", "channel_disabled", "account_unavailable"]),
+          attemptCount: z.number().int().min(0),
+          providerMessageId: z.string().min(1),
+          error: z.string().nullable(),
+        }),
+      })
+      .safeParse(gatewayJson);
+    if (!gatewayResult.success) {
+      throw channelDeliveryFailed("Gateway returned invalid channel test-send payload", gatewayResult.error.flatten());
+    }
+
+    return gatewayResult.data;
   });
 
   server.get("/v1/orgs/:orgId/channels/pairing/requests", async (request) => {

@@ -6,12 +6,22 @@ export type ChannelDefinition = {
   label: string;
   category: "core" | "extended" | string;
   docsPath: string;
+  onboardingMode: "oauth" | "webhook" | "token" | "qr" | "daemon" | "socket" | string;
   requiresExternalRuntime: boolean;
   defaultDmPolicy: "pairing" | "allowlist" | "open" | "disabled" | string;
   defaultRequireMentionInGroup: boolean;
   supportsWebhook: boolean;
   supportsLongPolling: boolean;
   supportsSocketMode: boolean;
+  metadataSpecs?: Array<{
+    key: string;
+    label: string;
+    required: boolean;
+    placeholder?: string;
+    description?: string;
+  }>;
+  runtimeDependencies?: string[];
+  onboardingHints?: string[];
 };
 
 export type ChannelAccount = {
@@ -79,6 +89,17 @@ export type ChannelAccountStatusPayload = {
   pendingPairings: number;
   allowlistCount: number;
   latestEvents: ChannelEvent[];
+};
+
+export type ChannelTestSendResult = {
+  ok: boolean;
+  result: {
+    delivered: boolean;
+    status: "accepted" | "dead_letter" | "failed" | "channel_disabled" | "account_unavailable";
+    attemptCount: number;
+    providerMessageId: string;
+    error: string | null;
+  };
 };
 
 export function useChannelCatalog() {
@@ -279,6 +300,22 @@ export function useRunChannelAccountAction(orgId: string | null, accountId: stri
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["channelAccounts", orgId] });
       await queryClient.invalidateQueries({ queryKey: ["channelAccount", orgId, accountId] });
+      await queryClient.invalidateQueries({ queryKey: ["channelAccountStatus", orgId, accountId] });
+    },
+  });
+}
+
+export function useChannelTestSend(orgId: string | null, accountId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { conversationId: string; text: string; replyToProviderMessageId?: string }) => {
+      return apiFetchJson<ChannelTestSendResult>(
+        `/v1/orgs/${orgId}/channels/accounts/${accountId}/test-send`,
+        { method: "POST", body: JSON.stringify(input) },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["channelAccountStatus", orgId, accountId] });
     },
   });
