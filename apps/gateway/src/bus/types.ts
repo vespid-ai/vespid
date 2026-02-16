@@ -1,4 +1,5 @@
 import type {
+  ChannelSessionSource,
   GatewayBrainSessionEventV2,
   GatewayDispatchRequest,
   GatewayDispatchResponse,
@@ -23,6 +24,8 @@ export type EdgeToBrainRequest =
       sessionId: string;
       // The persisted seq for the user_message event (used for idempotency/debugging).
       userEventSeq: number;
+      originEdgeId?: string;
+      source?: ChannelSessionSource;
     }
   | {
       type: "executor_result";
@@ -50,4 +53,12 @@ export type BrainToEdgeCommand =
       type: "workflow_reply";
       requestId: string;
       response: GatewayDispatchResponse;
+    }
+  | {
+      type: "channel_outbound";
+      organizationId: string;
+      sessionId: string;
+      sessionEventSeq: number;
+      source: ChannelSessionSource;
+      text: string;
     };

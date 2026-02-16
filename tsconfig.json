@@ -9,6 +9,7 @@
     { "path": "./apps/node-agent" },
     { "path": "./packages/db" },
     { "path": "./packages/shared" },
+    { "path": "./packages/channels" },
     { "path": "./packages/agent-runtime" },
     { "path": "./packages/workflow" },
     { "path": "./packages/connectors" },

@@ -15,7 +15,8 @@
     "toolsets": "工具集",
     "auth": "登录",
     "org": "组织",
-    "openById": "按 ID 打开"
+    "openById": "按 ID 打开",
+    "channels": "渠道"
   },
   "common": {
     "search": "搜索",
@@ -1008,6 +1009,91 @@
       "copyright": "© 2026 Vespid. 保留所有权利。",
       "terms": "条款",
       "privacy": "隐私"
+    }
+  },
+  "channels": {
+    "title": "渠道",
+    "subtitle": "管理组织级渠道账号，并启用安全的会话与工作流路由。",
+    "create": {
+      "title": "创建渠道账号",
+      "subtitle": "每个账号均为组织作用域。入站租户上下文仅通过账号映射解析。",
+      "button": "创建账号",
+      "created": "渠道账号已创建。",
+      "dependencies": "依赖"
+    },
+    "fields": {
+      "channel": "渠道",
+      "accountKey": "账号键",
+      "displayName": "显示名称",
+      "webhookUrl": "Webhook URL（可选）",
+      "dmPolicy": "私聊策略",
+      "groupPolicy": "群组策略",
+      "enabled": "启用状态",
+      "requireMentionInGroup": "群组需提及",
+      "metadata": "元数据（JSON）"
+    },
+    "status": {
+      "enabled": "已启用",
+      "disabled": "已禁用"
+    },
+    "security": {
+      "groupMentionHint": "开启后，群组消息必须提及机器人才会被路由。"
+    },
+    "accounts": {
+      "title": "渠道账号",
+      "subtitle": "当前组织下的全部账号。",
+      "empty": "暂无渠道账号。",
+      "accountKey": "账号键",
+      "state": "状态",
+      "open": "打开"
+    },
+    "pairing": {
+      "title": "配对请求",
+      "subtitle": "审批或拒绝待处理的私聊配对请求。",
+      "empty": "暂无待处理配对请求。",
+      "requester": "请求人",
+      "code": "配对码",
+      "expiresAt": "过期时间",
+      "approve": "批准",
+      "reject": "拒绝",
+      "approved": "配对请求已批准。",
+      "rejected": "配对请求已拒绝。"
+    },
+    "detail": {
+      "title": "渠道账号",
+      "subtitle": "配置运行时安全策略、密钥与运维动作。",
+      "configTitle": "配置",
+      "configSubtitle": "更新渠道策略与账号元数据。",
+      "runtimeTitle": "运行状态",
+      "runtimeSubtitle": "当前健康状态与运维动作。",
+      "secretsTitle": "密钥",
+      "secretsSubtitle": "新增或轮换账号密钥，不返回明文。",
+      "secretName": "密钥名",
+      "secretValue": "密钥值",
+      "createSecret": "创建密钥",
+      "secretsCount": "密钥数量",
+      "pendingPairings": "待处理配对",
+      "eventsTitle": "最近事件",
+      "eventsSubtitle": "最新标准化渠道运行事件。",
+      "eventsEmpty": "暂无事件。",
+      "saved": "渠道账号已保存。",
+      "secretCreated": "密钥已创建。",
+      "actionDone": "动作已执行：{action}。",
+      "deleted": "渠道账号已删除。",
+      "allowlistTitle": "白名单",
+      "allowlistSubtitle": "管理安全门控使用的 sender/group/conversation 白名单条目。",
+      "allowlistScope": "范围",
+      "allowlistSubject": "主体",
+      "allowlistAdd": "添加条目",
+      "allowlistEmpty": "暂无白名单条目。",
+      "allowlistSaved": "白名单条目已保存。",
+      "allowlistDeleted": "白名单条目已删除。",
+      "allowlistCount": "白名单条目数"
+    },
+    "errors": {
+      "accountKeyRequired": "账号键不能为空。",
+      "secretRequired": "密钥名和值不能为空。",
+      "allowlistRequired": "白名单范围和主体不能为空。"
     }
   }
 }

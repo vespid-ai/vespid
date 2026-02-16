@@ -1,5 +1,6 @@
 import type {
   AgentSkillBundle,
+  ChannelId,
   ExecutorSelectorV1,
   LlmProviderApiKind,
   LlmProviderId,
@@ -113,7 +114,7 @@ export type WorkflowRunRecord = {
   id: string;
   organizationId: string;
   workflowId: string;
-  triggerType: "manual";
+  triggerType: WorkflowRunTriggerType;
   status: "queued" | "running" | "succeeded" | "failed";
   attemptCount: number;
   maxAttempts: number;
@@ -126,6 +127,8 @@ export type WorkflowRunRecord = {
   startedAt: string | null;
   finishedAt: string | null;
 };
+
+export type WorkflowRunTriggerType = "manual" | "channel";
 
 export type WorkflowRunEventRecord = {
   id: string;
@@ -293,6 +296,76 @@ export type AgentSessionEventRecord = {
   createdAt: string;
 };
 
+export type ChannelAccountRecord = {
+  id: string;
+  organizationId: string;
+  channelId: ChannelId | string;
+  accountKey: string;
+  displayName: string | null;
+  enabled: boolean;
+  status: string;
+  dmPolicy: "pairing" | "allowlist" | "open" | "disabled" | string;
+  groupPolicy: "allowlist" | "open" | "disabled" | string;
+  requireMentionInGroup: boolean;
+  webhookUrl: string | null;
+  metadata: unknown;
+  lastError: string | null;
+  lastSeenAt: string | null;
+  createdByUserId: string;
+  updatedByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ChannelAccountSecretRecord = {
+  id: string;
+  organizationId: string;
+  accountId: string;
+  name: string;
+  createdByUserId: string;
+  updatedByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ChannelPairingRequestRecord = {
+  id: string;
+  organizationId: string;
+  accountId: string;
+  scope: string;
+  requesterId: string;
+  requesterDisplayName: string | null;
+  code: string;
+  status: "pending" | "approved" | "rejected" | string;
+  expiresAt: string;
+  approvedByUserId: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  createdAt: string;
+};
+
+export type ChannelAllowlistEntryRecord = {
+  id: string;
+  organizationId: string;
+  accountId: string;
+  scope: string;
+  subject: string;
+  createdByUserId: string;
+  createdAt: string;
+};
+
+export type ChannelEventRecord = {
+  id: string;
+  organizationId: string;
+  accountId: string;
+  conversationId: string | null;
+  eventType: string;
+  level: "info" | "warn" | "error";
+  message: string | null;
+  payload: unknown;
+  createdAt: string;
+};
+
 export interface AppStore {
   ensureDefaultRoles(): Promise<void>;
   createUser(input: { email: string; passwordHash: string; displayName?: string | null }): Promise<UserRecord>;
@@ -396,7 +469,7 @@ export interface AppStore {
   createWorkflowRun(input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual";
+    triggerType: WorkflowRunTriggerType;
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
@@ -722,4 +795,99 @@ export interface AppStore {
     limit: number;
     cursor?: { seq: number } | null;
   }): Promise<{ events: AgentSessionEventRecord[]; nextCursor: { seq: number } | null }>;
+
+  listChannelAccounts(input: {
+    organizationId: string;
+    actorUserId: string;
+    channelId?: string | null;
+  }): Promise<ChannelAccountRecord[]>;
+  createChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    channelId: string;
+    accountKey: string;
+    displayName?: string | null;
+    enabled?: boolean;
+    dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+    groupPolicy?: "allowlist" | "open" | "disabled";
+    requireMentionInGroup?: boolean;
+    webhookUrl?: string | null;
+    metadata?: unknown;
+  }): Promise<ChannelAccountRecord>;
+  getChannelAccountById(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<ChannelAccountRecord | null>;
+  updateChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    patch: {
+      displayName?: string | null;
+      enabled?: boolean;
+      dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+      groupPolicy?: "allowlist" | "open" | "disabled";
+      requireMentionInGroup?: boolean;
+      webhookUrl?: string | null;
+      metadata?: unknown;
+      status?: string;
+      lastError?: string | null;
+    };
+  }): Promise<ChannelAccountRecord | null>;
+  deleteChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<boolean>;
+  createChannelAccountSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    name: string;
+    value: string;
+  }): Promise<ChannelAccountSecretRecord>;
+  listChannelAccountSecrets(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<ChannelAccountSecretRecord[]>;
+  listChannelPairingRequests(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId?: string | null;
+    status?: string | null;
+  }): Promise<ChannelPairingRequestRecord[]>;
+  listChannelAllowlistEntries(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope?: string | null;
+  }): Promise<ChannelAllowlistEntryRecord[]>;
+  putChannelAllowlistEntry(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope: string;
+    subject: string;
+  }): Promise<ChannelAllowlistEntryRecord>;
+  deleteChannelAllowlistEntry(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope: string;
+    subject: string;
+  }): Promise<boolean>;
+  updateChannelPairingRequestStatus(input: {
+    organizationId: string;
+    actorUserId: string;
+    requestId: string;
+    status: "approved" | "rejected";
+  }): Promise<ChannelPairingRequestRecord | null>;
+  listChannelEvents(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    limit?: number;
+  }): Promise<ChannelEventRecord[]>;
 }

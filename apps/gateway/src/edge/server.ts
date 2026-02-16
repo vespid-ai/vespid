@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import { WebSocketServer, WebSocket } from "ws";
 import { Redis } from "ioredis";
+import { channelIdSchema } from "@vespid/channels";
 import {
   createDb,
   createPool,
@@ -34,6 +35,7 @@ import { executorRouteKey, replyKey, sessionEdgesKey, streamToBrain, streamToEdg
 import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";
 import { ensureConsumerGroup, xaddJson, xreadGroupJson } from "../bus/streams.js";
 import type { BrainToEdgeCommand, EdgeToBrainRequest } from "../bus/types.js";
+import { createChannelRuntimeManager } from "../channels/manager.js";
 
 type ConnectedExecutor = {
   ws: WebSocket;
@@ -160,6 +162,34 @@ function parseUuid(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
   const parsed = z.string().uuid().safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+function firstString(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const first = value.find((item): item is string => typeof item === "string");
+    return first;
+  }
+  return undefined;
+}
+
+function normalizeHeaderValues(headers: Record<string, unknown>): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    out[key.toLowerCase()] = firstString(value);
+  }
+  return out;
+}
+
+function normalizeQueryValues(query: unknown): Record<string, string | undefined> {
+  if (!query || typeof query !== "object" || Array.isArray(query)) {
+    return {};
+  }
+  const out: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
+    out[key] = firstString(value);
+  }
+  return out;
 }
 
 function normalizeEventLevel(level: unknown): "info" | "warn" | "error" {
@@ -302,6 +332,22 @@ export async function buildGatewayEdgeServer(input?: {
     if (set.size === 0) sessionClientsBySessionId.delete(sessionId);
   }
 
+  const apiBaseUrl = process.env.API_HTTP_URL ?? "http://localhost:3001";
+  const internalServiceToken = process.env.INTERNAL_API_SERVICE_TOKEN ?? serviceToken;
+  const channelManager = createChannelRuntimeManager({
+    pool,
+    redis,
+    edgeId,
+    logger: server.log,
+    apiBaseUrl,
+    serviceToken: internalServiceToken,
+    onSessionBroadcast: ({ sessionId, event }) => {
+      for (const client of sessionClientsBySessionId.get(sessionId) ?? []) {
+        safeWsSend(client, event);
+      }
+    },
+  });
+
   async function joinSessionForClient(input: { ws: WebSocket; organizationId: string; userId: string; sessionId: string }) {
     const existing = await withTenantContext(pool, { organizationId: input.organizationId }, async (db) =>
       getAgentSessionById(db, { organizationId: input.organizationId, sessionId: input.sessionId })
@@ -407,6 +453,17 @@ export async function buildGatewayEdgeServer(input?: {
             continue;
           }
 
+          if (cmd.type === "channel_outbound") {
+            await channelManager.sendSessionReply({
+              organizationId: cmd.organizationId,
+              sessionId: cmd.sessionId,
+              sessionEventSeq: cmd.sessionEventSeq,
+              source: cmd.source,
+              text: cmd.text,
+            });
+            continue;
+          }
+
           if (cmd.type === "workflow_reply") {
             await redis.set(replyKey(cmd.requestId), safeJsonStringify(cmd.response), "EX", resultsTtlSec);
             continue;
@@ -493,6 +550,36 @@ export async function buildGatewayEdgeServer(input?: {
     return reply.status(200).send(result);
   });
 
+  server.post("/ingress/channels/:channelId/:accountKey", async (request, reply) => {
+    const parsed = z
+      .object({
+        channelId: channelIdSchema,
+        accountKey: z.string().min(1).max(120),
+      })
+      .safeParse(request.params);
+    if (!parsed.success) {
+      return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid channel ingress path parameters" });
+    }
+
+    const result = await channelManager.handleWebhook({
+      channelId: parsed.data.channelId,
+      accountKey: parsed.data.accountKey,
+      headers: normalizeHeaderValues(request.headers as Record<string, unknown>),
+      query: normalizeQueryValues(request.query),
+      body: request.body,
+      requestId: request.id,
+      remoteIp: request.ip,
+    });
+
+    return reply.status(202).send({
+      ok: true,
+      accepted: result.accepted,
+      reason: result.reason,
+      sessionRouted: result.sessionRouted,
+      workflowsTriggered: result.workflowsTriggered,
+    });
+  });
+
   server.get("/healthz", async () => ({ ok: true, edgeId }));
 
   function wireClientSocket(ws: WebSocket, context: { organizationId: string; userId: string }) {
@@ -566,6 +653,7 @@ export async function buildGatewayEdgeServer(input?: {
           userId: context.userId,
           sessionId: parsed.data.sessionId,
           userEventSeq: userEvent.seq,
+          originEdgeId: edgeId,
         };
         await xaddJson(redis, streamToBrain(), msg);
         return;

@@ -10,6 +10,21 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.manual") }),
   z.object({ type: z.literal("trigger.webhook"), config: z.object({ token: z.string().min(1) }) }),
   z.object({ type: z.literal("trigger.cron"), config: z.object({ cron: z.string().min(1) }) }),
+  z.object({
+    type: z.literal("trigger.channel"),
+    config: z.object({
+      channelId: z.string().min(1).max(64),
+      accountKey: z.string().min(1).max(120).optional(),
+      event: z.enum(["message.received", "message.mentioned", "message.dm"]).default("message.received"),
+      match: z
+        .object({
+          textContains: z.string().min(1).max(200).optional(),
+          senderIn: z.array(z.string().min(1).max(200)).max(200).optional(),
+          groupIn: z.array(z.string().min(1).max(200)).max(200).optional(),
+        })
+        .optional(),
+    }),
+  }),
 ]);
 
 const defaultAgentLlmProvider: LlmProviderId = "openai";

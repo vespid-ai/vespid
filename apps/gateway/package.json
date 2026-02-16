@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@vespid/agent-runtime": "workspace:*",
+    "@vespid/channels": "workspace:*",
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
     "@aws-sdk/client-s3": "^3.883.0",

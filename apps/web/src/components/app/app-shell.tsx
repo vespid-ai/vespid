@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
+  MessageSquare,
   Monitor,
   Moon,
   Rocket,
@@ -181,6 +182,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     () => [
       { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
       { href: (l) => `/${l}/sessions`, labelKey: "nav.sessions", icon: <Monitor className="h-4 w-4" /> },
+      { href: (l) => `/${l}/channels`, labelKey: "nav.channels", icon: <MessageSquare className="h-4 w-4" /> },
       { href: (l) => `/${l}/secrets`, labelKey: "nav.secrets", icon: <KeyRound className="h-4 w-4" /> },
       { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
       { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },
@@ -336,6 +338,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         onOpenChange={setPaletteOpen}
         items={[
           { title: t("nav.workflows"), href: `/${locale}/workflows`, icon: LayoutGrid },
+          { title: t("nav.channels"), href: `/${locale}/channels`, icon: MessageSquare },
           { title: t("nav.secrets"), href: `/${locale}/secrets`, icon: KeyRound },
           { title: t("nav.agents"), href: `/${locale}/agents`, icon: Rocket },
           { title: t("nav.auth"), href: `/${locale}/auth`, icon: ShieldCheck },

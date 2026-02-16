@@ -2,6 +2,7 @@ import { relations, sql } from "drizzle-orm";
 import {
   bigint,
   bigserial,
+  boolean,
   customType,
   index,
   integer,
@@ -404,6 +405,139 @@ export const agentSessionEvents = pgTable("agent_session_events", {
   agentSessionEventsOrgSessionSeqIdx: index("agent_session_events_org_session_seq_idx").on(table.organizationId, table.sessionId, table.seq),
 }));
 
+export const channelAccounts = pgTable("channel_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  channelId: text("channel_id").notNull(),
+  accountKey: text("account_key").notNull(),
+  displayName: text("display_name"),
+  enabled: boolean("enabled").notNull().default(true),
+  status: text("status").notNull().default("stopped"),
+  dmPolicy: text("dm_policy").notNull().default("pairing"),
+  groupPolicy: text("group_policy").notNull().default("allowlist"),
+  requireMentionInGroup: boolean("require_mention_in_group").notNull().default(true),
+  webhookUrl: text("webhook_url"),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  lastError: text("last_error"),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  updatedByUserId: uuid("updated_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelAccountsOrgChannelAccountKeyUnique: uniqueIndex("channel_accounts_org_channel_account_key_unique").on(
+    table.organizationId,
+    table.channelId,
+    table.accountKey
+  ),
+  channelAccountsOrgChannelIdx: index("channel_accounts_org_channel_idx").on(table.organizationId, table.channelId),
+}));
+
+export const channelAccountSecrets = pgTable("channel_account_secrets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => channelAccounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  kekId: text("kek_id").notNull(),
+  dekCiphertext: bytea("dek_ciphertext").notNull(),
+  dekIv: bytea("dek_iv").notNull(),
+  dekTag: bytea("dek_tag").notNull(),
+  secretCiphertext: bytea("secret_ciphertext").notNull(),
+  secretIv: bytea("secret_iv").notNull(),
+  secretTag: bytea("secret_tag").notNull(),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  updatedByUserId: uuid("updated_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelAccountSecretsAccountNameUnique: uniqueIndex("channel_account_secrets_account_name_unique").on(table.accountId, table.name),
+  channelAccountSecretsOrgAccountIdx: index("channel_account_secrets_org_account_idx").on(table.organizationId, table.accountId),
+}));
+
+export const channelAllowlistEntries = pgTable("channel_allowlist_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => channelAccounts.id, { onDelete: "cascade" }),
+  scope: text("scope").notNull(),
+  subject: text("subject").notNull(),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelAllowlistEntriesUnique: uniqueIndex("channel_allowlist_entries_unique").on(table.accountId, table.scope, table.subject),
+  channelAllowlistEntriesOrgScopeIdx: index("channel_allowlist_entries_org_scope_idx").on(table.organizationId, table.accountId, table.scope),
+}));
+
+export const channelPairingRequests = pgTable("channel_pairing_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => channelAccounts.id, { onDelete: "cascade" }),
+  scope: text("scope").notNull().default("dm"),
+  requesterId: text("requester_id").notNull(),
+  requesterDisplayName: text("requester_display_name"),
+  code: text("code").notNull(),
+  status: text("status").notNull().default("pending"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  approvedByUserId: uuid("approved_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelPairingRequestsCodeUnique: uniqueIndex("channel_pairing_requests_code_unique").on(table.code),
+  channelPairingRequestsOrgStatusIdx: index("channel_pairing_requests_org_status_idx").on(table.organizationId, table.accountId, table.status),
+  channelPairingRequestsExpiresAtIdx: index("channel_pairing_requests_expires_at_idx").on(table.expiresAt),
+}));
+
+export const channelConversations = pgTable("channel_conversations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => channelAccounts.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id").notNull(),
+  sessionId: uuid("session_id").references(() => agentSessions.id, { onDelete: "set null" }),
+  workflowRouting: jsonb("workflow_routing").notNull().default(sql`'{}'::jsonb`),
+  security: jsonb("security").notNull().default(sql`'{}'::jsonb`),
+  lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
+  lastOutboundAt: timestamp("last_outbound_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelConversationsUnique: uniqueIndex("channel_conversations_unique").on(table.accountId, table.conversationId),
+  channelConversationsOrgSessionIdx: index("channel_conversations_org_session_idx").on(table.organizationId, table.sessionId),
+}));
+
+export const channelMessages = pgTable("channel_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => channelAccounts.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id").notNull(),
+  direction: text("direction").notNull(),
+  providerMessageId: text("provider_message_id").notNull(),
+  sessionEventSeq: integer("session_event_seq"),
+  status: text("status").notNull().default("accepted"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  payload: jsonb("payload"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelMessagesProviderUnique: uniqueIndex("channel_messages_provider_unique").on(table.accountId, table.direction, table.providerMessageId),
+  channelMessagesOrgConversationIdx: index("channel_messages_org_conversation_idx").on(table.organizationId, table.accountId, table.conversationId, table.createdAt),
+}));
+
+export const channelEvents = pgTable("channel_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  accountId: uuid("account_id").notNull().references(() => channelAccounts.id, { onDelete: "cascade" }),
+  conversationId: text("conversation_id"),
+  eventType: text("event_type").notNull(),
+  level: text("level").notNull().default("info"),
+  message: text("message"),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  channelEventsOrgAccountIdx: index("channel_events_org_account_idx").on(table.organizationId, table.accountId, table.createdAt),
+  channelEventsOrgTypeIdx: index("channel_events_org_type_idx").on(table.organizationId, table.eventType, table.createdAt),
+}));
+
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
@@ -420,6 +554,13 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   toolsetBuilderSessions: many(toolsetBuilderSessions),
   agentSessions: many(agentSessions),
   agentSessionEvents: many(agentSessionEvents),
+  channelAccounts: many(channelAccounts),
+  channelAccountSecrets: many(channelAccountSecrets),
+  channelAllowlistEntries: many(channelAllowlistEntries),
+  channelPairingRequests: many(channelPairingRequests),
+  channelConversations: many(channelConversations),
+  channelMessages: many(channelMessages),
+  channelEvents: many(channelEvents),
 }));
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -565,6 +706,113 @@ export const agentSessionEventsRelations = relations(agentSessionEvents, ({ one 
   }),
 }));
 
+export const channelAccountsRelations = relations(channelAccounts, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [channelAccounts.organizationId],
+    references: [organizations.id],
+  }),
+  createdByUser: one(users, {
+    fields: [channelAccounts.createdByUserId],
+    references: [users.id],
+  }),
+  updatedByUser: one(users, {
+    fields: [channelAccounts.updatedByUserId],
+    references: [users.id],
+  }),
+  secrets: many(channelAccountSecrets),
+  allowlistEntries: many(channelAllowlistEntries),
+  pairingRequests: many(channelPairingRequests),
+  conversations: many(channelConversations),
+  messages: many(channelMessages),
+  events: many(channelEvents),
+}));
+
+export const channelAccountSecretsRelations = relations(channelAccountSecrets, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [channelAccountSecrets.organizationId],
+    references: [organizations.id],
+  }),
+  account: one(channelAccounts, {
+    fields: [channelAccountSecrets.accountId],
+    references: [channelAccounts.id],
+  }),
+  createdByUser: one(users, {
+    fields: [channelAccountSecrets.createdByUserId],
+    references: [users.id],
+  }),
+  updatedByUser: one(users, {
+    fields: [channelAccountSecrets.updatedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const channelAllowlistEntriesRelations = relations(channelAllowlistEntries, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [channelAllowlistEntries.organizationId],
+    references: [organizations.id],
+  }),
+  account: one(channelAccounts, {
+    fields: [channelAllowlistEntries.accountId],
+    references: [channelAccounts.id],
+  }),
+  createdByUser: one(users, {
+    fields: [channelAllowlistEntries.createdByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const channelPairingRequestsRelations = relations(channelPairingRequests, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [channelPairingRequests.organizationId],
+    references: [organizations.id],
+  }),
+  account: one(channelAccounts, {
+    fields: [channelPairingRequests.accountId],
+    references: [channelAccounts.id],
+  }),
+  approvedByUser: one(users, {
+    fields: [channelPairingRequests.approvedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const channelConversationsRelations = relations(channelConversations, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [channelConversations.organizationId],
+    references: [organizations.id],
+  }),
+  account: one(channelAccounts, {
+    fields: [channelConversations.accountId],
+    references: [channelAccounts.id],
+  }),
+  session: one(agentSessions, {
+    fields: [channelConversations.sessionId],
+    references: [agentSessions.id],
+  }),
+}));
+
+export const channelMessagesRelations = relations(channelMessages, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [channelMessages.organizationId],
+    references: [organizations.id],
+  }),
+  account: one(channelAccounts, {
+    fields: [channelMessages.accountId],
+    references: [channelAccounts.id],
+  }),
+}));
+
+export const channelEventsRelations = relations(channelEvents, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [channelEvents.organizationId],
+    references: [organizations.id],
+  }),
+  account: one(channelAccounts, {
+    fields: [channelEvents.accountId],
+    references: [channelAccounts.id],
+  }),
+}));
+
 export type DbRole = typeof roles.$inferSelect;
 export type DbUser = typeof users.$inferSelect;
 export type DbOrganization = typeof organizations.$inferSelect;
@@ -586,3 +834,10 @@ export type DbToolsetBuilderSession = typeof toolsetBuilderSessions.$inferSelect
 export type DbToolsetBuilderTurn = typeof toolsetBuilderTurns.$inferSelect;
 export type DbAgentSession = typeof agentSessions.$inferSelect;
 export type DbAgentSessionEvent = typeof agentSessionEvents.$inferSelect;
+export type DbChannelAccount = typeof channelAccounts.$inferSelect;
+export type DbChannelAccountSecret = typeof channelAccountSecrets.$inferSelect;
+export type DbChannelAllowlistEntry = typeof channelAllowlistEntries.$inferSelect;
+export type DbChannelPairingRequest = typeof channelPairingRequests.$inferSelect;
+export type DbChannelConversation = typeof channelConversations.$inferSelect;
+export type DbChannelMessage = typeof channelMessages.$inferSelect;
+export type DbChannelEvent = typeof channelEvents.$inferSelect;

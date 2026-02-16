@@ -42,6 +42,9 @@ importers:
       '@fastify/cors':
         specifier: ^11.2.0
         version: 11.2.0
+      '@vespid/channels':
+        specifier: workspace:*
+        version: link:../../packages/channels
       '@vespid/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -123,6 +126,9 @@ importers:
       '@vespid/agent-runtime':
         specifier: workspace:*
         version: link:../../packages/agent-runtime
+      '@vespid/channels':
+        specifier: workspace:*
+        version: link:../../packages/channels
       '@vespid/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -357,6 +363,12 @@ importers:
       ajv:
         specifier: ^8.17.1
         version: 8.17.1
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+
+  packages/channels:
+    dependencies:
       zod:
         specifier: ^4.3.6
         version: 4.3.6

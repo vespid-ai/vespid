@@ -804,8 +804,15 @@ export async function startGatewayBrainRuntime(input?: {
 
         if (result.status === "succeeded") {
           const out = result.output ?? null;
+          const outText = typeof out === "string" ? out : safeJsonStringify(out);
           const agentEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
-            appendAgentSessionEvent(db, { organizationId: msg.organizationId, sessionId: msg.sessionId, eventType: "agent_message", level: "info", payload: { message: typeof out === "string" ? out : safeJsonStringify(out) } })
+            appendAgentSessionEvent(db, {
+              organizationId: msg.organizationId,
+              sessionId: msg.sessionId,
+              eventType: "agent_message",
+              level: "info",
+              payload: { message: outText },
+            })
           );
           await broadcastToSessionEdges(msg.sessionId, {
             type: "session_event_v2",
@@ -816,6 +823,16 @@ export async function startGatewayBrainRuntime(input?: {
             payload: agentEvent.payload ?? null,
             createdAt: agentEvent.createdAt.toISOString(),
           });
+          if (msg.source && msg.originEdgeId && outText.length > 0) {
+            await xaddJson(redis, streamToEdge(msg.originEdgeId), {
+              type: "channel_outbound",
+              organizationId: msg.organizationId,
+              sessionId: msg.sessionId,
+              sessionEventSeq: agentEvent.seq,
+              source: msg.source,
+              text: outText,
+            });
+          }
           return;
         }
 

@@ -7,6 +7,13 @@ import {
   agentSessionEvents,
   agentSessions,
   agentToolsets,
+  channelAccountSecrets,
+  channelAccounts,
+  channelAllowlistEntries,
+  channelConversations,
+  channelEvents,
+  channelMessages,
+  channelPairingRequests,
   connectorSecrets,
   executionWorkspaces,
   executorPairingTokens,
@@ -809,7 +816,7 @@ export async function createWorkflowRun(
   input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual";
+    triggerType: "manual" | "channel";
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
@@ -2332,4 +2339,551 @@ export async function listAgentSessionEventsTail(
     .limit(limit);
   // Return ascending (seq) for client playback.
   return [...rows].reverse();
+}
+
+export async function createChannelAccount(
+  db: Db,
+  input: {
+    organizationId: string;
+    channelId: string;
+    accountKey: string;
+    displayName?: string | null;
+    enabled?: boolean;
+    dmPolicy?: string;
+    groupPolicy?: string;
+    requireMentionInGroup?: boolean;
+    webhookUrl?: string | null;
+    metadata?: unknown;
+    createdByUserId: string;
+    updatedByUserId: string;
+  }
+) {
+  const [row] = await db
+    .insert(channelAccounts)
+    .values({
+      organizationId: input.organizationId,
+      channelId: input.channelId,
+      accountKey: input.accountKey,
+      displayName: input.displayName ?? null,
+      enabled: input.enabled ?? true,
+      status: "stopped",
+      dmPolicy: input.dmPolicy ?? "pairing",
+      groupPolicy: input.groupPolicy ?? "allowlist",
+      requireMentionInGroup: input.requireMentionInGroup ?? true,
+      webhookUrl: input.webhookUrl ?? null,
+      metadata: (input.metadata ?? {}) as any,
+      createdByUserId: input.createdByUserId,
+      updatedByUserId: input.updatedByUserId,
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create channel account");
+  }
+  return row;
+}
+
+export async function listChannelAccountsByOrg(
+  db: Db,
+  input: { organizationId: string; channelId?: string | null; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+  return await db
+    .select()
+    .from(channelAccounts)
+    .where(
+      input.channelId
+        ? and(eq(channelAccounts.organizationId, input.organizationId), eq(channelAccounts.channelId, input.channelId))
+        : eq(channelAccounts.organizationId, input.organizationId)
+    )
+    .orderBy(desc(channelAccounts.updatedAt), desc(channelAccounts.id))
+    .limit(limit);
+}
+
+export async function getChannelAccountById(
+  db: Db,
+  input: { organizationId: string; accountId: string }
+) {
+  const [row] = await db
+    .select()
+    .from(channelAccounts)
+    .where(and(eq(channelAccounts.organizationId, input.organizationId), eq(channelAccounts.id, input.accountId)));
+  return row ?? null;
+}
+
+export async function getChannelAccountByChannelAndKey(
+  db: Db,
+  input: { organizationId: string; channelId: string; accountKey: string }
+) {
+  const [row] = await db
+    .select()
+    .from(channelAccounts)
+    .where(
+      and(
+        eq(channelAccounts.organizationId, input.organizationId),
+        eq(channelAccounts.channelId, input.channelId),
+        eq(channelAccounts.accountKey, input.accountKey)
+      )
+    );
+  return row ?? null;
+}
+
+// Internal-runtime lookup used by gateway ingress where org context is derived
+// from account mapping and must not be trusted from external payloads.
+export async function getChannelAccountByChannelAndKeyGlobal(
+  db: Db,
+  input: { channelId: string; accountKey: string }
+) {
+  const [row] = await db
+    .select()
+    .from(channelAccounts)
+    .where(and(eq(channelAccounts.channelId, input.channelId), eq(channelAccounts.accountKey, input.accountKey)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function updateChannelAccount(
+  db: Db,
+  input: {
+    organizationId: string;
+    accountId: string;
+    patch: {
+      displayName?: string | null;
+      enabled?: boolean;
+      dmPolicy?: string;
+      groupPolicy?: string;
+      requireMentionInGroup?: boolean;
+      webhookUrl?: string | null;
+      metadata?: unknown;
+      status?: string;
+      lastError?: string | null;
+      lastSeenAt?: Date | null;
+      updatedByUserId?: string;
+    };
+  }
+) {
+  const [row] = await db
+    .update(channelAccounts)
+    .set({
+      ...(input.patch.displayName !== undefined ? { displayName: input.patch.displayName } : {}),
+      ...(input.patch.enabled !== undefined ? { enabled: input.patch.enabled } : {}),
+      ...(input.patch.dmPolicy !== undefined ? { dmPolicy: input.patch.dmPolicy } : {}),
+      ...(input.patch.groupPolicy !== undefined ? { groupPolicy: input.patch.groupPolicy } : {}),
+      ...(input.patch.requireMentionInGroup !== undefined
+        ? { requireMentionInGroup: input.patch.requireMentionInGroup }
+        : {}),
+      ...(input.patch.webhookUrl !== undefined ? { webhookUrl: input.patch.webhookUrl } : {}),
+      ...(input.patch.metadata !== undefined ? { metadata: input.patch.metadata as any } : {}),
+      ...(input.patch.status !== undefined ? { status: input.patch.status } : {}),
+      ...(input.patch.lastError !== undefined ? { lastError: input.patch.lastError } : {}),
+      ...(input.patch.lastSeenAt !== undefined ? { lastSeenAt: input.patch.lastSeenAt } : {}),
+      ...(input.patch.updatedByUserId !== undefined ? { updatedByUserId: input.patch.updatedByUserId } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(channelAccounts.organizationId, input.organizationId), eq(channelAccounts.id, input.accountId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function deleteChannelAccount(
+  db: Db,
+  input: { organizationId: string; accountId: string }
+) {
+  const [row] = await db
+    .delete(channelAccounts)
+    .where(and(eq(channelAccounts.organizationId, input.organizationId), eq(channelAccounts.id, input.accountId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function createChannelAccountSecret(
+  db: Db,
+  input: {
+    organizationId: string;
+    accountId: string;
+    name: string;
+    kekId: string;
+    dekCiphertext: Buffer;
+    dekIv: Buffer;
+    dekTag: Buffer;
+    secretCiphertext: Buffer;
+    secretIv: Buffer;
+    secretTag: Buffer;
+    createdByUserId: string;
+    updatedByUserId: string;
+  }
+) {
+  const [row] = await db
+    .insert(channelAccountSecrets)
+    .values({
+      organizationId: input.organizationId,
+      accountId: input.accountId,
+      name: input.name,
+      kekId: input.kekId,
+      dekCiphertext: input.dekCiphertext,
+      dekIv: input.dekIv,
+      dekTag: input.dekTag,
+      secretCiphertext: input.secretCiphertext,
+      secretIv: input.secretIv,
+      secretTag: input.secretTag,
+      createdByUserId: input.createdByUserId,
+      updatedByUserId: input.updatedByUserId,
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create channel account secret");
+  }
+  return row;
+}
+
+export async function listChannelAccountSecrets(
+  db: Db,
+  input: { organizationId: string; accountId: string }
+) {
+  return await db
+    .select()
+    .from(channelAccountSecrets)
+    .where(and(eq(channelAccountSecrets.organizationId, input.organizationId), eq(channelAccountSecrets.accountId, input.accountId)))
+    .orderBy(asc(channelAccountSecrets.name));
+}
+
+export async function getChannelAccountSecretById(
+  db: Db,
+  input: { organizationId: string; accountId: string; secretId: string }
+) {
+  const [row] = await db
+    .select()
+    .from(channelAccountSecrets)
+    .where(
+      and(
+        eq(channelAccountSecrets.organizationId, input.organizationId),
+        eq(channelAccountSecrets.accountId, input.accountId),
+        eq(channelAccountSecrets.id, input.secretId)
+      )
+    );
+  return row ?? null;
+}
+
+export async function listChannelAllowlistEntries(
+  db: Db,
+  input: { organizationId: string; accountId: string; scope?: string | null }
+) {
+  return await db
+    .select()
+    .from(channelAllowlistEntries)
+    .where(
+      input.scope
+        ? and(
+            eq(channelAllowlistEntries.organizationId, input.organizationId),
+            eq(channelAllowlistEntries.accountId, input.accountId),
+            eq(channelAllowlistEntries.scope, input.scope)
+          )
+        : and(eq(channelAllowlistEntries.organizationId, input.organizationId), eq(channelAllowlistEntries.accountId, input.accountId))
+    )
+    .orderBy(asc(channelAllowlistEntries.scope), asc(channelAllowlistEntries.subject));
+}
+
+export async function putChannelAllowlistEntry(
+  db: Db,
+  input: { organizationId: string; accountId: string; scope: string; subject: string; createdByUserId: string }
+) {
+  try {
+    const [row] = await db
+      .insert(channelAllowlistEntries)
+      .values({
+        organizationId: input.organizationId,
+        accountId: input.accountId,
+        scope: input.scope,
+        subject: input.subject,
+        createdByUserId: input.createdByUserId,
+      })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to upsert channel allowlist");
+    }
+    return row;
+  } catch (error) {
+    if (!isPgUniqueViolation(error)) {
+      throw error;
+    }
+    const [existing] = await db
+      .select()
+      .from(channelAllowlistEntries)
+      .where(
+        and(
+          eq(channelAllowlistEntries.organizationId, input.organizationId),
+          eq(channelAllowlistEntries.accountId, input.accountId),
+          eq(channelAllowlistEntries.scope, input.scope),
+          eq(channelAllowlistEntries.subject, input.subject)
+        )
+      );
+    if (!existing) {
+      throw new Error("Failed to read existing channel allowlist entry");
+    }
+    return existing;
+  }
+}
+
+export async function deleteChannelAllowlistEntry(
+  db: Db,
+  input: { organizationId: string; accountId: string; scope: string; subject: string }
+) {
+  const [row] = await db
+    .delete(channelAllowlistEntries)
+    .where(
+      and(
+        eq(channelAllowlistEntries.organizationId, input.organizationId),
+        eq(channelAllowlistEntries.accountId, input.accountId),
+        eq(channelAllowlistEntries.scope, input.scope),
+        eq(channelAllowlistEntries.subject, input.subject)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function createChannelPairingRequest(
+  db: Db,
+  input: {
+    organizationId: string;
+    accountId: string;
+    scope: string;
+    requesterId: string;
+    requesterDisplayName?: string | null;
+    code: string;
+    expiresAt: Date;
+  }
+) {
+  const [row] = await db
+    .insert(channelPairingRequests)
+    .values({
+      organizationId: input.organizationId,
+      accountId: input.accountId,
+      scope: input.scope,
+      requesterId: input.requesterId,
+      requesterDisplayName: input.requesterDisplayName ?? null,
+      code: input.code,
+      status: "pending",
+      expiresAt: input.expiresAt,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create channel pairing request");
+  }
+  return row;
+}
+
+export async function listChannelPairingRequests(
+  db: Db,
+  input: { organizationId: string; accountId?: string | null; status?: string | null; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+  let where = eq(channelPairingRequests.organizationId, input.organizationId);
+  if (input.accountId) {
+    where = and(where, eq(channelPairingRequests.accountId, input.accountId)) as any;
+  }
+  if (input.status) {
+    where = and(where, eq(channelPairingRequests.status, input.status)) as any;
+  }
+
+  return await db
+    .select()
+    .from(channelPairingRequests)
+    .where(where)
+    .orderBy(desc(channelPairingRequests.createdAt))
+    .limit(limit);
+}
+
+export async function updateChannelPairingRequestStatus(
+  db: Db,
+  input: {
+    organizationId: string;
+    requestId: string;
+    status: "approved" | "rejected";
+    approvedByUserId?: string | null;
+  }
+) {
+  const [row] = await db
+    .update(channelPairingRequests)
+    .set({
+      status: input.status,
+      ...(input.status === "approved"
+        ? { approvedByUserId: input.approvedByUserId ?? null, approvedAt: new Date(), rejectedAt: null }
+        : { rejectedAt: new Date(), approvedAt: null }),
+    })
+    .where(and(eq(channelPairingRequests.organizationId, input.organizationId), eq(channelPairingRequests.id, input.requestId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function getChannelConversation(
+  db: Db,
+  input: { organizationId: string; accountId: string; conversationId: string }
+) {
+  const [row] = await db
+    .select()
+    .from(channelConversations)
+    .where(
+      and(
+        eq(channelConversations.organizationId, input.organizationId),
+        eq(channelConversations.accountId, input.accountId),
+        eq(channelConversations.conversationId, input.conversationId)
+      )
+    );
+  return row ?? null;
+}
+
+export async function upsertChannelConversation(
+  db: Db,
+  input: {
+    organizationId: string;
+    accountId: string;
+    conversationId: string;
+    sessionId?: string | null;
+    workflowRouting?: unknown;
+    security?: unknown;
+    lastInboundAt?: Date | null;
+    lastOutboundAt?: Date | null;
+  }
+) {
+  const existing = await getChannelConversation(db, input);
+  if (!existing) {
+    const [created] = await db
+      .insert(channelConversations)
+      .values({
+        organizationId: input.organizationId,
+        accountId: input.accountId,
+        conversationId: input.conversationId,
+        sessionId: input.sessionId ?? null,
+        workflowRouting: (input.workflowRouting ?? {}) as any,
+        security: (input.security ?? {}) as any,
+        lastInboundAt: input.lastInboundAt ?? null,
+        lastOutboundAt: input.lastOutboundAt ?? null,
+        updatedAt: new Date(),
+      })
+      .returning();
+    if (!created) {
+      throw new Error("Failed to create channel conversation");
+    }
+    return created;
+  }
+
+  const [updated] = await db
+    .update(channelConversations)
+    .set({
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      ...(input.workflowRouting !== undefined ? { workflowRouting: input.workflowRouting as any } : {}),
+      ...(input.security !== undefined ? { security: input.security as any } : {}),
+      ...(input.lastInboundAt !== undefined ? { lastInboundAt: input.lastInboundAt } : {}),
+      ...(input.lastOutboundAt !== undefined ? { lastOutboundAt: input.lastOutboundAt } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(channelConversations.organizationId, input.organizationId), eq(channelConversations.id, existing.id)))
+    .returning();
+  if (!updated) {
+    throw new Error("Failed to update channel conversation");
+  }
+  return updated;
+}
+
+export async function createChannelMessage(
+  db: Db,
+  input: {
+    organizationId: string;
+    accountId: string;
+    conversationId: string;
+    direction: "inbound" | "outbound";
+    providerMessageId: string;
+    sessionEventSeq?: number | null;
+    status?: string;
+    attemptCount?: number;
+    payload?: unknown;
+    error?: string | null;
+  }
+) {
+  try {
+    const [row] = await db
+      .insert(channelMessages)
+      .values({
+        organizationId: input.organizationId,
+        accountId: input.accountId,
+        conversationId: input.conversationId,
+        direction: input.direction,
+        providerMessageId: input.providerMessageId,
+        sessionEventSeq: input.sessionEventSeq ?? null,
+        status: input.status ?? "accepted",
+        attemptCount: input.attemptCount ?? 0,
+        payload: input.payload as any,
+        error: input.error ?? null,
+        updatedAt: new Date(),
+      })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to create channel message");
+    }
+    return row;
+  } catch (error) {
+    if (!isPgUniqueViolation(error)) {
+      throw error;
+    }
+    const [existing] = await db
+      .select()
+      .from(channelMessages)
+      .where(
+        and(
+          eq(channelMessages.organizationId, input.organizationId),
+          eq(channelMessages.accountId, input.accountId),
+          eq(channelMessages.direction, input.direction),
+          eq(channelMessages.providerMessageId, input.providerMessageId)
+        )
+      );
+    if (!existing) {
+      throw new Error("Failed to read existing channel message");
+    }
+    return existing;
+  }
+}
+
+export async function appendChannelEvent(
+  db: Db,
+  input: {
+    organizationId: string;
+    accountId: string;
+    conversationId?: string | null;
+    eventType: string;
+    level?: "info" | "warn" | "error";
+    message?: string | null;
+    payload?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(channelEvents)
+    .values({
+      organizationId: input.organizationId,
+      accountId: input.accountId,
+      conversationId: input.conversationId ?? null,
+      eventType: input.eventType,
+      level: input.level ?? "info",
+      message: input.message ?? null,
+      payload: input.payload as any,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to append channel event");
+  }
+  return row;
+}
+
+export async function listChannelEvents(
+  db: Db,
+  input: { organizationId: string; accountId: string; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+  return await db
+    .select()
+    .from(channelEvents)
+    .where(and(eq(channelEvents.organizationId, input.organizationId), eq(channelEvents.accountId, input.accountId)))
+    .orderBy(desc(channelEvents.createdAt))
+    .limit(limit);
 }

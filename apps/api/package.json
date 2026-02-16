@@ -17,6 +17,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
+    "@vespid/channels": "workspace:*",
     "@vespid/connectors": "workspace:*",
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",

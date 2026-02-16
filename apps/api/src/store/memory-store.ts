@@ -25,6 +25,11 @@ import type {
   ToolsetBuilderTurnRecord,
   AgentSessionRecord,
   AgentSessionEventRecord,
+  ChannelAccountRecord,
+  ChannelAccountSecretRecord,
+  ChannelAllowlistEntryRecord,
+  ChannelEventRecord,
+  ChannelPairingRequestRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -78,6 +83,11 @@ export class MemoryAppStore implements AppStore {
   private agentSessions = new Map<string, AgentSessionRecord>();
   private agentSessionEventsBySessionId = new Map<string, AgentSessionEventRecord[]>();
   private agentSessionSeqBySessionId = new Map<string, number>();
+  private channelAccounts = new Map<string, ChannelAccountRecord>();
+  private channelAccountSecrets = new Map<string, ChannelAccountSecretRecord & { value: string }>();
+  private channelAllowlistEntries = new Map<string, ChannelAllowlistEntryRecord>();
+  private channelPairingRequests = new Map<string, ChannelPairingRequestRecord>();
+  private channelEvents = new Map<string, ChannelEventRecord[]>();
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -578,7 +588,7 @@ export class MemoryAppStore implements AppStore {
   async createWorkflowRun(input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual";
+    triggerType: "manual" | "channel";
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
@@ -1805,6 +1815,346 @@ export class MemoryAppStore implements AppStore {
     const hasMore = filtered.length > limit;
     const nextCursor = hasMore && page.length > 0 ? { seq: page[page.length - 1]!.seq } : null;
     return { events: page, nextCursor };
+  }
+
+  async listChannelAccounts(input: {
+    organizationId: string;
+    actorUserId: string;
+    channelId?: string | null;
+  }): Promise<ChannelAccountRecord[]> {
+    return [...this.channelAccounts.values()]
+      .filter((row) => row.organizationId === input.organizationId)
+      .filter((row) => !input.channelId || row.channelId === input.channelId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+  }
+
+  async createChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    channelId: string;
+    accountKey: string;
+    displayName?: string | null;
+    enabled?: boolean;
+    dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+    groupPolicy?: "allowlist" | "open" | "disabled";
+    requireMentionInGroup?: boolean;
+    webhookUrl?: string | null;
+    metadata?: unknown;
+  }): Promise<ChannelAccountRecord> {
+    const duplicate = [...this.channelAccounts.values()].some(
+      (row) =>
+        row.organizationId === input.organizationId &&
+        row.channelId === input.channelId &&
+        row.accountKey.toLowerCase() === input.accountKey.toLowerCase()
+    );
+    if (duplicate) {
+      throw new Error("CHANNEL_ACCOUNT_EXISTS");
+    }
+    const now = nowIso();
+    const row: ChannelAccountRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      channelId: input.channelId,
+      accountKey: input.accountKey,
+      displayName: input.displayName ?? null,
+      enabled: input.enabled ?? true,
+      status: "stopped",
+      dmPolicy: input.dmPolicy ?? "pairing",
+      groupPolicy: input.groupPolicy ?? "allowlist",
+      requireMentionInGroup: input.requireMentionInGroup ?? true,
+      webhookUrl: input.webhookUrl ?? null,
+      metadata: input.metadata ?? {},
+      lastError: null,
+      lastSeenAt: null,
+      createdByUserId: input.actorUserId,
+      updatedByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.channelAccounts.set(row.id, row);
+    return row;
+  }
+
+  async getChannelAccountById(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<ChannelAccountRecord | null> {
+    const row = this.channelAccounts.get(input.accountId) ?? null;
+    if (!row || row.organizationId !== input.organizationId) {
+      return null;
+    }
+    return row;
+  }
+
+  async updateChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    patch: {
+      displayName?: string | null;
+      enabled?: boolean;
+      dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+      groupPolicy?: "allowlist" | "open" | "disabled";
+      requireMentionInGroup?: boolean;
+      webhookUrl?: string | null;
+      metadata?: unknown;
+      status?: string;
+      lastError?: string | null;
+    };
+  }): Promise<ChannelAccountRecord | null> {
+    const current = await this.getChannelAccountById(input);
+    if (!current) {
+      return null;
+    }
+    const updated: ChannelAccountRecord = {
+      ...current,
+      ...(input.patch.displayName !== undefined ? { displayName: input.patch.displayName } : {}),
+      ...(input.patch.enabled !== undefined ? { enabled: input.patch.enabled } : {}),
+      ...(input.patch.dmPolicy !== undefined ? { dmPolicy: input.patch.dmPolicy } : {}),
+      ...(input.patch.groupPolicy !== undefined ? { groupPolicy: input.patch.groupPolicy } : {}),
+      ...(input.patch.requireMentionInGroup !== undefined
+        ? { requireMentionInGroup: input.patch.requireMentionInGroup }
+        : {}),
+      ...(input.patch.webhookUrl !== undefined ? { webhookUrl: input.patch.webhookUrl } : {}),
+      ...(input.patch.metadata !== undefined ? { metadata: input.patch.metadata } : {}),
+      ...(input.patch.status !== undefined ? { status: input.patch.status } : {}),
+      ...(input.patch.lastError !== undefined ? { lastError: input.patch.lastError } : {}),
+      updatedByUserId: input.actorUserId,
+      updatedAt: nowIso(),
+    };
+    this.channelAccounts.set(updated.id, updated);
+    return updated;
+  }
+
+  async deleteChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<boolean> {
+    const row = await this.getChannelAccountById(input);
+    if (!row) {
+      return false;
+    }
+    for (const [id, secret] of this.channelAccountSecrets.entries()) {
+      if (secret.accountId === row.id) {
+        this.channelAccountSecrets.delete(id);
+      }
+    }
+    for (const [id, entry] of this.channelAllowlistEntries.entries()) {
+      if (entry.accountId === row.id) {
+        this.channelAllowlistEntries.delete(id);
+      }
+    }
+    this.channelEvents.delete(row.id);
+    return this.channelAccounts.delete(row.id);
+  }
+
+  async createChannelAccountSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    name: string;
+    value: string;
+  }): Promise<ChannelAccountSecretRecord> {
+    const account = await this.getChannelAccountById({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      accountId: input.accountId,
+    });
+    if (!account) {
+      throw new Error("CHANNEL_ACCOUNT_NOT_FOUND");
+    }
+    const exists = [...this.channelAccountSecrets.values()].some(
+      (row) => row.organizationId === input.organizationId && row.accountId === input.accountId && row.name === input.name
+    );
+    if (exists) {
+      throw new Error("CHANNEL_SECRET_EXISTS");
+    }
+    const now = nowIso();
+    const row: ChannelAccountSecretRecord & { value: string } = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      accountId: input.accountId,
+      name: input.name,
+      createdByUserId: input.actorUserId,
+      updatedByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+      value: input.value,
+    };
+    this.channelAccountSecrets.set(row.id, row);
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      accountId: row.accountId,
+      name: row.name,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  async listChannelAccountSecrets(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<ChannelAccountSecretRecord[]> {
+    return [...this.channelAccountSecrets.values()]
+      .filter((row) => row.organizationId === input.organizationId && row.accountId === input.accountId)
+      .map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        accountId: row.accountId,
+        name: row.name,
+        createdByUserId: row.createdByUserId,
+        updatedByUserId: row.updatedByUserId,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async listChannelPairingRequests(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId?: string | null;
+    status?: string | null;
+  }): Promise<ChannelPairingRequestRecord[]> {
+    return [...this.channelPairingRequests.values()]
+      .filter((row) => row.organizationId === input.organizationId)
+      .filter((row) => !input.accountId || row.accountId === input.accountId)
+      .filter((row) => !input.status || row.status === input.status)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listChannelAllowlistEntries(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope?: string | null;
+  }): Promise<ChannelAllowlistEntryRecord[]> {
+    const account = await this.getChannelAccountById({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      accountId: input.accountId,
+    });
+    if (!account) {
+      return [];
+    }
+    return [...this.channelAllowlistEntries.values()]
+      .filter((row) => row.organizationId === input.organizationId && row.accountId === input.accountId)
+      .filter((row) => !input.scope || row.scope === input.scope)
+      .sort((a, b) => a.scope.localeCompare(b.scope) || a.subject.localeCompare(b.subject));
+  }
+
+  async putChannelAllowlistEntry(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope: string;
+    subject: string;
+  }): Promise<ChannelAllowlistEntryRecord> {
+    const account = await this.getChannelAccountById({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      accountId: input.accountId,
+    });
+    if (!account) {
+      throw new Error("CHANNEL_ACCOUNT_NOT_FOUND");
+    }
+    const existing = [...this.channelAllowlistEntries.values()].find(
+      (row) =>
+        row.organizationId === input.organizationId &&
+        row.accountId === input.accountId &&
+        row.scope === input.scope &&
+        row.subject === input.subject
+    );
+    if (existing) {
+      return existing;
+    }
+    const row: ChannelAllowlistEntryRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      accountId: input.accountId,
+      scope: input.scope,
+      subject: input.subject,
+      createdByUserId: input.actorUserId,
+      createdAt: nowIso(),
+    };
+    this.channelAllowlistEntries.set(row.id, row);
+    return row;
+  }
+
+  async deleteChannelAllowlistEntry(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope: string;
+    subject: string;
+  }): Promise<boolean> {
+    const account = await this.getChannelAccountById({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      accountId: input.accountId,
+    });
+    if (!account) {
+      return false;
+    }
+    for (const [id, row] of this.channelAllowlistEntries.entries()) {
+      if (
+        row.organizationId === input.organizationId &&
+        row.accountId === input.accountId &&
+        row.scope === input.scope &&
+        row.subject === input.subject
+      ) {
+        this.channelAllowlistEntries.delete(id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async updateChannelPairingRequestStatus(input: {
+    organizationId: string;
+    actorUserId: string;
+    requestId: string;
+    status: "approved" | "rejected";
+  }): Promise<ChannelPairingRequestRecord | null> {
+    const row = this.channelPairingRequests.get(input.requestId) ?? null;
+    if (!row || row.organizationId !== input.organizationId) {
+      return null;
+    }
+    const now = nowIso();
+    const updated: ChannelPairingRequestRecord = {
+      ...row,
+      status: input.status,
+      approvedByUserId: input.status === "approved" ? input.actorUserId : row.approvedByUserId,
+      approvedAt: input.status === "approved" ? now : row.approvedAt,
+      rejectedAt: input.status === "rejected" ? now : row.rejectedAt,
+    };
+    this.channelPairingRequests.set(updated.id, updated);
+    return updated;
+  }
+
+  async listChannelEvents(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    limit?: number;
+  }): Promise<ChannelEventRecord[]> {
+    const account = await this.getChannelAccountById({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      accountId: input.accountId,
+    });
+    if (!account) {
+      return [];
+    }
+    const list = this.channelEvents.get(account.id) ?? [];
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+    return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
   }
 
   async attachMembership(input: {

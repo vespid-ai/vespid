@@ -39,6 +39,7 @@ import {
   type LlmUsageContext,
 } from "@vespid/shared";
 import { createConnectorCatalog } from "@vespid/connectors";
+import { listChannelDefinitions } from "@vespid/channels";
 import { generateCodeVerifier, generateState } from "arctic";
 import { z } from "zod";
 import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
@@ -126,6 +127,8 @@ const ORG_CONTEXT_ENFORCEMENT = z
   .enum(["strict", "warn"])
   .default("strict")
   .parse(process.env.ORG_CONTEXT_ENFORCEMENT ?? "strict");
+const INTERNAL_API_SERVICE_TOKEN =
+  process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? process.env.GATEWAY_SERVICE_TOKEN ?? "dev-gateway-token";
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -168,6 +171,15 @@ const updateWorkflowDraftSchema = z
 const createWorkflowRunSchema = z.object({
   input: z.unknown().optional(),
 });
+
+const internalChannelTriggerRunSchema = z
+  .object({
+    organizationId: z.string().uuid(),
+    workflowId: z.string().uuid(),
+    requestedByUserId: z.string().uuid(),
+    payload: z.unknown(),
+  })
+  .strict();
 
 const listSecretsQuerySchema = z.object({
   connectorId: z.string().min(1).optional(),
@@ -254,6 +266,70 @@ const llmDefaultToolsetSchema = z
       });
     }
   });
+
+const channelIdSchema = z.enum([
+  "whatsapp",
+  "telegram",
+  "discord",
+  "irc",
+  "slack",
+  "googlechat",
+  "signal",
+  "imessage",
+  "feishu",
+  "mattermost",
+  "bluebubbles",
+  "msteams",
+  "line",
+  "nextcloud-talk",
+  "matrix",
+  "nostr",
+  "tlon",
+  "twitch",
+  "zalo",
+  "zalouser",
+  "webchat",
+]);
+
+const channelAccountCreateSchema = z
+  .object({
+    channelId: channelIdSchema,
+    accountKey: z.string().min(1).max(120),
+    displayName: z.string().min(1).max(120).optional(),
+    enabled: z.boolean().optional(),
+    dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+    groupPolicy: z.enum(["allowlist", "open", "disabled"]).optional(),
+    requireMentionInGroup: z.boolean().optional(),
+    webhookUrl: z.string().url().max(2000).optional(),
+    metadata: z.record(z.string().min(1).max(120), z.unknown()).optional(),
+  })
+  .strict();
+
+const channelAccountUpdateSchema = z
+  .object({
+    displayName: z.string().min(1).max(120).nullable().optional(),
+    enabled: z.boolean().optional(),
+    dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+    groupPolicy: z.enum(["allowlist", "open", "disabled"]).optional(),
+    requireMentionInGroup: z.boolean().optional(),
+    webhookUrl: z.string().url().max(2000).nullable().optional(),
+    metadata: z.record(z.string().min(1).max(120), z.unknown()).optional(),
+    status: z.string().min(1).max(40).optional(),
+    lastError: z.string().min(1).max(10_000).nullable().optional(),
+  })
+  .strict();
+
+const channelSecretCreateSchema = z.object({
+  name: z.string().min(1).max(80),
+  value: z.string().min(1),
+});
+
+const channelAllowlistEntrySchema = z
+  .object({
+    scope: z.string().min(1).max(64),
+    subject: z.string().min(1).max(240),
+  })
+  .strict();
 
 const orgSettingsSchema = z
   .object({
@@ -969,6 +1045,7 @@ export async function buildServer(input?: {
   const connectorCatalog = createConnectorCatalog({
     enterpriseConnectors: resolveEnterpriseConnectors(enterpriseProvider),
   });
+  const channelCatalog = listChannelDefinitions();
   const allowedSecretConnectorIds = new Set<string>([
     ...connectorCatalog.map((connector) => connector.id),
     ...getAllLlmConnectorIds(),
@@ -1406,6 +1483,14 @@ export async function buildServer(input?: {
     return request.auth;
   }
 
+  function requireInternalServiceToken(request: { headers: Record<string, unknown> }): void {
+    const headerToken = request.headers["x-service-token"] ?? request.headers["x-gateway-token"];
+    const token = typeof headerToken === "string" ? headerToken : null;
+    if (!token || token.length === 0 || token !== INTERNAL_API_SERVICE_TOKEN) {
+      throw unauthorized("Invalid internal service token");
+    }
+  }
+
   server.setErrorHandler((error, _request, reply) => {
     const appError = error as Partial<AppErrorType> & { payload?: unknown };
     const errorCode = (error as { code?: unknown }).code;
@@ -1654,6 +1739,75 @@ export async function buildServer(input?: {
     };
   });
 
+  server.get("/v1/meta/channels", async () => {
+    return {
+      channels: channelCatalog,
+    };
+  });
+
+  server.post("/internal/v1/channels/trigger-run", async (request, reply) => {
+    requireInternalServiceToken(request);
+
+    const parsed = internalChannelTriggerRunSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid channel trigger payload", parsed.error.flatten());
+    }
+
+    const workflow = await store.getWorkflowById({
+      organizationId: parsed.data.organizationId,
+      workflowId: parsed.data.workflowId,
+      actorUserId: parsed.data.requestedByUserId,
+    });
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+    if (workflow.status !== "published") {
+      throw conflict("Workflow must be published before runs can be created");
+    }
+
+    const run = await store.createWorkflowRun({
+      organizationId: parsed.data.organizationId,
+      workflowId: parsed.data.workflowId,
+      triggerType: "channel",
+      requestedByUserId: parsed.data.requestedByUserId,
+      input: parsed.data.payload,
+    });
+
+    try {
+      await queueProducer.enqueueWorkflowRun({
+        payload: {
+          runId: run.id,
+          organizationId: run.organizationId,
+          workflowId: run.workflowId,
+          requestedByUserId: run.requestedByUserId,
+        },
+        maxAttempts: run.maxAttempts,
+      });
+    } catch (error) {
+      await store.deleteQueuedWorkflowRun({
+        organizationId: parsed.data.organizationId,
+        workflowId: parsed.data.workflowId,
+        runId: run.id,
+        actorUserId: parsed.data.requestedByUserId,
+      });
+      server.log.error(
+        {
+          event: "channel_trigger_queue_unavailable",
+          orgId: parsed.data.organizationId,
+          workflowId: parsed.data.workflowId,
+          runId: run.id,
+          requestId: request.id,
+          path: request.url,
+          method: request.method,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "channel trigger queue unavailable"
+      );
+      throw queueUnavailable();
+    }
+
+    return reply.status(201).send({ run });
+  });
   server.get("/v1/auth/oauth/:provider/callback", async (request, reply) => {
     const provider = extractProvider((request.params as { provider?: string }).provider);
     const parsed = oauthQuerySchema.safeParse(request.query);
@@ -3138,6 +3292,417 @@ export async function buildServer(input?: {
       events: out.events,
       nextCursor: out.nextCursor ? encodeCursor(out.nextCursor) : null,
     };
+  });
+
+  server.get("/v1/orgs/:orgId/channels/accounts", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const query = z
+      .object({
+        channelId: channelIdSchema.optional(),
+      })
+      .safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("Invalid channels query", query.error.flatten());
+    }
+
+    const accounts = await store.listChannelAccounts({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      ...(query.data.channelId ? { channelId: query.data.channelId } : {}),
+    });
+    return { accounts };
+  });
+
+  server.post("/v1/orgs/:orgId/channels/accounts", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const parsed = channelAccountCreateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid channel account payload", parsed.error.flatten());
+    }
+
+    const account = await store.createChannelAccount({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      channelId: parsed.data.channelId,
+      accountKey: parsed.data.accountKey.trim(),
+      ...(parsed.data.displayName ? { displayName: parsed.data.displayName.trim() } : {}),
+      ...(parsed.data.enabled !== undefined ? { enabled: parsed.data.enabled } : {}),
+      ...(parsed.data.dmPolicy ? { dmPolicy: parsed.data.dmPolicy } : {}),
+      ...(parsed.data.groupPolicy ? { groupPolicy: parsed.data.groupPolicy } : {}),
+      ...(parsed.data.requireMentionInGroup !== undefined
+        ? { requireMentionInGroup: parsed.data.requireMentionInGroup }
+        : {}),
+      ...(parsed.data.webhookUrl ? { webhookUrl: parsed.data.webhookUrl } : {}),
+      ...(parsed.data.metadata ? { metadata: parsed.data.metadata } : {}),
+    });
+    return reply.status(201).send({ account });
+  });
+
+  server.get("/v1/orgs/:orgId/channels/accounts/:accountId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+    const account = await store.getChannelAccountById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+    });
+    if (!account) {
+      throw notFound("Channel account not found");
+    }
+    return { account };
+  });
+
+  server.patch("/v1/orgs/:orgId/channels/accounts/:accountId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const parsed = channelAccountUpdateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid channel account patch payload", parsed.error.flatten());
+    }
+    const account = await store.updateChannelAccount({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+      patch: {
+        ...(parsed.data.displayName !== undefined ? { displayName: parsed.data.displayName } : {}),
+        ...(parsed.data.enabled !== undefined ? { enabled: parsed.data.enabled } : {}),
+        ...(parsed.data.dmPolicy !== undefined ? { dmPolicy: parsed.data.dmPolicy } : {}),
+        ...(parsed.data.groupPolicy !== undefined ? { groupPolicy: parsed.data.groupPolicy } : {}),
+        ...(parsed.data.requireMentionInGroup !== undefined
+          ? { requireMentionInGroup: parsed.data.requireMentionInGroup }
+          : {}),
+        ...(parsed.data.webhookUrl !== undefined ? { webhookUrl: parsed.data.webhookUrl } : {}),
+        ...(parsed.data.metadata !== undefined ? { metadata: parsed.data.metadata } : {}),
+        ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+        ...(parsed.data.lastError !== undefined ? { lastError: parsed.data.lastError } : {}),
+      },
+    });
+    if (!account) {
+      throw notFound("Channel account not found");
+    }
+    return { account };
+  });
+
+  server.delete("/v1/orgs/:orgId/channels/accounts/:accountId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+    const ok = await store.deleteChannelAccount({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+    });
+    if (!ok) {
+      throw notFound("Channel account not found");
+    }
+    return { ok: true };
+  });
+
+  server.post("/v1/orgs/:orgId/channels/accounts/:accountId/secrets", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+    const parsed = channelSecretCreateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw badRequest("Invalid channel secret payload", parsed.error.flatten());
+    }
+    if (parsed.data.value.trim().length === 0) {
+      throw secretValueRequired();
+    }
+    const secret = await store.createChannelAccountSecret({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+      name: parsed.data.name,
+      value: parsed.data.value,
+    });
+    return reply.status(201).send({ secret });
+  });
+
+  server.get("/v1/orgs/:orgId/channels/accounts/:accountId/allowlist", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const query = z
+      .object({
+        scope: z.string().min(1).max(64).optional(),
+      })
+      .safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("Invalid allowlist query", query.error.flatten());
+    }
+
+    const entries = await store.listChannelAllowlistEntries({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+      ...(query.data.scope ? { scope: query.data.scope } : {}),
+    });
+    return { entries };
+  });
+
+  server.put("/v1/orgs/:orgId/channels/accounts/:accountId/allowlist", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const parsed = channelAllowlistEntrySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid allowlist payload", parsed.error.flatten());
+    }
+
+    const entry = await store.putChannelAllowlistEntry({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+      scope: parsed.data.scope,
+      subject: parsed.data.subject,
+    });
+    return reply.status(201).send({ entry });
+  });
+
+  server.delete("/v1/orgs/:orgId/channels/accounts/:accountId/allowlist", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const parsed = channelAllowlistEntrySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid allowlist payload", parsed.error.flatten());
+    }
+
+    const ok = await store.deleteChannelAllowlistEntry({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+      scope: parsed.data.scope,
+      subject: parsed.data.subject,
+    });
+    if (!ok) {
+      throw notFound("Allowlist entry not found");
+    }
+    return { ok: true };
+  });
+
+  server.get("/v1/orgs/:orgId/channels/accounts/:accountId/status", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string };
+    if (!params.orgId || !params.accountId) {
+      throw badRequest("Missing orgId or accountId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const account = await store.getChannelAccountById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+    });
+    if (!account) {
+      throw notFound("Channel account not found");
+    }
+    const [events, secrets, pendingPairings, allowlistEntries] = await Promise.all([
+      store.listChannelEvents({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        accountId: account.id,
+        limit: 20,
+      }),
+      store.listChannelAccountSecrets({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        accountId: account.id,
+      }),
+      store.listChannelPairingRequests({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        accountId: account.id,
+        status: "pending",
+      }),
+      store.listChannelAllowlistEntries({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        accountId: account.id,
+      }),
+    ]);
+    return {
+      status: {
+        account,
+        secretsCount: secrets.length,
+        pendingPairings: pendingPairings.length,
+        allowlistCount: allowlistEntries.length,
+        latestEvents: events,
+      },
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/channels/accounts/:accountId/actions/:action", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; accountId?: string; action?: string };
+    if (!params.orgId || !params.accountId || !params.action) {
+      throw badRequest("Missing orgId, accountId or action");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+
+    const action = z.enum(["start", "stop", "reconnect", "login", "logout"]).safeParse(params.action);
+    if (!action.success) {
+      throw badRequest("Invalid action");
+    }
+    const nextStatus = action.data === "stop" || action.data === "logout" ? "stopped" : "running";
+    const account = await store.updateChannelAccount({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      accountId: params.accountId,
+      patch: {
+        status: nextStatus,
+        ...(action.data === "start" || action.data === "reconnect" || action.data === "login" ? { lastError: null } : {}),
+      },
+    });
+    if (!account) {
+      throw notFound("Channel account not found");
+    }
+    return { ok: true, action: action.data, account };
+  });
+
+  server.get("/v1/orgs/:orgId/channels/pairing/requests", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+    const query = z
+      .object({
+        accountId: z.string().uuid().optional(),
+        status: z.enum(["pending", "approved", "rejected"]).optional(),
+      })
+      .safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("Invalid pairing request query", query.error.flatten());
+    }
+    const requests = await store.listChannelPairingRequests({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      ...(query.data.accountId ? { accountId: query.data.accountId } : {}),
+      ...(query.data.status ? { status: query.data.status } : {}),
+    });
+    return { requests };
+  });
+
+  server.post("/v1/orgs/:orgId/channels/pairing/requests/:requestId/approve", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; requestId?: string };
+    if (!params.orgId || !params.requestId) {
+      throw badRequest("Missing orgId or requestId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+    const updated = await store.updateChannelPairingRequestStatus({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      requestId: params.requestId,
+      status: "approved",
+    });
+    if (!updated) {
+      throw notFound("Pairing request not found");
+    }
+    return { request: updated };
+  });
+
+  server.post("/v1/orgs/:orgId/channels/pairing/requests/:requestId/reject", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; requestId?: string };
+    if (!params.orgId || !params.requestId) {
+      throw badRequest("Missing orgId or requestId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage channels");
+    }
+    const updated = await store.updateChannelPairingRequestStatus({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      requestId: params.requestId,
+      status: "rejected",
+    });
+    if (!updated) {
+      throw notFound("Pairing request not found");
+    }
+    return { request: updated };
   });
 
   server.get("/v1/orgs/:orgId/toolsets", async (request) => {

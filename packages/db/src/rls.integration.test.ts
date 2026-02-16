@@ -78,6 +78,8 @@ describeIf("RLS integration", () => {
     const runBId = crypto.randomUUID();
     const secretAId = crypto.randomUUID();
     const secretBId = crypto.randomUUID();
+    const channelAccountAId = crypto.randomUUID();
+    const channelAccountBId = crypto.randomUUID();
     const toolsetAId = crypto.randomUUID();
     const toolsetPublicSlug = `public-toolset-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const builderSessionAId = crypto.randomUUID();
@@ -121,6 +123,10 @@ describeIf("RLS integration", () => {
       await setup.query(
         "insert into connector_secrets(id, organization_id, connector_id, name, kek_id, dek_ciphertext, dek_iv, dek_tag, secret_ciphertext, secret_iv, secret_tag, created_by_user_id, updated_by_user_id) values ($1, $2, 'github', 'token', 'test', decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), decode('00','hex'), $3, $3)",
         [secretAId, orgAId, adminId]
+      );
+      await setup.query(
+        "insert into channel_accounts(id, organization_id, channel_id, account_key, created_by_user_id, updated_by_user_id) values ($1, $2, 'telegram', 'org-a-main', $3, $3)",
+        [channelAccountAId, orgAId, adminId]
       );
       await setup.query(
         "insert into organization_credit_balances(organization_id, balance_credits) values ($1, 100)",
@@ -181,6 +187,10 @@ describeIf("RLS integration", () => {
         [secretBId, orgBId, otherId]
       );
       await setup.query(
+        "insert into channel_accounts(id, organization_id, channel_id, account_key, created_by_user_id, updated_by_user_id) values ($1, $2, 'telegram', 'org-b-main', $3, $3)",
+        [channelAccountBId, orgBId, otherId]
+      );
+      await setup.query(
         "insert into organization_credit_balances(organization_id, balance_credits) values ($1, 50)",
         [orgBId]
       );
@@ -230,6 +240,11 @@ describeIf("RLS integration", () => {
         [orgAId, secretAId]
       );
       expect(wrongSecretContext.rowCount).toBe(0);
+      const wrongChannelContext = await client.query(
+        "select id from channel_accounts where organization_id = $1 and id = $2",
+        [orgAId, channelAccountAId]
+      );
+      expect(wrongChannelContext.rowCount).toBe(0);
       const wrongCreditBalanceContext = await client.query(
         "select organization_id from organization_credit_balances where organization_id = $1",
         [orgAId]
@@ -285,6 +300,11 @@ describeIf("RLS integration", () => {
         [orgAId, secretAId]
       );
       expect(rightSecretContext.rowCount).toBe(1);
+      const rightChannelContext = await client.query(
+        "select id from channel_accounts where organization_id = $1 and id = $2",
+        [orgAId, channelAccountAId]
+      );
+      expect(rightChannelContext.rowCount).toBe(1);
       const rightCreditBalanceContext = await client.query(
         "select organization_id from organization_credit_balances where organization_id = $1",
         [orgAId]

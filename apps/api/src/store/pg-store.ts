@@ -86,6 +86,19 @@ import {
   listOrganizationCreditLedger as dbListOrganizationCreditLedger,
   getOrganizationBillingAccount as dbGetOrganizationBillingAccount,
   createOrganizationBillingAccount as dbCreateOrganizationBillingAccount,
+  createChannelAccount as dbCreateChannelAccount,
+  listChannelAccountsByOrg as dbListChannelAccountsByOrg,
+  getChannelAccountById as dbGetChannelAccountById,
+  updateChannelAccount as dbUpdateChannelAccount,
+  deleteChannelAccount as dbDeleteChannelAccount,
+  createChannelAccountSecret as dbCreateChannelAccountSecret,
+  listChannelAccountSecrets as dbListChannelAccountSecrets,
+  listChannelAllowlistEntries as dbListChannelAllowlistEntries,
+  putChannelAllowlistEntry as dbPutChannelAllowlistEntry,
+  deleteChannelAllowlistEntry as dbDeleteChannelAllowlistEntry,
+  listChannelPairingRequests as dbListChannelPairingRequests,
+  updateChannelPairingRequestStatus as dbUpdateChannelPairingRequestStatus,
+  listChannelEvents as dbListChannelEvents,
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared";
@@ -94,6 +107,11 @@ import type {
   AgentSessionRecord,
   AgentToolsetRecord,
   AppStore,
+  ChannelAccountRecord,
+  ChannelAccountSecretRecord,
+  ChannelAllowlistEntryRecord,
+  ChannelEventRecord,
+  ChannelPairingRequestRecord,
   ExecutorPairingTokenRecord,
   OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
@@ -106,6 +124,10 @@ import type {
 
 function toIso(value: Date): string {
   return value.toISOString();
+}
+
+function toWorkflowRunTriggerType(value: unknown): "manual" | "channel" {
+  return value === "channel" ? "channel" : "manual";
 }
 
 export class PgAppStore implements AppStore {
@@ -216,6 +238,86 @@ export class PgAppStore implements AppStore {
       seq: row.seq,
       eventType: row.eventType,
       level: row.level,
+      payload: row.payload ?? null,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toChannelAccountRecord(row: any): ChannelAccountRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      channelId: row.channelId,
+      accountKey: row.accountKey,
+      displayName: row.displayName ?? null,
+      enabled: Boolean(row.enabled),
+      status: row.status,
+      dmPolicy: row.dmPolicy,
+      groupPolicy: row.groupPolicy,
+      requireMentionInGroup: Boolean(row.requireMentionInGroup),
+      webhookUrl: row.webhookUrl ?? null,
+      metadata: row.metadata ?? {},
+      lastError: row.lastError ?? null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toChannelAccountSecretRecord(row: any): ChannelAccountSecretRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      accountId: row.accountId,
+      name: row.name,
+      createdByUserId: row.createdByUserId,
+      updatedByUserId: row.updatedByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toChannelPairingRequestRecord(row: any): ChannelPairingRequestRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      accountId: row.accountId,
+      scope: row.scope,
+      requesterId: row.requesterId,
+      requesterDisplayName: row.requesterDisplayName ?? null,
+      code: row.code,
+      status: row.status,
+      expiresAt: toIso(row.expiresAt),
+      approvedByUserId: row.approvedByUserId ?? null,
+      approvedAt: row.approvedAt ? toIso(row.approvedAt) : null,
+      rejectedAt: row.rejectedAt ? toIso(row.rejectedAt) : null,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toChannelAllowlistEntryRecord(row: any): ChannelAllowlistEntryRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      accountId: row.accountId,
+      scope: row.scope,
+      subject: row.subject,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toChannelEventRecord(row: any): ChannelEventRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      accountId: row.accountId,
+      conversationId: row.conversationId ?? null,
+      eventType: row.eventType,
+      level: row.level,
+      message: row.message ?? null,
       payload: row.payload ?? null,
       createdAt: toIso(row.createdAt),
     };
@@ -851,7 +953,7 @@ export class PgAppStore implements AppStore {
   async createWorkflowRun(input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual";
+    triggerType: "manual" | "channel";
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
@@ -864,7 +966,7 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       workflowId: row.workflowId,
-      triggerType: row.triggerType as "manual",
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
       status: row.status as "queued" | "running" | "succeeded" | "failed",
       attemptCount: row.attemptCount,
       maxAttempts: row.maxAttempts,
@@ -909,7 +1011,7 @@ export class PgAppStore implements AppStore {
         id: row.id,
         organizationId: row.organizationId,
         workflowId: row.workflowId,
-        triggerType: row.triggerType as "manual",
+        triggerType: toWorkflowRunTriggerType(row.triggerType),
         status: row.status as "queued" | "running" | "succeeded" | "failed",
         attemptCount: row.attemptCount,
         maxAttempts: row.maxAttempts,
@@ -938,7 +1040,7 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       workflowId: row.workflowId,
-      triggerType: row.triggerType as "manual",
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
       status: row.status as "queued" | "running" | "succeeded" | "failed",
       attemptCount: row.attemptCount,
       maxAttempts: row.maxAttempts,
@@ -1085,7 +1187,7 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       workflowId: row.workflowId,
-      triggerType: row.triggerType as "manual",
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
       status: row.status as "queued" | "running" | "succeeded" | "failed",
       attemptCount: row.attemptCount,
       maxAttempts: row.maxAttempts,
@@ -1125,7 +1227,7 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       workflowId: row.workflowId,
-      triggerType: row.triggerType as "manual",
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
       status: row.status as "queued" | "running" | "succeeded" | "failed",
       attemptCount: row.attemptCount,
       maxAttempts: row.maxAttempts,
@@ -1158,7 +1260,7 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       workflowId: row.workflowId,
-      triggerType: row.triggerType as "manual",
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
       status: row.status as "queued" | "running" | "succeeded" | "failed",
       attemptCount: row.attemptCount,
       maxAttempts: row.maxAttempts,
@@ -1191,7 +1293,7 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       workflowId: row.workflowId,
-      triggerType: row.triggerType as "manual",
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
       status: row.status as "queued" | "running" | "succeeded" | "failed",
       attemptCount: row.attemptCount,
       maxAttempts: row.maxAttempts,
@@ -2110,5 +2212,283 @@ export class PgAppStore implements AppStore {
       events: out.events.map((r) => this.toAgentSessionEventRecord(r)),
       nextCursor: out.nextCursor,
     };
+  }
+
+  async listChannelAccounts(input: {
+    organizationId: string;
+    actorUserId: string;
+    channelId?: string | null;
+  }): Promise<ChannelAccountRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListChannelAccountsByOrg(db, {
+          organizationId: input.organizationId,
+          ...(input.channelId ? { channelId: input.channelId } : {}),
+        })
+    );
+    return rows.map((r) => this.toChannelAccountRecord(r));
+  }
+
+  async createChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    channelId: string;
+    accountKey: string;
+    displayName?: string | null;
+    enabled?: boolean;
+    dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+    groupPolicy?: "allowlist" | "open" | "disabled";
+    requireMentionInGroup?: boolean;
+    webhookUrl?: string | null;
+    metadata?: unknown;
+  }): Promise<ChannelAccountRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateChannelAccount(db, {
+          organizationId: input.organizationId,
+          channelId: input.channelId,
+          accountKey: input.accountKey,
+          displayName: input.displayName ?? null,
+          enabled: input.enabled ?? true,
+          dmPolicy: input.dmPolicy ?? "pairing",
+          groupPolicy: input.groupPolicy ?? "allowlist",
+          requireMentionInGroup: input.requireMentionInGroup ?? true,
+          webhookUrl: input.webhookUrl ?? null,
+          metadata: input.metadata ?? {},
+          createdByUserId: input.actorUserId,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+    return this.toChannelAccountRecord(row);
+  }
+
+  async getChannelAccountById(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<ChannelAccountRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbGetChannelAccountById(db, { organizationId: input.organizationId, accountId: input.accountId })
+    );
+    return row ? this.toChannelAccountRecord(row) : null;
+  }
+
+  async updateChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    patch: {
+      displayName?: string | null;
+      enabled?: boolean;
+      dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+      groupPolicy?: "allowlist" | "open" | "disabled";
+      requireMentionInGroup?: boolean;
+      webhookUrl?: string | null;
+      metadata?: unknown;
+      status?: string;
+      lastError?: string | null;
+    };
+  }): Promise<ChannelAccountRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpdateChannelAccount(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+          patch: {
+            ...(input.patch.displayName !== undefined ? { displayName: input.patch.displayName } : {}),
+            ...(input.patch.enabled !== undefined ? { enabled: input.patch.enabled } : {}),
+            ...(input.patch.dmPolicy !== undefined ? { dmPolicy: input.patch.dmPolicy } : {}),
+            ...(input.patch.groupPolicy !== undefined ? { groupPolicy: input.patch.groupPolicy } : {}),
+            ...(input.patch.requireMentionInGroup !== undefined
+              ? { requireMentionInGroup: input.patch.requireMentionInGroup }
+              : {}),
+            ...(input.patch.webhookUrl !== undefined ? { webhookUrl: input.patch.webhookUrl } : {}),
+            ...(input.patch.metadata !== undefined ? { metadata: input.patch.metadata } : {}),
+            ...(input.patch.status !== undefined ? { status: input.patch.status } : {}),
+            ...(input.patch.lastError !== undefined ? { lastError: input.patch.lastError } : {}),
+            updatedByUserId: input.actorUserId,
+          },
+        })
+    );
+    return row ? this.toChannelAccountRecord(row) : null;
+  }
+
+  async deleteChannelAccount(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<boolean> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbDeleteChannelAccount(db, { organizationId: input.organizationId, accountId: input.accountId })
+    );
+    return Boolean(row);
+  }
+
+  async createChannelAccountSecret(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    name: string;
+    value: string;
+  }): Promise<ChannelAccountSecretRecord> {
+    const kek = parseKekFromEnv();
+    const encrypted = encryptSecret({
+      plaintext: input.value,
+      kek,
+    });
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateChannelAccountSecret(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+          name: input.name,
+          kekId: encrypted.kekId,
+          dekCiphertext: encrypted.dekCiphertext,
+          dekIv: encrypted.dekIv,
+          dekTag: encrypted.dekTag,
+          secretCiphertext: encrypted.secretCiphertext,
+          secretIv: encrypted.secretIv,
+          secretTag: encrypted.secretTag,
+          createdByUserId: input.actorUserId,
+          updatedByUserId: input.actorUserId,
+        })
+    );
+    return this.toChannelAccountSecretRecord(row);
+  }
+
+  async listChannelAccountSecrets(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+  }): Promise<ChannelAccountSecretRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListChannelAccountSecrets(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+        })
+    );
+    return rows.map((r) => this.toChannelAccountSecretRecord(r));
+  }
+
+  async listChannelPairingRequests(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId?: string | null;
+    status?: string | null;
+  }): Promise<ChannelPairingRequestRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListChannelPairingRequests(db, {
+          organizationId: input.organizationId,
+          ...(input.accountId ? { accountId: input.accountId } : {}),
+          ...(input.status ? { status: input.status } : {}),
+        })
+    );
+    return rows.map((r) => this.toChannelPairingRequestRecord(r));
+  }
+
+  async listChannelAllowlistEntries(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope?: string | null;
+  }): Promise<ChannelAllowlistEntryRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListChannelAllowlistEntries(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+          ...(input.scope ? { scope: input.scope } : {}),
+        })
+    );
+    return rows.map((row) => this.toChannelAllowlistEntryRecord(row));
+  }
+
+  async putChannelAllowlistEntry(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope: string;
+    subject: string;
+  }): Promise<ChannelAllowlistEntryRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbPutChannelAllowlistEntry(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+          scope: input.scope,
+          subject: input.subject,
+          createdByUserId: input.actorUserId,
+        })
+    );
+    return this.toChannelAllowlistEntryRecord(row);
+  }
+
+  async deleteChannelAllowlistEntry(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    scope: string;
+    subject: string;
+  }): Promise<boolean> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbDeleteChannelAllowlistEntry(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+          scope: input.scope,
+          subject: input.subject,
+        })
+    );
+    return Boolean(row);
+  }
+
+  async updateChannelPairingRequestStatus(input: {
+    organizationId: string;
+    actorUserId: string;
+    requestId: string;
+    status: "approved" | "rejected";
+  }): Promise<ChannelPairingRequestRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpdateChannelPairingRequestStatus(db, {
+          organizationId: input.organizationId,
+          requestId: input.requestId,
+          status: input.status,
+          ...(input.status === "approved" ? { approvedByUserId: input.actorUserId } : {}),
+        })
+    );
+    return row ? this.toChannelPairingRequestRecord(row) : null;
+  }
+
+  async listChannelEvents(input: {
+    organizationId: string;
+    actorUserId: string;
+    accountId: string;
+    limit?: number;
+  }): Promise<ChannelEventRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListChannelEvents(db, {
+          organizationId: input.organizationId,
+          accountId: input.accountId,
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((r) => this.toChannelEventRecord(r));
   }
 }

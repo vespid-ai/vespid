@@ -15,7 +15,8 @@
     "toolsets": "Toolsets",
     "auth": "Auth",
     "org": "Organization",
-    "openById": "Open by ID"
+    "openById": "Open by ID",
+    "channels": "Channels"
   },
   "common": {
     "search": "Search",
@@ -1008,6 +1009,91 @@
       "copyright": "© 2026 Vespid. All rights reserved.",
       "terms": "Terms",
       "privacy": "Privacy"
+    }
+  },
+  "channels": {
+    "title": "Channels",
+    "subtitle": "Manage organization channel accounts with secure session and workflow routing.",
+    "create": {
+      "title": "Create channel account",
+      "subtitle": "Each account is org-scoped. Inbound org context is resolved from account mapping only.",
+      "button": "Create account",
+      "created": "Channel account created.",
+      "dependencies": "Dependencies"
+    },
+    "fields": {
+      "channel": "Channel",
+      "accountKey": "Account key",
+      "displayName": "Display name",
+      "webhookUrl": "Webhook URL (optional)",
+      "dmPolicy": "DM policy",
+      "groupPolicy": "Group policy",
+      "enabled": "Enabled",
+      "requireMentionInGroup": "Require mention in groups",
+      "metadata": "Metadata (JSON)"
+    },
+    "status": {
+      "enabled": "enabled",
+      "disabled": "disabled"
+    },
+    "security": {
+      "groupMentionHint": "When enabled, group messages must mention the bot before routing."
+    },
+    "accounts": {
+      "title": "Channel accounts",
+      "subtitle": "All accounts in the active organization.",
+      "empty": "No channel accounts yet.",
+      "accountKey": "Account key",
+      "state": "State",
+      "open": "Open"
+    },
+    "pairing": {
+      "title": "Pairing requests",
+      "subtitle": "Approve or reject pending DM pairing requests.",
+      "empty": "No pending pairing requests.",
+      "requester": "Requester",
+      "code": "Code",
+      "expiresAt": "Expires at",
+      "approve": "Approve",
+      "reject": "Reject",
+      "approved": "Pairing request approved.",
+      "rejected": "Pairing request rejected."
+    },
+    "detail": {
+      "title": "Channel account",
+      "subtitle": "Configure runtime security, secrets, and operational actions.",
+      "configTitle": "Configuration",
+      "configSubtitle": "Update channel policies and account metadata.",
+      "runtimeTitle": "Runtime status",
+      "runtimeSubtitle": "Current health and operational actions.",
+      "secretsTitle": "Secrets",
+      "secretsSubtitle": "Add or rotate account secrets without exposing plaintext.",
+      "secretName": "Secret name",
+      "secretValue": "Secret value",
+      "createSecret": "Create secret",
+      "secretsCount": "Secret count",
+      "pendingPairings": "Pending pairings",
+      "eventsTitle": "Recent events",
+      "eventsSubtitle": "Latest normalized channel runtime events.",
+      "eventsEmpty": "No events yet.",
+      "saved": "Channel account saved.",
+      "secretCreated": "Secret created.",
+      "actionDone": "Action executed: {action}.",
+      "deleted": "Channel account deleted.",
+      "allowlistTitle": "Allowlist",
+      "allowlistSubtitle": "Manage sender/group/conversation allowlist entries used by security gating.",
+      "allowlistScope": "Scope",
+      "allowlistSubject": "Subject",
+      "allowlistAdd": "Add entry",
+      "allowlistEmpty": "No allowlist entries.",
+      "allowlistSaved": "Allowlist entry saved.",
+      "allowlistDeleted": "Allowlist entry deleted.",
+      "allowlistCount": "Allowlist entries"
+    },
+    "errors": {
+      "accountKeyRequired": "Account key is required.",
+      "secretRequired": "Secret name and value are required.",
+      "allowlistRequired": "Allowlist scope and subject are required."
     }
   }
 }

@@ -258,3 +258,93 @@ export type GatewayBrainSessionEventV2 = {
   payload: unknown;
   createdAt: string;
 };
+
+export type ChannelId =
+  | "whatsapp"
+  | "telegram"
+  | "discord"
+  | "irc"
+  | "slack"
+  | "googlechat"
+  | "signal"
+  | "imessage"
+  | "feishu"
+  | "mattermost"
+  | "bluebubbles"
+  | "msteams"
+  | "line"
+  | "nextcloud-talk"
+  | "matrix"
+  | "nostr"
+  | "tlon"
+  | "twitch"
+  | "zalo"
+  | "zalouser"
+  | "webchat";
+
+export type ChannelDmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+export type ChannelGroupPolicy = "allowlist" | "open" | "disabled";
+export type ChannelMessageEventType = "message.received" | "message.mentioned" | "message.dm";
+
+export type ChannelSecurityPolicy = {
+  dmPolicy: ChannelDmPolicy;
+  groupPolicy: ChannelGroupPolicy;
+  requireMentionInGroup: boolean;
+  allowFrom: string[];
+  groupAllowFrom: string[];
+};
+
+export type ChannelInboundEnvelope = {
+  channelId: ChannelId;
+  accountId: string;
+  accountKey: string;
+  organizationId: string;
+  providerMessageId: string;
+  conversationId: string;
+  senderId: string;
+  senderDisplayName?: string | null;
+  text: string;
+  receivedAt: string;
+  event: ChannelMessageEventType;
+  mentionMatched: boolean;
+  raw?: unknown;
+};
+
+export type ChannelOutboundRequest = {
+  channelId: ChannelId;
+  accountId: string;
+  accountKey: string;
+  organizationId: string;
+  conversationId: string;
+  text: string;
+  replyToProviderMessageId?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ChannelTriggerPayload = {
+  organizationId: string;
+  workflowId: string;
+  requestedByUserId: string;
+  channelId: ChannelId;
+  accountId: string;
+  accountKey: string;
+  conversationId: string;
+  providerMessageId: string;
+  senderId: string;
+  senderDisplayName?: string | null;
+  text: string;
+  event: ChannelMessageEventType;
+  mentionMatched: boolean;
+  receivedAt: string;
+  raw?: unknown;
+};
+
+export type ChannelSessionSource = {
+  channelId: ChannelId;
+  accountId: string;
+  accountKey: string;
+  conversationId: string;
+  providerMessageId: string;
+  mentionMatched: boolean;
+  event: ChannelMessageEventType;
+};

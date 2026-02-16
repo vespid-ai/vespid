@@ -226,6 +226,215 @@ describe("api hardening foundation", () => {
     );
   });
 
+  it("exposes channel catalog metadata", async () => {
+    const channels = await server.inject({
+      method: "GET",
+      url: "/v1/meta/channels",
+    });
+    expect(channels.statusCode).toBe(200);
+    const body = channels.json() as {
+      channels: Array<{ id: string; label: string; category: string }>;
+    };
+    expect(body.channels.some((channel) => channel.id === "telegram")).toBe(true);
+    expect(body.channels.some((channel) => channel.id === "webchat")).toBe(true);
+  });
+
+  it("requires service token for internal channel trigger endpoint", async () => {
+    const trigger = await server.inject({
+      method: "POST",
+      url: "/internal/v1/channels/trigger-run",
+      payload: {
+        organizationId: crypto.randomUUID(),
+        workflowId: crypto.randomUUID(),
+        requestedByUserId: crypto.randomUUID(),
+        payload: {},
+      },
+    });
+
+    expect(trigger.statusCode).toBe(401);
+    expect((trigger.json() as { code: string }).code).toBe("UNAUTHORIZED");
+  });
+
+  it("returns 503 and rolls back queued run for internal channel trigger when queue is unavailable", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `internal-channel-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerBody = ownerSignup.json() as { session: { token: string }; user: { id: string } };
+    const ownerToken = bearerToken(ownerBody);
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Internal Channel Trigger Org",
+        slug: `internal-channel-trigger-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const createWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Internal Channel Trigger Workflow",
+        dsl: {
+          version: "v2",
+          trigger: {
+            type: "trigger.channel",
+            config: {
+              channelId: "telegram",
+              event: "message.received",
+            },
+          },
+          nodes: [{ id: "node-http", type: "http.request" }],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publishWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishWorkflow.statusCode).toBe(200);
+
+    const sizeBefore = ((store as unknown as { workflowRuns: Map<string, unknown> }).workflowRuns).size;
+    queueProducer.setFailure(new Error("REDIS_DOWN"));
+
+    const trigger = await server.inject({
+      method: "POST",
+      url: "/internal/v1/channels/trigger-run",
+      headers: {
+        "x-service-token": "dev-gateway-token",
+      },
+      payload: {
+        organizationId: orgId,
+        workflowId,
+        requestedByUserId: ownerBody.user.id,
+        payload: {
+          channelId: "telegram",
+          text: "hello",
+        },
+      },
+    });
+    expect(trigger.statusCode).toBe(503);
+    expect((trigger.json() as { code: string }).code).toBe("QUEUE_UNAVAILABLE");
+
+    const sizeAfter = ((store as unknown as { workflowRuns: Map<string, unknown> }).workflowRuns).size;
+    expect(sizeAfter).toBe(sizeBefore);
+    queueProducer.setFailure(null);
+  });
+
+  it("manages channel allowlist entries in org scope", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `allowlist-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Allowlist Org",
+        slug: `allowlist-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const createAccount = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/channels/accounts`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        channelId: "telegram",
+        accountKey: "allowlist-main",
+        displayName: "Allowlist Main",
+      },
+    });
+    expect(createAccount.statusCode).toBe(201);
+    const accountId = (createAccount.json() as { account: { id: string } }).account.id;
+
+    const putEntry = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/channels/accounts/${accountId}/allowlist`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        scope: "sender",
+        subject: "user-1",
+      },
+    });
+    expect(putEntry.statusCode).toBe(201);
+
+    const listEntries = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/channels/accounts/${accountId}/allowlist`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listEntries.statusCode).toBe(200);
+    const listed = listEntries.json() as { entries: Array<{ scope: string; subject: string }> };
+    expect(listed.entries.some((entry) => entry.scope === "sender" && entry.subject === "user-1")).toBe(true);
+
+    const deleteEntry = await server.inject({
+      method: "DELETE",
+      url: `/v1/orgs/${orgId}/channels/accounts/${accountId}/allowlist`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        scope: "sender",
+        subject: "user-1",
+      },
+    });
+    expect(deleteEntry.statusCode).toBe(200);
+
+    const listAfterDelete = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/channels/accounts/${accountId}/allowlist`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listAfterDelete.statusCode).toBe(200);
+    const after = listAfterDelete.json() as { entries: Array<{ scope: string; subject: string }> };
+    expect(after.entries.some((entry) => entry.scope === "sender" && entry.subject === "user-1")).toBe(false);
+  });
+
   it("supports cookie refresh and revocable sessions", async () => {
     const signup = await server.inject({
       method: "POST",
