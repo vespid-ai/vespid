@@ -20,8 +20,10 @@ import { Textarea } from "../../../../components/ui/textarea";
 import { CodeBlock } from "../../../../components/ui/code-block";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { LlmConfigField } from "../../../../components/app/llm/llm-config-field";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useSecrets } from "../../../../lib/hooks/use-secrets";
 import { useChatToolsetBuilderSession, useCreateToolsetBuilderSession, useFinalizeToolsetBuilderSession } from "../../../../lib/hooks/use-toolset-builder";
@@ -41,6 +43,7 @@ import {
   useUpdateToolset,
 } from "../../../../lib/hooks/use-toolsets";
 import type { ToolsetCatalogItem } from "@vespid/shared/toolset-builder";
+import { isUnauthorizedError } from "../../../../lib/api";
 
 const ENV_PLACEHOLDER_RE = /^\$\{ENV:[A-Z0-9_]{1,128}\}$/;
 const MCP_NAME_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/;
@@ -744,23 +747,25 @@ export default function ToolsetsPage() {
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
 
-  const toolsetsQuery = useToolsets(orgId);
-  const createToolset = useCreateToolset(orgId);
-  const updateToolset = useUpdateToolset(orgId);
-  const deleteToolset = useDeleteToolset(orgId);
-  const publishToolset = usePublishToolset(orgId);
-  const unpublishToolset = useUnpublishToolset(orgId);
-  const settingsQuery = useOrgSettings(orgId);
-  const updateSettings = useUpdateOrgSettings(orgId);
-  const secretsQuery = useSecrets(orgId);
+  const toolsetsQuery = useToolsets(scopedOrgId);
+  const createToolset = useCreateToolset(scopedOrgId);
+  const updateToolset = useUpdateToolset(scopedOrgId);
+  const deleteToolset = useDeleteToolset(scopedOrgId);
+  const publishToolset = usePublishToolset(scopedOrgId);
+  const unpublishToolset = useUnpublishToolset(scopedOrgId);
+  const settingsQuery = useOrgSettings(scopedOrgId);
+  const updateSettings = useUpdateOrgSettings(scopedOrgId);
+  const secretsQuery = useSecrets(scopedOrgId);
 
-  const createBuilderSession = useCreateToolsetBuilderSession(orgId);
-  const chatBuilderSession = useChatToolsetBuilderSession(orgId);
-  const finalizeBuilderSession = useFinalizeToolsetBuilderSession(orgId);
+  const createBuilderSession = useCreateToolsetBuilderSession(scopedOrgId);
+  const chatBuilderSession = useChatToolsetBuilderSession(scopedOrgId);
+  const finalizeBuilderSession = useFinalizeToolsetBuilderSession(scopedOrgId);
 
-  const galleryQuery = usePublicToolsetGallery(Boolean(orgId));
-  const adoptToolset = useAdoptPublicToolset(orgId);
+  const galleryQuery = usePublicToolsetGallery(Boolean(scopedOrgId));
+  const adoptToolset = useAdoptPublicToolset(scopedOrgId);
 
   const [aiOpen, setAiOpen] = useState(false);
   const [aiStep, setAiStep] = useState<"start" | "chat" | "preview">("start");
@@ -905,11 +910,11 @@ export default function ToolsetsPage() {
                 size="sm"
                 variant="outline"
                 onClick={async () => {
-                  if (!orgId) return;
+                  if (!scopedOrgId) return;
                   await updateSettings.mutateAsync({ toolsets: { defaultToolsetId: toolset.id } });
                   toast.success(t("common.saved"));
                 }}
-                disabled={!orgId || updateSettings.isPending}
+                disabled={!scopedOrgId || updateSettings.isPending}
               >
                 {t("toolsets.setDefault")}
               </Button>
@@ -965,6 +970,26 @@ export default function ToolsetsPage() {
     return galleryItems.filter((it) => (it.name ?? "").toLowerCase().includes(q) || (it.publicSlug ?? "").toLowerCase().includes(q));
   }, [galleryItems, gallerySearch]);
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("toolsets.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("toolsets.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void toolsetsQuery.refetch();
+            void galleryQuery.refetch();
+            void settingsQuery.refetch();
+            void secretsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -980,6 +1005,32 @@ export default function ToolsetsPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (toolsetsQuery.isError && isUnauthorizedError(toolsetsQuery.error)) ||
+    (galleryQuery.isError && isUnauthorizedError(galleryQuery.error)) ||
+    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error)) ||
+    (secretsQuery.isError && isUnauthorizedError(secretsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("toolsets.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("toolsets.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void toolsetsQuery.refetch();
+            void galleryQuery.refetch();
+            void settingsQuery.refetch();
+            void secretsQuery.refetch();
+          }}
         />
       </div>
     );
@@ -1006,7 +1057,7 @@ export default function ToolsetsPage() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={() => toolsetsQuery.refetch()} disabled={!orgId}>
+                <Button onClick={() => toolsetsQuery.refetch()} disabled={!scopedOrgId}>
                   {t("common.refresh")}
                 </Button>
 
@@ -1014,12 +1065,12 @@ export default function ToolsetsPage() {
                   title={t("toolsets.create")}
                   initial={emptyDraft()}
                   trigger={
-                    <Button variant="accent" disabled={!orgId}>
+                    <Button variant="accent" disabled={!scopedOrgId}>
                       {t("common.create")}
                     </Button>
                   }
                   onSave={async (draft) => {
-                    if (!orgId) {
+                    if (!scopedOrgId) {
                       toast.error(t("org.requireActive"));
                       return;
                     }
@@ -1036,7 +1087,7 @@ export default function ToolsetsPage() {
 
                 <Button
                   variant="outline"
-                  disabled={!orgId || toolsetsQuery.isError}
+                  disabled={!scopedOrgId || toolsetsQuery.isError}
                   onClick={() => {
                     resetAiBuilder();
                     setAiOpen(true);
@@ -1049,11 +1100,11 @@ export default function ToolsetsPage() {
                   <Button
                     variant="outline"
                     onClick={async () => {
-                      if (!orgId) return;
+                      if (!scopedOrgId) return;
                       await updateSettings.mutateAsync({ toolsets: { defaultToolsetId: null } });
                       toast.success(t("common.saved"));
                     }}
-                    disabled={!orgId || updateSettings.isPending}
+                    disabled={!scopedOrgId || updateSettings.isPending}
                   >
                     {t("toolsets.clearDefault")}
                   </Button>
@@ -1135,7 +1186,7 @@ export default function ToolsetsPage() {
                             <Button
                               size="sm"
                               variant="accent"
-                              disabled={!orgId}
+                              disabled={!scopedOrgId}
                               onClick={() => {
                                 setAdoptSlug(it.publicSlug);
                                 setAdoptName(t("toolsets.adoptDefaultName", { name: it.name }));
@@ -1181,7 +1232,7 @@ export default function ToolsetsPage() {
                   <div className="grid gap-1.5">
                     <Label>{t("toolsets.ai.modelLabel")}</Label>
                     <LlmConfigField
-                      orgId={orgId}
+                      orgId={scopedOrgId}
                       mode="toolsetBuilder"
                       value={{ providerId: aiProvider, modelId: aiModel, secretId: aiSecretId || null } as any}
                       onChange={(next) => {
@@ -1597,7 +1648,7 @@ export default function ToolsetsPage() {
               <Button
                 variant="accent"
                 onClick={async () => {
-                  if (!orgId || !adoptSlug) return;
+                  if (!scopedOrgId || !adoptSlug) return;
                   await adoptToolset.mutateAsync({
                     publicSlug: adoptSlug,
                     name: adoptName.trim(),
@@ -1606,7 +1657,7 @@ export default function ToolsetsPage() {
                   toast.success(t("common.created"));
                   setAdoptOpen(false);
                 }}
-                disabled={!orgId || adoptToolset.isPending || !adoptSlug || adoptName.trim().length === 0}
+                disabled={!scopedOrgId || adoptToolset.isPending || !adoptSlug || adoptName.trim().length === 0}
               >
                 {t("toolsets.adopt")}
               </Button>

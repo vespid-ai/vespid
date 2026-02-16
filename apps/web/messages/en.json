@@ -191,7 +191,12 @@
       "title": "API unreachable",
       "description": "Cannot reach the control plane API at {base}. Start it locally or set NEXT_PUBLIC_API_BASE."
     },
-    "copyFailed": "Copy failed"
+    "copyFailed": "Copy failed",
+    "authRequired": {
+      "title": "Session expired or access denied",
+      "description": "Sign in again to continue, then refresh this page.",
+      "signIn": "Sign in"
+    }
   },
   "org": {
     "requireActive": "Set an active organization first.",

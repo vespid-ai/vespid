@@ -8,8 +8,11 @@ import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Separator } from "../../../../components/ui/separator";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useCheckoutCredits, useCreditLedger, useCreditPacks, useCreditsBalance } from "../../../../lib/hooks/use-billing";
+import { isUnauthorizedError } from "../../../../lib/api";
 
 function formatCurrency(unitAmount: number, currency: string): string {
   try {
@@ -25,15 +28,17 @@ function BillingPageContent() {
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
   const searchParams = useSearchParams();
 
   const status = searchParams.get("status");
   const [cursor, setCursor] = useState<string | null>(null);
 
-  const balanceQuery = useCreditsBalance(orgId);
-  const packsQuery = useCreditPacks(Boolean(orgId));
-  const ledgerQuery = useCreditLedger(orgId, { limit: 20, cursor });
-  const checkout = useCheckoutCredits(orgId);
+  const balanceQuery = useCreditsBalance(scopedOrgId);
+  const packsQuery = useCreditPacks(Boolean(scopedOrgId));
+  const ledgerQuery = useCreditLedger(scopedOrgId, { limit: 20, cursor });
+  const checkout = useCheckoutCredits(scopedOrgId);
 
   const entries = ledgerQuery.data?.entries ?? [];
   const nextCursor = ledgerQuery.data?.nextCursor ?? null;
@@ -46,6 +51,25 @@ function BillingPageContent() {
     if (typeof value !== "number") return t("common.loading");
     return value.toLocaleString();
   }, [balanceQuery.data?.balanceCredits]);
+
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("billing.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("billing.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void balanceQuery.refetch();
+            void packsQuery.refetch();
+            void ledgerQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
 
   if (!orgId) {
     return (
@@ -62,6 +86,30 @@ function BillingPageContent() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (balanceQuery.isError && isUnauthorizedError(balanceQuery.error)) ||
+    (packsQuery.isError && isUnauthorizedError(packsQuery.error)) ||
+    (ledgerQuery.isError && isUnauthorizedError(ledgerQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("billing.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("billing.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void balanceQuery.refetch();
+            void packsQuery.refetch();
+            void ledgerQuery.refetch();
+          }}
         />
       </div>
     );
@@ -115,7 +163,7 @@ function BillingPageContent() {
 
             <Separator className="my-4" />
 
-            <Button onClick={() => balanceQuery.refetch()} disabled={!orgId}>
+            <Button onClick={() => balanceQuery.refetch()} disabled={!scopedOrgId}>
               {t("common.refresh")}
             </Button>
           </CardContent>
@@ -148,9 +196,9 @@ function BillingPageContent() {
                       <Button
                         variant="accent"
                         size="sm"
-                        disabled={!orgId || checkout.isPending}
+                        disabled={!scopedOrgId || checkout.isPending}
                         onClick={async () => {
-                          if (!orgId) {
+                          if (!scopedOrgId) {
                             toast.error(t("org.requireActive"));
                             return;
                           }
@@ -188,7 +236,7 @@ function BillingPageContent() {
             <EmptyState
               title={t("billing.ledger.emptyTitle")}
               action={
-                <Button onClick={() => ledgerQuery.refetch()} disabled={!orgId}>
+                <Button onClick={() => ledgerQuery.refetch()} disabled={!scopedOrgId}>
                   {t("common.refresh")}
                 </Button>
               }
@@ -220,7 +268,7 @@ function BillingPageContent() {
           )}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button onClick={() => ledgerQuery.refetch()} disabled={!orgId}>
+            <Button onClick={() => ledgerQuery.refetch()} disabled={!scopedOrgId}>
               {t("common.refresh")}
             </Button>
             <Button

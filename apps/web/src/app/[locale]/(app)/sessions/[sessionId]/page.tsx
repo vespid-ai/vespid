@@ -11,7 +11,9 @@ import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
 import { Separator } from "../../../../../components/ui/separator";
 import { AdvancedSection } from "../../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { cn } from "../../../../../lib/cn";
+import { isUnauthorizedError } from "../../../../../lib/api";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
 import { useSession, useSessionEvents, type AgentSessionEvent } from "../../../../../lib/hooks/use-sessions";
@@ -74,9 +76,10 @@ export default function SessionDetailPage() {
 
   const orgId = useActiveOrgId();
   const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
 
-  const sessionQuery = useSession(orgId, sessionId || null);
-  const eventsQuery = useSessionEvents(orgId, sessionId || null);
+  const sessionQuery = useSession(scopedOrgId, sessionId || null);
+  const eventsQuery = useSessionEvents(scopedOrgId, sessionId || null);
 
   const [events, setEvents] = useState<AgentSessionEvent[]>([]);
   const [connected, setConnected] = useState(false);
@@ -94,12 +97,12 @@ export default function SessionDetailPage() {
     setEvents((prev) => mergeBySeq(prev, initial));
   }, [eventsQuery.data?.events]);
 
-  const canConnect = Boolean(orgId && sessionId);
+  const canConnect = Boolean(scopedOrgId && sessionId);
   const wsUrl = useMemo(() => {
-    if (!orgId) return null;
+    if (!scopedOrgId) return null;
     const base = gatewayWsBase().replace(/\/+$/, "");
-    return `${base}/ws/client?orgId=${encodeURIComponent(orgId)}`;
-  }, [orgId]);
+    return `${base}/ws/client?orgId=${encodeURIComponent(scopedOrgId)}`;
+  }, [scopedOrgId]);
 
   const connectWs = () => {
     if (!wsUrl || !canConnect) return;
@@ -141,7 +144,7 @@ export default function SessionDetailPage() {
         if (msg.sessionId !== sessionId) return;
         const e: AgentSessionEvent = {
           id: `${msg.sessionId}:${msg.seq}`,
-          organizationId: orgId ?? "",
+          organizationId: scopedOrgId ?? "",
           sessionId: msg.sessionId,
           seq: msg.seq,
           eventType: msg.eventType,
@@ -179,6 +182,29 @@ export default function SessionDetailPage() {
   const session = sessionQuery.data?.session ?? null;
   const pinnedAgentId = session?.pinnedAgentId ?? null;
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void sessionQuery.refetch();
+            void eventsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -199,6 +225,33 @@ export default function SessionDetailPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (sessionQuery.isError && isUnauthorizedError(sessionQuery.error)) ||
+    (eventsQuery.isError && isUnauthorizedError(eventsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void sessionQuery.refetch();
+            void eventsQuery.refetch();
+          }}
         />
       </div>
     );

@@ -20,7 +20,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../compone
 import { Textarea } from "../../../../../components/ui/textarea";
 import { WorkflowGraphEditor } from "../../../../../components/app/workflow-graph-editor";
 import { AdvancedSection } from "../../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
 import {
   type WorkflowRun,
   useClonePublishedWorkflowToDraft,
@@ -32,6 +34,7 @@ import {
   useWorkflowRevisions,
 } from "../../../../../lib/hooks/use-workflows";
 import { addRecentRunId, addRecentWorkflowId, getRecentRunIds } from "../../../../../lib/recents";
+import { isUnauthorizedError } from "../../../../../lib/api";
 
 function safeParseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   const trimmed = text.trim();
@@ -69,15 +72,17 @@ export default function WorkflowDetailPage() {
   const workflowId = Array.isArray(params?.workflowId) ? (params.workflowId[0] ?? "") : (params?.workflowId ?? "");
 
   const orgId = useActiveOrgId() ?? null;
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
 
-  const workflowQuery = useWorkflow(orgId, workflowId);
-  const runsQuery = useRuns(orgId, workflowId);
-  const revisionsQuery = useWorkflowRevisions(orgId, workflowId);
+  const workflowQuery = useWorkflow(scopedOrgId, workflowId);
+  const runsQuery = useRuns(scopedOrgId, workflowId);
+  const revisionsQuery = useWorkflowRevisions(scopedOrgId, workflowId);
 
-  const publish = usePublishWorkflow(orgId, workflowId);
-  const createDraft = useCreateWorkflowDraftFromWorkflow(orgId, workflowId);
-  const clonePublished = useClonePublishedWorkflowToDraft(orgId);
-  const run = useRunWorkflow(orgId, workflowId);
+  const publish = usePublishWorkflow(scopedOrgId, workflowId);
+  const createDraft = useCreateWorkflowDraftFromWorkflow(scopedOrgId, workflowId);
+  const clonePublished = useClonePublishedWorkflowToDraft(scopedOrgId);
+  const run = useRunWorkflow(scopedOrgId, workflowId);
 
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
 
@@ -160,7 +165,7 @@ export default function WorkflowDetailPage() {
   }
 
   async function doPublish() {
-    if (!orgId) {
+    if (!scopedOrgId) {
       toast.error(t("workflows.errors.orgRequired"));
       return;
     }
@@ -169,7 +174,7 @@ export default function WorkflowDetailPage() {
   }
 
   async function doCreateDraft() {
-    if (!orgId) {
+    if (!scopedOrgId) {
       toast.error(t("workflows.errors.orgRequired"));
       return;
     }
@@ -184,7 +189,7 @@ export default function WorkflowDetailPage() {
   }
 
   async function doRun() {
-    if (!orgId) {
+    if (!scopedOrgId) {
       toast.error(t("workflows.errors.orgRequired"));
       return;
     }
@@ -221,6 +226,30 @@ export default function WorkflowDetailPage() {
     }
   }
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("workflows.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void workflowQuery.refetch();
+            void runsQuery.refetch();
+            void revisionsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -241,6 +270,35 @@ export default function WorkflowDetailPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (workflowQuery.isError && isUnauthorizedError(workflowQuery.error)) ||
+    (runsQuery.isError && isUnauthorizedError(runsQuery.error)) ||
+    (revisionsQuery.isError && isUnauthorizedError(revisionsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("workflows.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void workflowQuery.refetch();
+            void runsQuery.refetch();
+            void revisionsQuery.refetch();
+          }}
         />
       </div>
     );

@@ -13,7 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Separator } from "../../../../../components/ui/separator";
 import { Textarea } from "../../../../../components/ui/textarea";
 import { AdvancedSection } from "../../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
 import {
   useApprovePairingRequest,
   useChannelAccount,
@@ -30,6 +32,7 @@ import {
   useRunChannelAccountAction,
   useUpdateChannelAccount,
 } from "../../../../../lib/hooks/use-channels";
+import { isUnauthorizedError } from "../../../../../lib/api";
 
 export default function ChannelAccountDetailPage() {
   const t = useTranslations();
@@ -39,21 +42,23 @@ export default function ChannelAccountDetailPage() {
   const accountId = Array.isArray(params?.accountId) ? params.accountId[0] ?? "" : params?.accountId ?? "";
 
   const orgId = useActiveOrgId();
-  const accountQuery = useChannelAccount(orgId, accountId || null);
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
+  const accountQuery = useChannelAccount(scopedOrgId, accountId || null);
   const catalogQuery = useChannelCatalog();
-  const statusQuery = useChannelAccountStatus(orgId, accountId || null);
-  const allowlistQuery = useChannelAllowlistEntries(orgId, accountId || null);
-  const pairingQuery = useChannelPairingRequests(orgId, { accountId, status: "pending" });
+  const statusQuery = useChannelAccountStatus(scopedOrgId, accountId || null);
+  const allowlistQuery = useChannelAllowlistEntries(scopedOrgId, accountId || null);
+  const pairingQuery = useChannelPairingRequests(scopedOrgId, { accountId, status: "pending" });
 
-  const updateAccount = useUpdateChannelAccount(orgId, accountId || null);
-  const createSecret = useCreateChannelSecret(orgId, accountId || null);
-  const runAction = useRunChannelAccountAction(orgId, accountId || null);
-  const testSend = useChannelTestSend(orgId, accountId || null);
-  const deleteAccount = useDeleteChannelAccount(orgId);
-  const putAllowlist = usePutChannelAllowlistEntry(orgId, accountId || null);
-  const deleteAllowlist = useDeleteChannelAllowlistEntry(orgId, accountId || null);
-  const approvePairing = useApprovePairingRequest(orgId);
-  const rejectPairing = useRejectPairingRequest(orgId);
+  const updateAccount = useUpdateChannelAccount(scopedOrgId, accountId || null);
+  const createSecret = useCreateChannelSecret(scopedOrgId, accountId || null);
+  const runAction = useRunChannelAccountAction(scopedOrgId, accountId || null);
+  const testSend = useChannelTestSend(scopedOrgId, accountId || null);
+  const deleteAccount = useDeleteChannelAccount(scopedOrgId);
+  const putAllowlist = usePutChannelAllowlistEntry(scopedOrgId, accountId || null);
+  const deleteAllowlist = useDeleteChannelAllowlistEntry(scopedOrgId, accountId || null);
+  const approvePairing = useApprovePairingRequest(scopedOrgId);
+  const rejectPairing = useRejectPairingRequest(scopedOrgId);
 
   const account = accountQuery.data?.account ?? null;
   const selectedChannel = catalogQuery.data?.channels.find((channel) => channel.id === account?.channelId) ?? null;
@@ -115,6 +120,32 @@ export default function ChannelAccountDetailPage() {
     return new Date(ms).toLocaleString();
   }, [account?.createdAt]);
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.detail.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("channels.detail.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/channels`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void accountQuery.refetch();
+            void catalogQuery.refetch();
+            void statusQuery.refetch();
+            void allowlistQuery.refetch();
+            void pairingQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -135,6 +166,39 @@ export default function ChannelAccountDetailPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (accountQuery.isError && isUnauthorizedError(accountQuery.error)) ||
+    (catalogQuery.isError && isUnauthorizedError(catalogQuery.error)) ||
+    (statusQuery.isError && isUnauthorizedError(statusQuery.error)) ||
+    (allowlistQuery.isError && isUnauthorizedError(allowlistQuery.error)) ||
+    (pairingQuery.isError && isUnauthorizedError(pairingQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.detail.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("channels.detail.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/channels`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void accountQuery.refetch();
+            void catalogQuery.refetch();
+            void statusQuery.refetch();
+            void allowlistQuery.refetch();
+            void pairingQuery.refetch();
+          }}
         />
       </div>
     );

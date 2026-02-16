@@ -26,16 +26,20 @@ import { JsonExplorer } from "../../../../../../../components/ui/json-explorer";
 import { ScrollArea } from "../../../../../../../components/ui/scroll-area";
 import { Separator } from "../../../../../../../components/ui/separator";
 import { AdvancedSection } from "../../../../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../../../../lib/hooks/use-session";
 import { useRun, useRunEvents, type WorkflowRunEvent } from "../../../../../../../lib/hooks/use-workflows";
 import { addRecentRunId } from "../../../../../../../lib/recents";
 import { groupEventsByAttempt } from "../../../../../../../lib/run-events";
 import { cn } from "../../../../../../../lib/cn";
+import { isUnauthorizedError } from "../../../../../../../lib/api";
 
 function eventKind(event: Record<string, unknown>): string {
   const type = typeof event.type === "string" ? event.type : null;
+  const eventType = typeof event.eventType === "string" ? event.eventType : null;
   const legacy = typeof event.event === "string" ? event.event : null;
-  return type ?? legacy ?? "event";
+  return type ?? eventType ?? legacy ?? "event";
 }
 
 function eventNodeId(event: Record<string, unknown>): string {
@@ -193,9 +197,11 @@ export default function RunReplayPage() {
   const runId = (Array.isArray(params?.runId) ? params.runId[0] : params?.runId) ?? "";
 
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
 
-  const runQuery = useRun(orgId, workflowId, runId);
-  const eventsQuery = useRunEvents(orgId, workflowId, runId);
+  const runQuery = useRun(scopedOrgId, workflowId, runId);
+  const eventsQuery = useRunEvents(scopedOrgId, workflowId, runId);
 
   const events = eventsQuery.data?.events ?? [];
 
@@ -387,6 +393,30 @@ export default function RunReplayPage() {
     );
   }, [run, selectedEvent]);
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("runs.subtitle")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
+            <ArrowLeft className="h-4 w-4" />
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void runQuery.refetch();
+            void eventsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -407,6 +437,33 @@ export default function RunReplayPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (runQuery.isError && isUnauthorizedError(runQuery.error)) ||
+    (eventsQuery.isError && isUnauthorizedError(eventsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("runs.detailsHint")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void runQuery.refetch();
+            void eventsQuery.refetch();
+          }}
         />
       </div>
     );

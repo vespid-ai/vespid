@@ -15,11 +15,13 @@ import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Separator } from "../../../../components/ui/separator";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useCreateSecret, useDeleteSecret, useRotateSecret, useSecrets } from "../../../../lib/hooks/use-secrets";
-import { apiFetchJson } from "../../../../lib/api";
+import { apiFetchJson, isUnauthorizedError } from "../../../../lib/api";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 
 function SecretsPageContent() {
   const t = useTranslations();
@@ -27,14 +29,16 @@ function SecretsPageContent() {
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
   const searchParams = useSearchParams();
 
-  const secretsQuery = useSecrets(orgId);
-  const createSecret = useCreateSecret(orgId);
-  const rotateSecret = useRotateSecret(orgId);
-  const deleteSecret = useDeleteSecret(orgId);
-  const settingsQuery = useOrgSettings(orgId);
-  const updateSettings = useUpdateOrgSettings(orgId);
+  const secretsQuery = useSecrets(scopedOrgId);
+  const createSecret = useCreateSecret(scopedOrgId);
+  const rotateSecret = useRotateSecret(scopedOrgId);
+  const deleteSecret = useDeleteSecret(scopedOrgId);
+  const settingsQuery = useOrgSettings(scopedOrgId);
+  const updateSettings = useUpdateOrgSettings(scopedOrgId);
 
   const secrets = secretsQuery.data?.secrets ?? [];
 
@@ -54,7 +58,7 @@ function SecretsPageContent() {
   const [vertexProjectId, setVertexProjectId] = useState("");
   const [vertexLocation, setVertexLocation] = useState("us-central1");
 
-  const canOperate = Boolean(orgId);
+  const canOperate = Boolean(scopedOrgId);
 
   const [defaultSessionLlm, setDefaultSessionLlm] = useState<LlmConfigValue>({
     providerId: "openai",
@@ -166,6 +170,24 @@ function SecretsPageContent() {
     ] as const;
   }, [selectedId]);
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("secrets.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("secrets.warning")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void secretsQuery.refetch();
+            void settingsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -181,6 +203,28 @@ function SecretsPageContent() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (secretsQuery.isError && isUnauthorizedError(secretsQuery.error)) ||
+    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("secrets.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("secrets.warning")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void secretsQuery.refetch();
+            void settingsQuery.refetch();
+          }}
         />
       </div>
     );

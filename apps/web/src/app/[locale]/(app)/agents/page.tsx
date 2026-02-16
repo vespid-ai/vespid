@@ -13,8 +13,11 @@ import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Separator } from "../../../../components/ui/separator";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useAgents, useCreatePairingToken, useRevokeAgent, useUpdateAgentTags } from "../../../../lib/hooks/use-agents";
+import { isUnauthorizedError } from "../../../../lib/api";
 
 function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   const normalized = status.toLowerCase();
@@ -30,11 +33,13 @@ export default function AgentsPage() {
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
 
-  const agentsQuery = useAgents(orgId);
-  const pairing = useCreatePairingToken(orgId);
-  const revoke = useRevokeAgent(orgId);
-  const updateTags = useUpdateAgentTags(orgId);
+  const agentsQuery = useAgents(scopedOrgId);
+  const pairing = useCreatePairingToken(scopedOrgId);
+  const revoke = useRevokeAgent(scopedOrgId);
+  const updateTags = useUpdateAgentTags(scopedOrgId);
 
   const agents = agentsQuery.data?.agents ?? [];
 
@@ -42,7 +47,7 @@ export default function AgentsPage() {
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
   const [tagsDraftByAgentId, setTagsDraftByAgentId] = useState<Record<string, string>>({});
 
-  const canOperate = Boolean(orgId);
+  const canOperate = Boolean(scopedOrgId);
 
   const columns = useMemo(() => {
     return [
@@ -99,7 +104,7 @@ export default function AgentsPage() {
               <Button
                 size="sm"
                 onClick={async () => {
-                  if (!orgId) return;
+                  if (!scopedOrgId) return;
                   const raw = (tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",")).trim();
                   const tags = raw
                     .split(",")
@@ -128,7 +133,7 @@ export default function AgentsPage() {
         },
       },
     ] as const;
-  }, [canOperate, orgId, revoke, t, tagsDraftByAgentId, updateTags]);
+  }, [canOperate, revoke, scopedOrgId, t, tagsDraftByAgentId, updateTags]);
 
   async function refresh() {
     if (!canOperate) {
@@ -149,6 +154,18 @@ export default function AgentsPage() {
     toast.success(t("agents.pairingCreated"));
   }
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("agents.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("agents.subtitle")}</div>
+        </div>
+        <AuthRequiredState locale={locale} onRetry={() => void agentsQuery.refetch()} />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -165,6 +182,18 @@ export default function AgentsPage() {
             </Button>
           }
         />
+      </div>
+    );
+  }
+
+  if (agentsQuery.isError && isUnauthorizedError(agentsQuery.error)) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("agents.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("agents.subtitle")}</div>
+        </div>
+        <AuthRequiredState locale={locale} onRetry={() => void agentsQuery.refetch()} />
       </div>
     );
   }

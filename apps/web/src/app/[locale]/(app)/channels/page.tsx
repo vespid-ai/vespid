@@ -12,7 +12,9 @@ import { Label } from "../../../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
 import { Separator } from "../../../../components/ui/separator";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import {
   useApprovePairingRequest,
   useChannelAccounts,
@@ -21,6 +23,7 @@ import {
   useCreateChannelAccount,
   useRejectPairingRequest,
 } from "../../../../lib/hooks/use-channels";
+import { isUnauthorizedError } from "../../../../lib/api";
 
 export default function ChannelsPage() {
   const t = useTranslations();
@@ -29,6 +32,8 @@ export default function ChannelsPage() {
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
 
   const orgId = useActiveOrgId();
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
   const catalogQuery = useChannelCatalog();
 
   const [channelId, setChannelId] = useState<string>("whatsapp");
@@ -41,12 +46,12 @@ export default function ChannelsPage() {
   const [requireMentionInGroup, setRequireMentionInGroup] = useState<boolean>(true);
   const [metadataInputs, setMetadataInputs] = useState<Record<string, string>>({});
 
-  const accountsQuery = useChannelAccounts(orgId);
-  const pairingQuery = useChannelPairingRequests(orgId, { status: "pending" });
+  const accountsQuery = useChannelAccounts(scopedOrgId);
+  const pairingQuery = useChannelPairingRequests(scopedOrgId, { status: "pending" });
 
-  const createAccount = useCreateChannelAccount(orgId);
-  const approvePairing = useApprovePairingRequest(orgId);
-  const rejectPairing = useRejectPairingRequest(orgId);
+  const createAccount = useCreateChannelAccount(scopedOrgId);
+  const approvePairing = useApprovePairingRequest(scopedOrgId);
+  const rejectPairing = useRejectPairingRequest(scopedOrgId);
 
   const channels = catalogQuery.data?.channels ?? [];
   const accounts = accountsQuery.data?.accounts ?? [];
@@ -94,7 +99,7 @@ export default function ChannelsPage() {
   }, [channels]);
 
   async function onCreateAccount() {
-    if (!orgId) {
+    if (!scopedOrgId) {
       toast.error(t("org.requireActive"));
       return;
     }
@@ -165,6 +170,25 @@ export default function ChannelsPage() {
     }
   }
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("channels.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void catalogQuery.refetch();
+            void accountsQuery.refetch();
+            void pairingQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -180,6 +204,30 @@ export default function ChannelsPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (catalogQuery.isError && isUnauthorizedError(catalogQuery.error)) ||
+    (accountsQuery.isError && isUnauthorizedError(accountsQuery.error)) ||
+    (pairingQuery.isError && isUnauthorizedError(pairingQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("channels.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void catalogQuery.refetch();
+            void accountsQuery.refetch();
+            void pairingQuery.refetch();
+          }}
         />
       </div>
     );
@@ -364,7 +412,7 @@ export default function ChannelsPage() {
           </AdvancedSection>
 
           <div className="flex justify-end">
-            <Button variant="accent" onClick={() => void onCreateAccount()} disabled={!orgId || createAccount.isPending}>
+            <Button variant="accent" onClick={() => void onCreateAccount()} disabled={!scopedOrgId || createAccount.isPending}>
               {t("channels.create.button")}
             </Button>
           </div>

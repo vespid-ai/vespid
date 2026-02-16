@@ -17,10 +17,13 @@ import { Textarea } from "../../../../components/ui/textarea";
 import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { type Workflow, useCreateWorkflow, useWorkflows } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
+import { isUnauthorizedError } from "../../../../lib/api";
 
 type TeammateForm = {
   id: string;
@@ -316,12 +319,14 @@ export default function WorkflowsPage() {
   const t = useTranslations();
   const router = useRouter();
   const params = useParams<{ locale?: string | string[] }>();
-  const locale = Array.isArray(params?.locale) ? params.locale[0] : params?.locale ?? "en";
+  const locale = Array.isArray(params?.locale) ? (params.locale[0] ?? "en") : (params?.locale ?? "en");
 
   const orgId = useActiveOrgId();
-  const createWorkflow = useCreateWorkflow(orgId);
-  const workflowsQuery = useWorkflows(orgId);
-  const settingsQuery = useOrgSettings(orgId);
+  const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
+  const createWorkflow = useCreateWorkflow(scopedOrgId);
+  const workflowsQuery = useWorkflows(scopedOrgId);
+  const settingsQuery = useOrgSettings(scopedOrgId);
 
   const [workflowName, setWorkflowName] = useState("Issue triage");
   const [defaultAgentLlm, setDefaultAgentLlm] = useState<LlmConfigValue>({
@@ -339,7 +344,7 @@ export default function WorkflowsPage() {
   }, []);
 
   const canCreate =
-    Boolean(orgId) &&
+    Boolean(scopedOrgId) &&
     agentNodes.length > 0 &&
     agentNodes.every((n) => {
       const needsGithub =
@@ -430,7 +435,7 @@ export default function WorkflowsPage() {
   }, [openById, t]);
 
   async function submitCreate() {
-    if (!orgId) {
+    if (!scopedOrgId) {
       toast.error(t("workflows.errors.orgRequired"));
       return;
     }
@@ -476,6 +481,24 @@ export default function WorkflowsPage() {
     router.push(`/${locale}/workflows/${trimmed}`);
   }
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("workflows.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void workflowsQuery.refetch();
+            void settingsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -491,6 +514,28 @@ export default function WorkflowsPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (workflowsQuery.isError && isUnauthorizedError(workflowsQuery.error)) ||
+    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("workflows.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void workflowsQuery.refetch();
+            void settingsQuery.refetch();
+          }}
         />
       </div>
     );
@@ -517,7 +562,7 @@ export default function WorkflowsPage() {
 
             <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
               <div className="text-sm font-medium text-text">{t("workflows.defaultAgentModel")}</div>
-              <LlmConfigField orgId={orgId} mode="workflowAgentRun" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
+              <LlmConfigField orgId={scopedOrgId} mode="workflowAgentRun" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
               {isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId ? (
                 <div className="text-xs text-warn">Selected provider requires secretId.</div>
               ) : null}
@@ -623,7 +668,7 @@ export default function WorkflowsPage() {
                           </div>
                         ) : (
                           <LlmConfigField
-                            orgId={orgId}
+                            orgId={scopedOrgId}
                             mode="workflowAgentRun"
                             value={node.llmOverride}
                             onChange={(next) =>

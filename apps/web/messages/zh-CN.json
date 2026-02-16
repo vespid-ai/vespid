@@ -114,7 +114,12 @@
       "title": "无法连接 API",
       "description": "无法连接控制面 API: {base}。请启动本地服务或设置 NEXT_PUBLIC_API_BASE。"
     },
-    "copyFailed": "复制失败"
+    "copyFailed": "复制失败",
+    "authRequired": {
+      "title": "会话已失效或无权限访问",
+      "description": "请先重新登录，再刷新当前页面。",
+      "signIn": "去登录"
+    }
   },
   "org": {
     "requireActive": "请先选择当前组织。",

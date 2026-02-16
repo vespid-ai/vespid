@@ -23,21 +23,24 @@ import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { providersForContext, type LlmProviderId } from "../../../../components/app/llm/model-catalog";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
+import { AuthRequiredState } from "../../../../components/app/auth-required-state";
+import { isUnauthorizedError } from "../../../../lib/api";
 
 export default function SessionsPage() {
   const t = useTranslations();
   const router = useRouter();
   const params = useParams<{ locale?: string | string[] }>();
-  const locale = Array.isArray(params?.locale) ? params.locale[0] : params?.locale ?? "en";
+  const locale = Array.isArray(params?.locale) ? (params.locale[0] ?? "en") : (params?.locale ?? "en");
 
   const orgId = useActiveOrgId();
   const authSession = useAuthSession();
+  const scopedOrgId = authSession.data?.session ? orgId : null;
   const meQuery = useMe(Boolean(authSession.data?.session));
-  const sessionsQuery = useSessions(orgId);
-  const toolsetsQuery = useToolsets(orgId);
-  const createSession = useCreateSession(orgId);
-  const settingsQuery = useOrgSettings(orgId);
-  const updateSettings = useUpdateOrgSettings(orgId);
+  const sessionsQuery = useSessions(scopedOrgId);
+  const toolsetsQuery = useToolsets(scopedOrgId);
+  const createSession = useCreateSession(scopedOrgId);
+  const settingsQuery = useOrgSettings(scopedOrgId);
+  const updateSettings = useUpdateOrgSettings(scopedOrgId);
 
   const sessions = sessionsQuery.data?.sessions ?? [];
   const toolsets = toolsetsQuery.data?.toolsets ?? [];
@@ -55,7 +58,7 @@ export default function SessionsPage() {
   const [allowConnectorAction, setAllowConnectorAction] = useState(true);
   const [extraToolsRaw, setExtraToolsRaw] = useState<string>("");
 
-  const canOperate = Boolean(orgId);
+  const canOperate = Boolean(scopedOrgId);
   const toolAllow = useMemo(() => {
     const base: string[] = [];
     if (allowShellRun) base.push("shell.run");
@@ -67,7 +70,7 @@ export default function SessionsPage() {
     return Array.from(new Set([...base, ...extras]));
   }, [allowShellRun, allowConnectorAction, extraToolsRaw]);
 
-  const roleKey = meQuery.data?.orgs?.find((o) => o.id === orgId)?.roleKey ?? null;
+  const roleKey = meQuery.data?.orgs?.find((o) => o.id === scopedOrgId)?.roleKey ?? null;
   const canEditOrgSettings = roleKey === "owner" || roleKey === "admin";
   const memberReadOnlyDefaults = roleKey === "member";
   const llmSecretMissing = isOAuthRequiredProvider(llm.providerId) && !llm.secretId;
@@ -153,6 +156,25 @@ export default function SessionsPage() {
     };
   }
 
+  if (!authSession.isLoading && !authSession.data?.session) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void sessionsQuery.refetch();
+            void toolsetsQuery.refetch();
+            void settingsQuery.refetch();
+          }}
+        />
+      </div>
+    );
+  }
+
   if (!orgId) {
     return (
       <div className="grid gap-4">
@@ -168,6 +190,30 @@ export default function SessionsPage() {
               {t("onboarding.goOrg")}
             </Button>
           }
+        />
+      </div>
+    );
+  }
+
+  const unauthorized =
+    (sessionsQuery.isError && isUnauthorizedError(sessionsQuery.error)) ||
+    (toolsetsQuery.isError && isUnauthorizedError(toolsetsQuery.error)) ||
+    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error));
+
+  if (unauthorized) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+        </div>
+        <AuthRequiredState
+          locale={locale}
+          onRetry={() => {
+            void sessionsQuery.refetch();
+            void toolsetsQuery.refetch();
+            void settingsQuery.refetch();
+          }}
         />
       </div>
     );
@@ -223,7 +269,7 @@ export default function SessionsPage() {
             <div className="grid gap-2">
               <Label>{t("sessions.fields.model")}</Label>
               <LlmConfigField
-                orgId={orgId}
+                orgId={scopedOrgId}
                 mode="session"
                 value={llm}
                 allowedProviders={
@@ -325,7 +371,7 @@ export default function SessionsPage() {
                 !canOperate || createSession.isPending || llm.modelId.trim().length === 0 || instructions.trim().length === 0 || llmSecretMissing
               }
               onClick={async () => {
-                if (!orgId) return;
+                if (!scopedOrgId) return;
                 try {
                   const payload = {
                     title: title.trim(),
@@ -363,7 +409,7 @@ export default function SessionsPage() {
                 variant="outline"
                 disabled={!canOperate || updateSettings.isPending || llm.modelId.trim().length === 0 || llmSecretMissing}
                 onClick={async () => {
-                  if (!orgId) return;
+                  if (!scopedOrgId) return;
                   await updateSettings.mutateAsync({
                     llm: { defaults: { session: { provider: llm.providerId, model: llm.modelId.trim(), secretId: llm.secretId ?? null } } },
                   });

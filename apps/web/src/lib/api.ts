@@ -70,6 +70,21 @@ export class ApiError extends Error {
   }
 }
 
+export function isUnauthorizedError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.status === 401 || error.status === 403;
+  }
+  if (error && typeof error === "object") {
+    const status = (error as any).status;
+    if (status === 401 || status === 403) {
+      return true;
+    }
+  }
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const normalized = message.toLowerCase();
+  return normalized.includes("401") || normalized.includes("403") || normalized.includes("unauthorized") || normalized.includes("forbidden");
+}
+
 export async function apiFetchJson<T>(path: string, init?: RequestInit, options?: ApiFetchOptions): Promise<T> {
   const response = await apiFetch(path, init, options);
   const text = await response.text();

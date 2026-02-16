@@ -277,13 +277,22 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const userEmail = session.data?.user?.email;
   const userInitial = (userEmail?.trim()?.[0] ?? "U").toUpperCase();
+  const hasSession = Boolean(session.data?.session);
+  const visibleActiveOrgId = hasSession ? activeOrgId : "";
+  const visibleKnownOrgIds = hasSession ? knownOrgIds : [];
   const apiUnreachable =
-    !session.data?.session &&
+    !hasSession &&
     typeof reachability.unreachableAt === "number" &&
     Date.now() - reachability.unreachableAt < 2 * 60_000;
 
   const themeLabel = mounted ? (theme ?? "system") : "system";
-  const onboardingVisible = Boolean(session.data?.session) && (!activeOrgId || !hasStarterResource);
+  const hasStarterRoute = useMemo(() => {
+    const p = pathname ?? "";
+    return /^\/[^/]+\/(sessions|workflows)\/[^/]+/.test(p);
+  }, [pathname]);
+  const onboardingVisible = mounted && hasSession && (!activeOrgId || !(hasStarterResource || hasStarterRoute));
+  const authRequiredBannerVisible = mounted && !session.isLoading && !hasSession;
+  const showApiUnreachable = mounted && apiUnreachable;
 
   function SettingsDropdown({ iconOnly }: { iconOnly?: boolean }) {
     return (
@@ -458,12 +467,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             })}
           </nav>
 
-          {!sidebarCollapsed ? (
+          {!sidebarCollapsed && hasSession ? (
             <div className="mt-4 px-4">
               <Separator />
               <div className="mt-4 text-xs font-medium text-muted">{t("org.active")}</div>
               <div className="mt-2 break-all text-xs text-text">
-                {activeOrgId ? activeOrgId : <span className="text-muted">{t("org.noActive")}</span>}
+                {visibleActiveOrgId ? visibleActiveOrgId : <span className="text-muted">{t("org.noActive")}</span>}
               </div>
             </div>
           ) : null}
@@ -554,48 +563,52 @@ export function AppShell({ children }: { children: ReactNode }) {
                           })}
                         </nav>
 
-                        <div className="mt-4">
-                          <Separator />
-                        </div>
-
-                        <div className="mt-4">
-                          <div className="text-xs font-medium text-muted">{t("org.active")}</div>
-                          <div className="mt-2 grid gap-2">
-                            <Select
-                              value={activeOrgId || "__none__"}
-                              onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
-                                {knownOrgIds.map((id) => (
-                                  <SelectItem key={id} value={id}>
-                                    {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <input
-                              value={draftOrgId}
-                              onChange={(e) => setDraftOrgId(e.target.value)}
-                              placeholder={t("org.paste")}
-                              className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                            />
-                            <div className="flex justify-end">
-                              <Button
-                                variant="accent"
-                                onClick={() => {
-                                  applyOrgId(draftOrgId);
-                                  setMobileNavOpen(false);
-                                }}
-                              >
-                                {t("org.set")}
-                              </Button>
+                        {hasSession ? (
+                          <>
+                            <div className="mt-4">
+                              <Separator />
                             </div>
-                          </div>
-                        </div>
+
+                            <div className="mt-4">
+                              <div className="text-xs font-medium text-muted">{t("org.active")}</div>
+                              <div className="mt-2 grid gap-2">
+                                <Select
+                                  value={visibleActiveOrgId || "__none__"}
+                                  onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
+                                    {visibleKnownOrgIds.map((id) => (
+                                      <SelectItem key={id} value={id}>
+                                        {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <input
+                                  value={draftOrgId}
+                                  onChange={(e) => setDraftOrgId(e.target.value)}
+                                  placeholder={t("org.paste")}
+                                  className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                                />
+                                <div className="flex justify-end">
+                                  <Button
+                                    variant="accent"
+                                    onClick={() => {
+                                      applyOrgId(draftOrgId);
+                                      setMobileNavOpen(false);
+                                    }}
+                                  >
+                                    {t("org.set")}
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        ) : null}
 
                         <div className="mt-4">
                           <Separator />
@@ -641,46 +654,48 @@ export function AppShell({ children }: { children: ReactNode }) {
                       </span>
                     </Button>
 
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                      <Users className="h-4 w-4" />
-                      {activeOrgId ? t("org.shortLabel", { id: shortId(activeOrgId) }) : t("org.noActive")}
-                    </Button>
-                  </PopoverTrigger>
-                      <PopoverContent align="start" className="w-[420px]">
-                        <div className="text-xs font-medium text-muted">{t("org.active")}</div>
-                        <div className="mt-2 grid gap-2">
-                          <Select
-                            value={activeOrgId || "__none__"}
-                            onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
-                              {knownOrgIds.map((id) => (
-                                <SelectItem key={id} value={id}>
-                                  {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <input
-                            value={draftOrgId}
-                            onChange={(e) => setDraftOrgId(e.target.value)}
-                            placeholder={t("org.paste")}
-                            className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                          />
-                          <div className="flex justify-end">
-                            <Button variant="accent" onClick={() => applyOrgId(draftOrgId)}>
-                              {t("org.set")}
-                            </Button>
+                    {hasSession ? (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" size="sm" className="gap-2">
+                            <Users className="h-4 w-4" />
+                            {visibleActiveOrgId ? t("org.shortLabel", { id: shortId(visibleActiveOrgId) }) : t("org.noActive")}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-[420px]">
+                          <div className="text-xs font-medium text-muted">{t("org.active")}</div>
+                          <div className="mt-2 grid gap-2">
+                            <Select
+                              value={visibleActiveOrgId || "__none__"}
+                              onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
+                                {visibleKnownOrgIds.map((id) => (
+                                  <SelectItem key={id} value={id}>
+                                    {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <input
+                              value={draftOrgId}
+                              onChange={(e) => setDraftOrgId(e.target.value)}
+                              placeholder={t("org.paste")}
+                              className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                            />
+                            <div className="flex justify-end">
+                              <Button variant="accent" onClick={() => applyOrgId(draftOrgId)}>
+                                {t("org.set")}
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      </PopoverContent>
-                    </Popover>
+                        </PopoverContent>
+                      </Popover>
+                    ) : null}
                     {typeof creditsBalance === "number" ? (
                       <Badge variant={creditsBalance > 0 ? "ok" : "warn"} className="gap-1.5">
                         {t("billing.credits")}: {creditsBalance}
@@ -710,7 +725,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
               </div>
 
-              {apiUnreachable ? (
+              {showApiUnreachable ? (
                 <div className="border-t border-borderSubtle bg-panel/40 px-3 md:px-4 py-2">
                   <div className="flex flex-wrap items-start gap-2 text-sm">
                     <Badge variant="warn" className="gap-1.5">
@@ -720,6 +735,21 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <div className="min-w-0 flex-1 text-muted">
                       {t("errors.apiUnreachable.description", { base: reachability.base || getApiBase() })}
                     </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {authRequiredBannerVisible ? (
+                <div className="border-t border-borderSubtle bg-panel/40 px-3 md:px-4 py-2">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <Badge variant="warn" className="gap-1.5">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      {t("errors.authRequired.title")}
+                    </Badge>
+                    <div className="min-w-0 flex-1 text-muted">{t("errors.authRequired.description")}</div>
+                    <Button asChild variant="outline" size="sm">
+                      <Link href={`/${locale}/auth`}>{t("errors.authRequired.signIn")}</Link>
+                    </Button>
                   </div>
                 </div>
               ) : null}
