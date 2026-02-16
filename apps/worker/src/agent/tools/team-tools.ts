@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { normalizeLlmProviderId } from "@vespid/shared";
 import type { AgentToolDefinition, AgentToolExecuteResult } from "./types.js";
-import { runAgentLoop, type AgentTeamMeta } from "@vespid/agent-runtime";
+import { runAgentLoop, type AgentTeamMeta } from "../agent-loop.js";
 
 const teamDelegateArgsSchema = z.object({
   teammateId: z.string().min(1).max(64),
@@ -20,6 +21,18 @@ const teamMapArgsSchema = z.object({
     .min(1)
     .max(64),
   maxParallel: z.number().int().min(1).max(16).optional(),
+});
+
+const llmProviderSchema = z.string().min(1).transform((value, ctx) => {
+  const normalized = normalizeLlmProviderId(value);
+  if (!normalized) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Unsupported provider: ${value}`,
+    });
+    return z.NEVER;
+  }
+  return normalized;
 });
 
 const teammateConfigSchema = z.object({
@@ -69,7 +82,7 @@ const teamConfigSchema = z.object({
   parent: z.object({
     nodeId: z.string().min(1),
     llm: z.object({
-      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
+      provider: llmProviderSchema.default("openai"),
       model: z.string().min(1).max(120),
       auth: z.object({ secretId: z.string().uuid().optional(), fallbackToEnv: z.literal(true).optional() }),
     }),

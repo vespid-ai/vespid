@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { LlmProviderApiKind, LlmProviderId } from "@vespid/shared";
 import { apiFetchJson } from "../api";
 
 export type OrgSettings = {
@@ -8,18 +9,19 @@ export type OrgSettings = {
   toolsets: { defaultToolsetId: string | null };
   llm?: {
     defaults?: {
-      session?: { provider?: "openai" | "anthropic" | "gemini" | null; model?: string | null };
+      session?: { provider?: LlmProviderId | null; model?: string | null; secretId?: string | null };
       workflowAgentRun?: {
-        provider?: "openai" | "anthropic" | "gemini" | "vertex" | null;
+        provider?: LlmProviderId | null;
         model?: string | null;
         secretId?: string | null;
       };
       toolsetBuilder?: {
-        provider?: "openai" | "anthropic" | null;
+        provider?: LlmProviderId | null;
         model?: string | null;
         secretId?: string | null;
       };
     };
+    providers?: Partial<Record<LlmProviderId, { baseUrl?: string | null; apiKind?: LlmProviderApiKind | null }>>;
   };
 };
 

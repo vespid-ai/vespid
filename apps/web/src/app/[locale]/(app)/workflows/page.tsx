@@ -3,6 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isOAuthRequiredProvider } from "@vespid/shared";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Badge } from "../../../../components/ui/badge";
@@ -443,15 +444,15 @@ export default function WorkflowsPage() {
       return;
     }
 
-    const missingVertexSecret =
-      defaultAgentLlm.providerId === "vertex" && !defaultAgentLlm.secretId
+    const missingProviderSecret =
+      isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId
         ? true
         : agentNodes.some((n) => {
             const effective = n.llmUseDefault ? defaultAgentLlm : n.llmOverride;
-            return effective.providerId === "vertex" && !effective.secretId;
+            return isOAuthRequiredProvider(effective.providerId) && !effective.secretId;
           });
-    if (missingVertexSecret) {
-      toast.error(t("workflows.errors.vertexSecretRequired"));
+    if (missingProviderSecret) {
+      toast.error("Selected provider requires secretId.");
       return;
     }
 
@@ -496,8 +497,8 @@ export default function WorkflowsPage() {
             <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
               <div className="text-sm font-medium text-text">{t("workflows.defaultAgentModel")}</div>
               <LlmConfigField orgId={orgId} mode="workflowAgentRun" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
-              {defaultAgentLlm.providerId === "vertex" && !defaultAgentLlm.secretId ? (
-                <div className="text-xs text-warn">{t("workflows.vertexSecretRequiredHint")}</div>
+              {isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId ? (
+                <div className="text-xs text-warn">Selected provider requires secretId.</div>
               ) : null}
             </div>
 
@@ -609,8 +610,8 @@ export default function WorkflowsPage() {
                             }
                           />
                         )}
-                        {!node.llmUseDefault && node.llmOverride.providerId === "vertex" && !node.llmOverride.secretId ? (
-                          <div className="text-xs text-warn">{t("workflows.vertexSecretRequiredHint")}</div>
+                        {!node.llmUseDefault && isOAuthRequiredProvider(node.llmOverride.providerId) && !node.llmOverride.secretId ? (
+                          <div className="text-xs text-warn">Selected provider requires secretId.</div>
                         ) : null}
                       </div>
 

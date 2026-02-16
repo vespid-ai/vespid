@@ -4,6 +4,7 @@ import { useTranslations } from "next-intl";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
+import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
@@ -81,6 +82,7 @@ function SecretsPageContent() {
     if (session && typeof session === "object") {
       if (typeof session.provider === "string") setDefaultSessionLlm((p) => ({ ...p, providerId: session.provider }));
       if (typeof session.model === "string") setDefaultSessionLlm((p) => ({ ...p, modelId: session.model }));
+      if (typeof session.secretId === "string") setDefaultSessionLlm((p) => ({ ...p, secretId: session.secretId }));
     }
 
     const wf = d.workflowAgentRun ?? null;
@@ -123,10 +125,11 @@ function SecretsPageContent() {
     return {
       openai: find("llm.openai"),
       anthropic: find("llm.anthropic"),
-      gemini: find("llm.gemini"),
-      vertex: find("llm.vertex.oauth"),
+      gemini: find(normalizeConnectorId("llm.gemini")),
+      vertex: find(normalizeConnectorId("llm.vertex.oauth")),
     };
   }, [secrets]);
+  const vertexDefaultSecretId = presetSecrets.vertex?.id ?? null;
 
   const columns = useMemo(() => {
     return [
@@ -187,10 +190,18 @@ function SecretsPageContent() {
                   disabled={!canOperate || updateSettings.isPending}
                   onClick={async () => {
                     if (!orgId) return;
+                    if (isOAuthRequiredProvider(defaultSessionLlm.providerId) && !defaultSessionLlm.secretId) {
+                      toast.error("Selected provider requires secretId.");
+                      return;
+                    }
                     await updateSettings.mutateAsync({
                       llm: {
                         defaults: {
-                          session: { provider: defaultSessionLlm.providerId as any, model: defaultSessionLlm.modelId.trim() },
+                          session: {
+                            provider: defaultSessionLlm.providerId as any,
+                            model: defaultSessionLlm.modelId.trim(),
+                            secretId: defaultSessionLlm.secretId ?? null,
+                          },
                         },
                       },
                     });
@@ -226,8 +237,8 @@ function SecretsPageContent() {
                   disabled={!canOperate || updateSettings.isPending}
                   onClick={async () => {
                     if (!orgId) return;
-                    if (defaultWorkflowAgentRunLlm.providerId === "vertex" && !defaultWorkflowAgentRunLlm.secretId) {
-                      toast.error(t("workflows.errors.vertexSecretRequired"));
+                    if (isOAuthRequiredProvider(defaultWorkflowAgentRunLlm.providerId) && !defaultWorkflowAgentRunLlm.secretId) {
+                      toast.error("Selected provider requires secretId.");
                       return;
                     }
                     await updateSettings.mutateAsync({
@@ -389,7 +400,7 @@ function SecretsPageContent() {
                     const value = geminiValue;
                     setGeminiValue("");
                     if (!presetSecrets.gemini) {
-                      await createSecret.mutateAsync({ connectorId: "llm.gemini", name: "default", value });
+                      await createSecret.mutateAsync({ connectorId: normalizeConnectorId("llm.gemini"), name: "default", value });
                       toast.success(t("secrets.presets.saved"));
                       return;
                     }
@@ -412,10 +423,10 @@ function SecretsPageContent() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!canOperate}
+                  disabled={!canOperate || !vertexDefaultSecretId}
                   onClick={async () => {
-                    if (!orgId) return;
-                    await apiFetchJson(`/v1/orgs/${orgId}/llm/vertex`, { method: "DELETE" }, { orgScoped: true });
+                    if (!orgId || !vertexDefaultSecretId) return;
+                    await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/google-vertex/${vertexDefaultSecretId}`, { method: "DELETE" }, { orgScoped: true });
                     toast.success(t("secrets.vertex.disconnected"));
                     await secretsQuery.refetch();
                   }}
@@ -437,12 +448,19 @@ function SecretsPageContent() {
                   <Button
                     variant="accent"
                     disabled={!canOperate || vertexProjectId.trim().length === 0 || vertexLocation.trim().length === 0}
-                    onClick={() => {
+                    onClick={async () => {
                       if (!orgId) return;
-                      const url = new URL(`/api/proxy/v1/orgs/${orgId}/llm/vertex/start`, window.location.origin);
-                      url.searchParams.set("projectId", vertexProjectId.trim());
-                      url.searchParams.set("location", vertexLocation.trim());
-                      window.location.assign(url.pathname + url.search);
+                      const out = await apiFetchJson<{ authorizationUrl: string }>(
+                        `/v1/orgs/${orgId}/llm/oauth/google-vertex/start`,
+                        {
+                          method: "POST",
+                          body: JSON.stringify({ projectId: vertexProjectId.trim(), location: vertexLocation.trim(), mode: "json" }),
+                        },
+                        { orgScoped: true }
+                      );
+                      if (typeof out.authorizationUrl === "string" && out.authorizationUrl.length > 0) {
+                        window.location.assign(out.authorizationUrl);
+                      }
                     }}
                   >
                     {t("secrets.vertex.connect")}

@@ -19,6 +19,8 @@ import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions, type AgentSession } from "../../../../lib/hooks/use-sessions";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { isOAuthRequiredProvider } from "@vespid/shared";
+import { providersForContext, type LlmProviderId } from "../../../../components/app/llm/model-catalog";
 
 export default function SessionsPage() {
   const t = useTranslations();
@@ -65,6 +67,8 @@ export default function SessionsPage() {
 
   const roleKey = meQuery.data?.orgs?.find((o) => o.id === orgId)?.roleKey ?? null;
   const canEditOrgSettings = roleKey === "owner" || roleKey === "admin";
+  const memberReadOnlyDefaults = roleKey === "member";
+  const llmSecretMissing = isOAuthRequiredProvider(llm.providerId) && !llm.secretId;
 
   const llmInitRef = useRef(false);
   useEffect(() => {
@@ -209,17 +213,19 @@ export default function SessionsPage() {
                 value={llm}
                 allowedProviders={
                   engineId === "gateway.codex.v2"
-                    ? ["openai"]
+                    ? (["openai", "openai-codex"] as LlmProviderId[])
                     : engineId === "gateway.claude.v2"
                       ? ["anthropic"]
-                      : ["openai", "anthropic", "gemini"]
+                      : providersForContext("session")
                 }
                 onChange={(next) => setLlm(next)}
-                disabled={!canOperate}
+                disabled={!canOperate || memberReadOnlyDefaults}
               />
               <div className="text-xs text-muted">
                 {engineId === "gateway.codex.v2" ? t("sessions.codexProviderHint") : t("sessions.modelHint")}
               </div>
+              {llmSecretMissing ? <div className="text-xs text-warn">This provider requires a connected OAuth secret.</div> : null}
+              {memberReadOnlyDefaults ? <div className="text-xs text-muted">Members use organization default model settings.</div> : null}
             </div>
           </div>
 
@@ -293,7 +299,9 @@ export default function SessionsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="accent"
-              disabled={!canOperate || createSession.isPending || llm.modelId.trim().length === 0 || instructions.trim().length === 0}
+              disabled={
+                !canOperate || createSession.isPending || llm.modelId.trim().length === 0 || instructions.trim().length === 0 || llmSecretMissing
+              }
               onClick={async () => {
                 if (!orgId) return;
                 try {
@@ -302,15 +310,9 @@ export default function SessionsPage() {
                     engineId,
                     ...(toolsetId.trim().length > 0 ? { toolsetId: toolsetId.trim() } : {}),
                     llm: {
-                      provider:
-                        engineId === "gateway.codex.v2"
-                          ? "openai"
-                          : engineId === "gateway.claude.v2"
-                            ? "anthropic"
-                            : llm.providerId === "vertex"
-                              ? "openai"
-                              : llm.providerId,
+                      provider: llm.providerId,
                       model: llm.modelId.trim(),
+                      ...(llm.secretId ? { auth: { secretId: llm.secretId } } : {}),
                     },
                     prompt: {
                       ...(system.trim().length > 0 ? { system: system.trim() } : {}),
@@ -337,12 +339,11 @@ export default function SessionsPage() {
             {canEditOrgSettings ? (
               <Button
                 variant="outline"
-                disabled={!canOperate || updateSettings.isPending || llm.modelId.trim().length === 0}
+                disabled={!canOperate || updateSettings.isPending || llm.modelId.trim().length === 0 || llmSecretMissing}
                 onClick={async () => {
                   if (!orgId) return;
-                  const provider = llm.providerId === "vertex" ? "openai" : llm.providerId;
                   await updateSettings.mutateAsync({
-                    llm: { defaults: { session: { provider, model: llm.modelId.trim() } } },
+                    llm: { defaults: { session: { provider: llm.providerId, model: llm.modelId.trim(), secretId: llm.secretId ?? null } } },
                   });
                   toast.success(t("common.saved"));
                 }}

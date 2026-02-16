@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isOAuthRequiredProvider, normalizeLlmProviderId, providerSupportsContext, type LlmProviderId } from "@vespid/shared";
 
 export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.manual") }),
@@ -6,7 +7,19 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.cron"), config: z.object({ cron: z.string().min(1) }) }),
 ]);
 
-const defaultAgentLlmProvider = "openai" as const;
+const defaultAgentLlmProvider: LlmProviderId = "openai";
+
+const llmProviderSchema = z.string().min(1).transform((value, ctx) => {
+  const normalized = normalizeLlmProviderId(value);
+  if (!normalized) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Unsupported provider: ${value}`,
+    });
+    return z.NEVER;
+  }
+  return normalized;
+});
 
 const conditionConfigSchema = z.object({
   path: z.string().min(1).max(500),
@@ -64,7 +77,7 @@ const agentRunNodeSchema = z.object({
     .object({
     toolsetId: z.string().uuid().optional(),
     llm: z.object({
-      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default(defaultAgentLlmProvider),
+      provider: llmProviderSchema.default(defaultAgentLlmProvider),
       model: z.string().min(1).max(120).default("gpt-4.1-mini"),
       auth: z
         .object({
@@ -182,10 +195,25 @@ const agentRunNodeSchema = z.object({
       .optional(),
     })
     .superRefine((value, ctx) => {
-      if (value.llm.provider === "vertex" && !value.llm.auth?.secretId) {
+      const engineId = value.engine?.id ?? "gateway.loop.v2";
+      if (engineId !== "gateway.loop.v2" && value.execution.mode !== "gateway") {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "vertex provider requires llm.auth.secretId",
+          message: "agent.run engine requires execution.mode=gateway",
+          path: ["execution", "mode"],
+        });
+      }
+      if (!providerSupportsContext(value.llm.provider, "workflowAgentRun")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${value.llm.provider} cannot be used in workflowAgentRun context`,
+          path: ["llm", "provider"],
+        });
+      }
+      if (isOAuthRequiredProvider(value.llm.provider) && !value.llm.auth?.secretId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${value.llm.provider} provider requires llm.auth.secretId`,
           path: ["llm", "auth", "secretId"],
         });
       }

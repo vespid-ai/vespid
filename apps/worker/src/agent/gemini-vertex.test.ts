@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { runAgentLoop } from "@vespid/agent-runtime";
+import { runAgentLoop } from "./agent-loop.js";
 
 function baseInput() {
   return {
@@ -23,7 +23,7 @@ function baseInput() {
   };
 }
 
-describe("LLM providers (gemini + vertex)", () => {
+describe("LLM providers (google + google-vertex)", () => {
   const originalGeminiKey = process.env.GEMINI_API_KEY;
   const originalVertexClientId = process.env.GOOGLE_VERTEX_CLIENT_ID;
   const originalVertexClientSecret = process.env.GOOGLE_VERTEX_CLIENT_SECRET;
@@ -58,7 +58,7 @@ describe("LLM providers (gemini + vertex)", () => {
       fetchImpl,
       config: {
         ...base.config,
-        llm: { provider: "gemini" as const, model: "gemini-2.0-flash", auth: { fallbackToEnv: true as const } },
+        llm: { provider: "google" as const, model: "gemini-2.0-flash", auth: { fallbackToEnv: true as const } },
       },
       managedCredits: {
         ensureAvailable: vi.fn(async () => true),
@@ -73,13 +73,13 @@ describe("LLM providers (gemini + vertex)", () => {
       credits: 2,
       inputTokens: 900,
       outputTokens: 200,
-      provider: "gemini",
+      provider: "google",
       model: "gemini-2.0-flash",
       turn: 1,
     });
   });
 
-  it("executes vertex provider via refresh token without managed credits", async () => {
+  it("executes google-vertex provider via refresh token without managed credits", async () => {
     process.env.GOOGLE_VERTEX_CLIENT_ID = "vertex-client";
     process.env.GOOGLE_VERTEX_CLIENT_SECRET = "vertex-secret";
 
@@ -121,7 +121,7 @@ describe("LLM providers (gemini + vertex)", () => {
       config: {
         ...base.config,
         llm: {
-          provider: "vertex" as const,
+          provider: "google-vertex" as const,
           model: "gemini-2.0-flash-001",
           auth: { secretId: "00000000-0000-0000-0000-000000000000", fallbackToEnv: true as const },
         },

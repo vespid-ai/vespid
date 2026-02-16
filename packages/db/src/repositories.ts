@@ -2113,6 +2113,7 @@ export async function createAgentSession(
     toolsetId?: string | null;
     llmProvider: string;
     llmModel: string;
+    llmSecretId?: string | null;
     toolsAllow: unknown;
     limits: unknown;
     promptSystem?: string | null;
@@ -2133,6 +2134,7 @@ export async function createAgentSession(
       toolsetId: input.toolsetId ?? null,
       llmProvider: input.llmProvider,
       llmModel: input.llmModel,
+      llmSecretId: input.llmSecretId ?? null,
       toolsAllow: input.toolsAllow as any,
       limits: input.limits as any,
       promptSystem: input.promptSystem ?? null,

@@ -1,5 +1,5 @@
 import type { ZodTypeAny } from "zod";
-import type { ExecutorSelectorV1 } from "@vespid/shared";
+import type { ExecutorSelectorV1, LlmProviderId } from "@vespid/shared";
 
 export type AgentToolExecutionMode = "cloud" | "executor";
 
@@ -18,7 +18,7 @@ export type AgentToolContext = {
       credits: number;
       inputTokens: number;
       outputTokens: number;
-      provider: "openai" | "anthropic" | "gemini" | "vertex";
+      provider: LlmProviderId;
       model: string;
       turn: number;
     }) => Promise<void>;

@@ -4,7 +4,7 @@ const runtimeMocks = vi.hoisted(() => ({
   runAgentLoop: vi.fn(),
 }));
 
-vi.mock("@vespid/agent-runtime", () => ({
+vi.mock("../agent-loop.js", () => ({
   runAgentLoop: runtimeMocks.runAgentLoop,
 }));
 
@@ -113,4 +113,3 @@ describe("team tools", () => {
     ]);
   });
 });
-

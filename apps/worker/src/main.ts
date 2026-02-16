@@ -25,6 +25,7 @@ import {
   parseKekFromEnv,
   REMOTE_EXEC_ERROR,
   resolveWorkflowNodeExecutors,
+  type LlmProviderId,
   type EnterpriseProvider,
   type WorkflowNodeExecutor,
   type WorkflowRunJobPayload,
@@ -281,7 +282,7 @@ export async function processWorkflowRunJob(
       runId: string;
       nodeId: string;
       attemptCount: number;
-      provider: "openai" | "anthropic" | "gemini" | "vertex";
+      provider: LlmProviderId;
       model: string;
       turn: number;
       credits: number;
@@ -1255,7 +1256,7 @@ export async function startWorkflowWorker(input?: {
       runId: string;
       nodeId: string;
       attemptCount: number;
-      provider: "openai" | "anthropic" | "gemini" | "vertex";
+      provider: LlmProviderId;
       model: string;
       turn: number;
       credits: number;

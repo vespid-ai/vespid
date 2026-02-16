@@ -2,7 +2,8 @@
 
 import { LlmModelField, type LlmModelValue } from "./llm-model-field";
 import { LlmSecretField } from "./llm-secret-field";
-import type { LlmProviderId } from "./model-catalog";
+import { isOAuthRequiredProvider } from "@vespid/shared";
+import { providersForContext, type LlmProviderId } from "./model-catalog";
 
 export type LlmConfigMode = "session" | "workflowAgentRun" | "toolsetBuilder";
 
@@ -13,9 +14,9 @@ export type LlmConfigValue = {
 };
 
 function allowedProvidersForMode(mode: LlmConfigMode): LlmProviderId[] {
-  if (mode === "session") return ["openai", "anthropic", "gemini"];
-  if (mode === "toolsetBuilder") return ["openai", "anthropic"];
-  return ["openai", "anthropic", "gemini", "vertex"];
+  if (mode === "session") return providersForContext("session");
+  if (mode === "toolsetBuilder") return providersForContext("toolsetBuilder");
+  return providersForContext("workflowAgentRun");
 }
 
 export function LlmConfigField(props: {
@@ -29,8 +30,8 @@ export function LlmConfigField(props: {
   const allowedProviders = props.allowedProviders ?? allowedProvidersForMode(props.mode);
 
   const modelValue: LlmModelValue = { providerId: props.value.providerId, modelId: props.value.modelId };
-  const secretRequired = props.mode === "toolsetBuilder" || props.value.providerId === "vertex";
-  const showSecret = props.mode !== "session";
+  const secretRequired = props.mode === "toolsetBuilder" || isOAuthRequiredProvider(props.value.providerId);
+  const showSecret = props.mode !== "session" || isOAuthRequiredProvider(props.value.providerId);
 
   return (
     <div className="grid gap-3">

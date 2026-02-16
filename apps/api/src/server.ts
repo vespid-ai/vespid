@@ -23,6 +23,20 @@ import {
   type ToolsetCatalogItem,
   type ToolsetDraft,
   type ToolsetBuilderLlmConfig,
+  getAllLlmConnectorIds,
+  getCatalogSnapshotInfo,
+  getDefaultConnectorIdForProvider,
+  getDefaultModelForProvider,
+  getLlmProviderMeta,
+  isOAuthRequiredProvider,
+  listAllCatalogModels,
+  listLlmProviders,
+  normalizeLlmProviderId,
+  normalizeConnectorId,
+  providerSupportsContext,
+  type LlmProviderApiKind,
+  type LlmProviderId,
+  type LlmUsageContext,
 } from "@vespid/shared";
 import { createConnectorCatalog } from "@vespid/connectors";
 import { generateCodeVerifier, generateState } from "arctic";
@@ -36,6 +50,8 @@ import { workflowDslAnySchema, validateV3GraphConstraints } from "@vespid/workfl
 import { getToolsetCatalog } from "./toolsets/catalog.js";
 import { openAiChatCompletion, type OpenAiChatMessage } from "./llm/openai.js";
 import { anthropicChatCompletion } from "./llm/anthropic.js";
+import { geminiGenerateContent } from "./llm/gemini.js";
+import { vertexGenerateContent } from "./llm/vertex.js";
 import {
   createBullMqWorkflowRunQueueProducer,
   createInMemoryWorkflowRunQueueProducer,
@@ -69,6 +85,14 @@ type VertexOAuthStateRecord = {
   location: string;
   codeVerifier: string;
   nonce: string;
+  expiresAtSec: number;
+};
+
+type LlmOAuthDeviceStateRecord = {
+  organizationId: string;
+  userId: string;
+  provider: LlmProviderId;
+  name: string;
   expiresAtSec: number;
 };
 
@@ -159,6 +183,78 @@ const rotateSecretSchema = z.object({
   value: z.string().min(1),
 });
 
+const llmApiKindValues = [
+  "openai-compatible",
+  "anthropic-compatible",
+  "google",
+  "vertex",
+  "bedrock",
+  "copilot",
+  "custom",
+] as const;
+
+const llmProviderInputSchema = z.string().min(1).transform((value, ctx) => {
+  const normalized = normalizeLlmProviderId(value);
+  if (!normalized) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Unsupported provider: ${value}` });
+    return z.NEVER;
+  }
+  return normalized;
+});
+
+const llmNullableProviderInputSchema = z.union([llmProviderInputSchema, z.null()]);
+
+const llmDefaultSessionSchema = z
+  .object({
+    provider: llmNullableProviderInputSchema.optional(),
+    model: z.string().min(1).max(200).nullable().optional(),
+    secretId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.provider && !providerSupportsContext(value.provider, "session")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${value.provider} cannot be used in session context`,
+        path: ["provider"],
+      });
+    }
+  });
+
+const llmDefaultWorkflowSchema = z
+  .object({
+    provider: llmNullableProviderInputSchema.optional(),
+    model: z.string().min(1).max(200).nullable().optional(),
+    secretId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.provider && !providerSupportsContext(value.provider, "workflowAgentRun")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${value.provider} cannot be used in workflowAgentRun context`,
+        path: ["provider"],
+      });
+    }
+  });
+
+const llmDefaultToolsetSchema = z
+  .object({
+    provider: llmNullableProviderInputSchema.optional(),
+    model: z.string().min(1).max(200).nullable().optional(),
+    secretId: z.string().uuid().nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.provider && !providerSupportsContext(value.provider, "toolsetBuilder")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${value.provider} cannot be used in toolsetBuilder context`,
+        path: ["provider"],
+      });
+    }
+  });
+
 const orgSettingsSchema = z
   .object({
     tools: z
@@ -177,32 +273,22 @@ const orgSettingsSchema = z
       .object({
         defaults: z
           .object({
-            session: z
-              .object({
-                // Nullable so persisted settings can represent "explicitly cleared" defaults.
-                provider: z.enum(["openai", "anthropic", "gemini"]).nullable().optional(),
-                model: z.string().min(1).max(120).nullable().optional(),
-              })
-              .strict()
-              .optional(),
-            workflowAgentRun: z
-              .object({
-                provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).nullable().optional(),
-                model: z.string().min(1).max(120).nullable().optional(),
-                secretId: z.string().uuid().nullable().optional(),
-              })
-              .strict()
-              .optional(),
-            toolsetBuilder: z
-              .object({
-                provider: z.enum(["openai", "anthropic"]).nullable().optional(),
-                model: z.string().min(1).max(120).nullable().optional(),
-                secretId: z.string().uuid().nullable().optional(),
-              })
-              .strict()
-              .optional(),
+            session: llmDefaultSessionSchema.optional(),
+            workflowAgentRun: llmDefaultWorkflowSchema.optional(),
+            toolsetBuilder: llmDefaultToolsetSchema.optional(),
           })
           .strict()
+          .optional(),
+        providers: z
+          .record(
+            z.string().min(1),
+            z
+              .object({
+                baseUrl: z.string().url().max(2000).nullable().optional(),
+                apiKind: z.enum(llmApiKindValues).nullable().optional(),
+              })
+              .strict()
+          )
           .optional(),
       })
       .strict()
@@ -210,18 +296,73 @@ const orgSettingsSchema = z
   })
   .strict();
 
+function normalizeProviderDefault(input: {
+  provider: LlmProviderId | null;
+  model: string | null;
+  secretId: string | null;
+  context: LlmUsageContext;
+}): { provider: LlmProviderId | null; model: string | null; secretId: string | null } {
+  if (!input.provider) {
+    return { provider: null, model: input.model, secretId: input.secretId };
+  }
+  if (!providerSupportsContext(input.provider, input.context)) {
+    return { provider: null, model: input.model, secretId: input.secretId };
+  }
+  return {
+    provider: input.provider,
+    model: input.model ?? getDefaultModelForProvider(input.provider),
+    secretId: input.secretId,
+  };
+}
+
 function normalizeOrgSettings(input: unknown): {
   tools: { shellRunEnabled: boolean };
   toolsets: { defaultToolsetId: string | null };
   llm: {
     defaults: {
-      session: { provider: "openai" | "anthropic" | "gemini" | null; model: string | null };
-      workflowAgentRun: { provider: "openai" | "anthropic" | "gemini" | "vertex" | null; model: string | null; secretId: string | null };
-      toolsetBuilder: { provider: "openai" | "anthropic" | null; model: string | null; secretId: string | null };
+      session: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
+      workflowAgentRun: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
+      toolsetBuilder: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
     };
+    providers: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>>;
   };
 } {
   const parsed = orgSettingsSchema.safeParse(input);
+  const llmProviders: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>> = {};
+
+  if (parsed.success) {
+    const providers = parsed.data.llm?.providers ?? {};
+    for (const [providerIdRaw, conf] of Object.entries(providers)) {
+      const providerId = normalizeLlmProviderId(providerIdRaw);
+      if (!providerId) continue;
+      llmProviders[providerId] = {
+        baseUrl: typeof conf.baseUrl === "string" ? conf.baseUrl : null,
+        apiKind: conf.apiKind ?? null,
+      };
+    }
+  }
+
+  const sessionDefaults = normalizeProviderDefault({
+    provider: parsed.success ? (parsed.data.llm?.defaults?.session?.provider ?? null) : null,
+    model: parsed.success ? (parsed.data.llm?.defaults?.session?.model ?? null) : null,
+    secretId: parsed.success ? (parsed.data.llm?.defaults?.session?.secretId ?? null) : null,
+    context: "session",
+  });
+
+  const workflowDefaults = normalizeProviderDefault({
+    provider: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.provider ?? null) : null,
+    model: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.model ?? null) : null,
+    secretId: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.secretId ?? null) : null,
+    context: "workflowAgentRun",
+  });
+
+  const toolsetDefaults = normalizeProviderDefault({
+    provider: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.provider ?? null) : null,
+    model: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.model ?? null) : null,
+    secretId: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.secretId ?? null) : null,
+    context: "toolsetBuilder",
+  });
+
   return {
     tools: { shellRunEnabled: parsed.success ? Boolean(parsed.data.tools?.shellRunEnabled) : false },
     toolsets: {
@@ -230,21 +371,11 @@ function normalizeOrgSettings(input: unknown): {
     },
     llm: {
       defaults: {
-        session: {
-          provider: parsed.success ? (parsed.data.llm?.defaults?.session?.provider ?? null) : null,
-          model: parsed.success ? (parsed.data.llm?.defaults?.session?.model ?? null) : null,
-        },
-        workflowAgentRun: {
-          provider: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.provider ?? null) : null,
-          model: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.model ?? null) : null,
-          secretId: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.secretId ?? null) : null,
-        },
-        toolsetBuilder: {
-          provider: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.provider ?? null) : null,
-          model: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.model ?? null) : null,
-          secretId: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.secretId ?? null) : null,
-        },
+        session: sessionDefaults,
+        workflowAgentRun: workflowDefaults,
+        toolsetBuilder: toolsetDefaults,
       },
+      providers: llmProviders,
     },
   };
 }
@@ -327,8 +458,15 @@ const toolsetAdoptSchema = z.object({
 
 const toolsetBuilderLlmSchema = z
   .object({
-    provider: z.enum(["anthropic", "openai"]),
-    model: z.string().min(1).max(120),
+    provider: llmProviderInputSchema.superRefine((provider, ctx) => {
+      if (!providerSupportsContext(provider, "toolsetBuilder")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${provider} cannot be used in toolsetBuilder context`,
+        });
+      }
+    }),
+    model: z.string().min(1).max(200),
     auth: z.object({ secretId: z.string().uuid() }).strict(),
   })
   .strict();
@@ -382,10 +520,37 @@ const oauthQuerySchema = z.object({
   mode: z.enum(["json"]).optional(),
 });
 
+const llmProvidersQuerySchema = z.object({
+  context: z.enum(["session", "workflowAgentRun", "toolsetBuilder"]).optional(),
+});
+
 const vertexStartQuerySchema = z.object({
   projectId: z.string().min(1).max(120),
   location: z.string().min(1).max(64),
 });
+
+const llmOAuthStartSchema = z
+  .object({
+    projectId: z.string().min(1).max(120).optional(),
+    location: z.string().min(1).max(64).optional(),
+    name: z.string().min(1).max(80).optional(),
+    mode: z.enum(["json"]).optional(),
+  })
+  .strict();
+
+const llmOAuthDeviceStartSchema = z
+  .object({
+    name: z.string().min(1).max(80).optional(),
+  })
+  .strict();
+
+const llmOAuthDevicePollSchema = z
+  .object({
+    deviceCode: z.string().min(1).max(200),
+    token: z.string().min(1).max(20_000).optional(),
+    name: z.string().min(1).max(80).optional(),
+  })
+  .strict();
 
 function toPublicUser(input: { id: string; email: string; displayName: string | null; createdAt: string }) {
   return {
@@ -806,10 +971,7 @@ export async function buildServer(input?: {
   });
   const allowedSecretConnectorIds = new Set<string>([
     ...connectorCatalog.map((connector) => connector.id),
-    "llm.openai",
-    "llm.anthropic",
-    "llm.gemini",
-    "llm.vertex.oauth",
+    ...getAllLlmConnectorIds(),
   ]);
   await store.ensureDefaultRoles();
 
@@ -919,6 +1081,7 @@ export async function buildServer(input?: {
   const secureCookies = process.env.NODE_ENV === "production";
   const oauthStates = new Map<string, OAuthStateRecord>();
   const vertexOAuthStates = new Map<string, VertexOAuthStateRecord>();
+  const llmOAuthDeviceStates = new Map<string, LlmOAuthDeviceStateRecord>();
 
   function setSessionCookie(reply: { setCookie: Function }, refreshToken: string): void {
     reply.setCookie(SESSION_COOKIE_NAME, refreshToken, {
@@ -1471,6 +1634,26 @@ export async function buildServer(input?: {
     };
   });
 
+  server.get("/v1/llm/providers", async (request) => {
+    const parsedQuery = llmProvidersQuerySchema.safeParse(request.query ?? {});
+    if (!parsedQuery.success) {
+      throw badRequest("Invalid llm providers query", parsedQuery.error.flatten());
+    }
+    const context = parsedQuery.data.context;
+    const providers = listLlmProviders({
+      ...(context ? { context: context as LlmUsageContext } : {}),
+    }).map((provider) => ({
+      ...provider,
+      oauthSupported: provider.authMode === "oauth",
+      models: listAllCatalogModels().filter((model) => model.providerId === provider.id),
+    }));
+
+    return {
+      providers,
+      source: getCatalogSnapshotInfo(),
+    };
+  });
+
   server.get("/v1/auth/oauth/:provider/callback", async (request, reply) => {
     const provider = extractProvider((request.params as { provider?: string }).provider);
     const parsed = oauthQuerySchema.safeParse(request.query);
@@ -1893,6 +2076,24 @@ export async function buildServer(input?: {
     });
     const normalizedExisting = normalizeOrgSettings(existing);
     const llmDefaultsPatch = parsed.data.llm?.defaults;
+    const llmProvidersPatch = parsed.data.llm?.providers;
+
+    const nextProviderOverrides: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>> =
+      llmProvidersPatch
+        ? (() => {
+            const out = { ...normalizedExisting.llm.providers };
+            for (const [rawProviderId, conf] of Object.entries(llmProvidersPatch)) {
+              const providerId = normalizeLlmProviderId(rawProviderId);
+              if (!providerId) continue;
+              out[providerId] = {
+                baseUrl: typeof conf.baseUrl === "string" ? conf.baseUrl : null,
+                apiKind: conf.apiKind ?? null,
+              };
+            }
+            return out;
+          })()
+        : normalizedExisting.llm.providers;
+
     const next = {
       tools: {
         shellRunEnabled:
@@ -1913,6 +2114,10 @@ export async function buildServer(input?: {
               ? {
                   provider: llmDefaultsPatch.session?.provider ?? null,
                   model: llmDefaultsPatch.session?.model ?? null,
+                  secretId:
+                    llmDefaultsPatch.session && "secretId" in llmDefaultsPatch.session
+                      ? (llmDefaultsPatch.session.secretId ?? null)
+                      : null,
                 }
               : normalizedExisting.llm.defaults.session,
           workflowAgentRun:
@@ -1938,6 +2143,7 @@ export async function buildServer(input?: {
                 }
               : normalizedExisting.llm.defaults.toolsetBuilder,
         },
+        providers: nextProviderOverrides,
       },
     };
 
@@ -1967,11 +2173,17 @@ export async function buildServer(input?: {
       throw forbidden("Role is not allowed to manage secrets");
     }
 
-    const secrets = await store.listConnectorSecrets({
+    const normalizedConnectorId = parsed.data.connectorId ? normalizeConnectorId(parsed.data.connectorId) : null;
+    const rawSecrets = await store.listConnectorSecrets({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: parsed.data.connectorId ?? null,
+      connectorId: null,
     });
+
+    const secrets =
+      normalizedConnectorId === null
+        ? rawSecrets
+        : rawSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === normalizedConnectorId);
 
     return { secrets };
   });
@@ -1995,9 +2207,10 @@ export async function buildServer(input?: {
     if (parsed.data.value.trim().length === 0) {
       throw secretValueRequired();
     }
-    if (!allowedSecretConnectorIds.has(parsed.data.connectorId)) {
+    const connectorId = normalizeConnectorId(parsed.data.connectorId);
+    if (!allowedSecretConnectorIds.has(connectorId)) {
       throw badRequest("Invalid connectorId for secret", {
-        connectorId: parsed.data.connectorId,
+        connectorId,
         allowed: [...allowedSecretConnectorIds.values()],
       });
     }
@@ -2006,7 +2219,7 @@ export async function buildServer(input?: {
       const secret = await store.createConnectorSecret({
         organizationId: orgContext.organizationId,
         actorUserId: auth.userId,
-        connectorId: parsed.data.connectorId,
+        connectorId,
         name: parsed.data.name,
         value: parsed.data.value,
       });
@@ -2087,6 +2300,267 @@ export async function buildServer(input?: {
       throw secretNotFound();
     }
 
+    return { ok: true };
+  });
+
+  function requireOrgAdminMembershipForSecretManagement(input: {
+    organizationId: string;
+    userId: string;
+  }): Promise<MembershipRecord> {
+    return (async () => {
+      const membership = await store.getMembership({
+        organizationId: input.organizationId,
+        userId: input.userId,
+        actorUserId: input.userId,
+      });
+      if (!membership) {
+        throw forbidden("Organization access denied");
+      }
+      if (!["owner", "admin"].includes(membership.roleKey)) {
+        throw forbidden("Role is not allowed to manage secrets");
+      }
+      return membership;
+    })();
+  }
+
+  function resolveOauthProviderOrThrow(rawProvider: string | undefined): LlmProviderId {
+    const provider = normalizeLlmProviderId(rawProvider);
+    if (!provider) {
+      throw badRequest("Unsupported LLM OAuth provider");
+    }
+    if (!isOAuthRequiredProvider(provider)) {
+      throw badRequest(`${provider} does not support OAuth.`);
+    }
+    return provider;
+  }
+
+  server.post("/v1/orgs/:orgId/llm/oauth/:provider/start", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; provider?: string };
+    if (!params.orgId || !params.provider) {
+      throw badRequest("Missing orgId or provider");
+    }
+    const provider = resolveOauthProviderOrThrow(params.provider);
+    await requireOrgAdminMembershipForSecretManagement({ organizationId: params.orgId, userId: auth.userId });
+
+    const parsed = llmOAuthStartSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid OAuth start payload", parsed.error.flatten());
+    }
+
+    if (provider === "google-vertex") {
+      const projectId = parsed.data.projectId?.trim();
+      const location = parsed.data.location?.trim() ?? "us-central1";
+      if (!projectId) {
+        throw badRequest("projectId is required for google-vertex OAuth start");
+      }
+      if (!vertexOAuthService) {
+        throw new AppError(500, { code: "VERTEX_OAUTH_NOT_CONFIGURED", message: "Vertex OAuth is not configured" });
+      }
+      const state = generateState();
+      const codeVerifier = generateCodeVerifier();
+      const nonce = crypto.randomBytes(24).toString("base64url");
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      vertexOAuthStates.set(state, {
+        organizationId: params.orgId,
+        userId: auth.userId,
+        projectId,
+        location,
+        codeVerifier,
+        nonce,
+        expiresAtSec: nowSec + OAUTH_CONTEXT_TTL_SEC,
+      });
+      setVertexOAuthCookies(reply, { state, nonce });
+      const url = vertexOAuthService.createAuthorizationUrl({ state, codeVerifier, nonce });
+      if (parsed.data.mode === "json") {
+        return { provider, authorizationUrl: url.toString() };
+      }
+      return reply.redirect(url.toString());
+    }
+
+    throw new AppError(400, {
+      code: "LLM_OAUTH_USE_DEVICE_FLOW",
+      message: `Provider ${provider} uses device flow. Use /v1/orgs/:orgId/llm/oauth/:provider/device/start.`,
+    });
+  });
+
+  server.get("/v1/llm/oauth/:provider/callback", async (request, reply) => {
+    const params = request.params as { provider?: string };
+    const provider = resolveOauthProviderOrThrow(params.provider);
+    if (provider !== "google-vertex") {
+      throw new AppError(400, {
+        code: "LLM_OAUTH_CALLBACK_NOT_SUPPORTED",
+        message: `${provider} does not use callback flow in this deployment.`,
+      });
+    }
+
+    const queryString = (() => {
+      const q = request.query as Record<string, string | undefined>;
+      const p = new URLSearchParams();
+      for (const [key, value] of Object.entries(q ?? {})) {
+        if (typeof value === "string" && value.length > 0) p.set(key, value);
+      }
+      const out = p.toString();
+      return out ? `?${out}` : "";
+    })();
+
+    return reply.redirect(`/v1/llm/vertex/callback${queryString}`);
+  });
+
+  server.post("/v1/orgs/:orgId/llm/oauth/:provider/device/start", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; provider?: string };
+    if (!params.orgId || !params.provider) {
+      throw badRequest("Missing orgId or provider");
+    }
+    const provider = resolveOauthProviderOrThrow(params.provider);
+    await requireOrgAdminMembershipForSecretManagement({ organizationId: params.orgId, userId: auth.userId });
+    if (provider === "google-vertex") {
+      throw badRequest("google-vertex uses callback flow. Use /llm/oauth/google-vertex/start.");
+    }
+
+    const parsed = llmOAuthDeviceStartSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid OAuth device start payload", parsed.error.flatten());
+    }
+
+    const deviceCode = crypto.randomUUID();
+    const userCode = crypto.randomBytes(4).toString("hex").toUpperCase();
+    const nowSec = Math.floor(Date.now() / 1000);
+    llmOAuthDeviceStates.set(deviceCode, {
+      organizationId: params.orgId,
+      userId: auth.userId,
+      provider,
+      name: parsed.data.name?.trim() || "default",
+      expiresAtSec: nowSec + OAUTH_CONTEXT_TTL_SEC,
+    });
+
+    const verifyUrlEnv = `LLM_OAUTH_${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_VERIFY_URL`;
+    const verificationUri = process.env[verifyUrlEnv] ?? "https://example.com/device";
+
+    return {
+      provider,
+      deviceCode,
+      userCode,
+      verificationUri,
+      intervalSec: 3,
+      expiresInSec: OAUTH_CONTEXT_TTL_SEC,
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/llm/oauth/:provider/device/poll", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; provider?: string };
+    if (!params.orgId || !params.provider) {
+      throw badRequest("Missing orgId or provider");
+    }
+    const provider = resolveOauthProviderOrThrow(params.provider);
+    await requireOrgAdminMembershipForSecretManagement({ organizationId: params.orgId, userId: auth.userId });
+
+    const parsed = llmOAuthDevicePollSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid OAuth device poll payload", parsed.error.flatten());
+    }
+
+    const state = llmOAuthDeviceStates.get(parsed.data.deviceCode);
+    if (!state || state.organizationId !== params.orgId || state.provider !== provider) {
+      throw unauthorized("Invalid OAuth device code");
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (state.expiresAtSec <= nowSec) {
+      llmOAuthDeviceStates.delete(parsed.data.deviceCode);
+      throw unauthorized("OAuth device code expired");
+    }
+
+    if (!parsed.data.token) {
+      return { status: "pending" as const };
+    }
+
+    const connectorId = normalizeConnectorId(`llm.${provider}.oauth`);
+    const name = parsed.data.name?.trim() || state.name || "default";
+    const value = parsed.data.token.trim();
+    if (!value) {
+      throw badRequest("Token is required.");
+    }
+
+    try {
+      await store.createConnectorSecret({
+        organizationId: params.orgId,
+        actorUserId: auth.userId,
+        connectorId,
+        name,
+        value,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "SECRET_ALREADY_EXISTS") {
+        const existingAll = await store.listConnectorSecrets({
+          organizationId: params.orgId,
+          actorUserId: auth.userId,
+          connectorId: null,
+        });
+        const existing = existingAll.filter((secret) => normalizeConnectorId(secret.connectorId) === connectorId);
+        const current = existing.find((s) => s.name === name) ?? null;
+        if (!current) {
+          throw new AppError(500, { code: "LLM_OAUTH_STORE_FAILED", message: "Failed to rotate existing OAuth secret." });
+        }
+        await store.rotateConnectorSecret({
+          organizationId: params.orgId,
+          actorUserId: auth.userId,
+          secretId: current.id,
+          value,
+        });
+      } else {
+        throw error;
+      }
+    }
+
+    llmOAuthDeviceStates.delete(parsed.data.deviceCode);
+
+    const secretsAll = await store.listConnectorSecrets({
+      organizationId: params.orgId,
+      actorUserId: auth.userId,
+      connectorId: null,
+    });
+    const secrets = secretsAll.filter((secret) => normalizeConnectorId(secret.connectorId) === connectorId);
+    const current = secrets.find((s) => s.name === name) ?? null;
+    return {
+      status: "connected" as const,
+      secretId: current?.id ?? null,
+      connectorId,
+      name,
+    };
+  });
+
+  server.delete("/v1/orgs/:orgId/llm/oauth/:provider/:secretId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; provider?: string; secretId?: string };
+    if (!params.orgId || !params.provider || !params.secretId) {
+      throw badRequest("Missing orgId or provider or secretId");
+    }
+    const provider = resolveOauthProviderOrThrow(params.provider);
+    await requireOrgAdminMembershipForSecretManagement({ organizationId: params.orgId, userId: auth.userId });
+    const connectorId = normalizeConnectorId(`llm.${provider}.oauth`);
+
+    const secretsAll = await store.listConnectorSecrets({
+      organizationId: params.orgId,
+      actorUserId: auth.userId,
+      connectorId: null,
+    });
+    const secrets = secretsAll.filter((secret) => normalizeConnectorId(secret.connectorId) === connectorId);
+    const hit = secrets.find((s) => s.id === params.secretId) ?? null;
+    if (!hit) {
+      throw secretNotFound();
+    }
+    const ok = await store.deleteConnectorSecret({
+      organizationId: params.orgId,
+      actorUserId: auth.userId,
+      secretId: params.secretId,
+    });
+    if (!ok) {
+      throw secretNotFound();
+    }
     return { ok: true };
   });
 
@@ -2200,7 +2674,7 @@ export async function buildServer(input?: {
         nonce: stored.nonce,
       });
 
-      const connectorId = "llm.vertex.oauth";
+      const connectorId = normalizeConnectorId("llm.vertex.oauth");
       const name = "default";
       const value = JSON.stringify({
         refreshToken: connection.refreshToken,
@@ -2221,11 +2695,12 @@ export async function buildServer(input?: {
         });
       } catch (error) {
         if (error instanceof Error && error.message === "SECRET_ALREADY_EXISTS") {
-          const existing = await store.listConnectorSecrets({
+          const existingAll = await store.listConnectorSecrets({
             organizationId: stored.organizationId,
             actorUserId: auth.userId,
-            connectorId,
+            connectorId: null,
           });
+          const existing = existingAll.filter((secret) => normalizeConnectorId(secret.connectorId) === connectorId);
           const current = existing.find((s) => s.name === name) ?? null;
           if (!current) {
             throw new AppError(500, { code: "VERTEX_OAUTH_STORE_FAILED", message: "Failed to rotate existing Vertex connection secret" });
@@ -2284,11 +2759,12 @@ export async function buildServer(input?: {
       throw forbidden("Role is not allowed to manage secrets");
     }
 
-    const existing = await store.listConnectorSecrets({
+    const existingAll = await store.listConnectorSecrets({
       organizationId: params.orgId,
       actorUserId: auth.userId,
-      connectorId: "llm.vertex.oauth",
+      connectorId: null,
     });
+    const existing = existingAll.filter((secret) => normalizeConnectorId(secret.connectorId) === normalizeConnectorId("llm.vertex.oauth"));
 
     const current = existing.find((s) => s.name === "default") ?? null;
     if (current) {
@@ -2468,10 +2944,27 @@ export async function buildServer(input?: {
         title: z.string().max(200).optional(),
         engineId: z.enum(["gateway.loop.v2", "gateway.codex.v2", "gateway.claude.v2"]).optional(),
         toolsetId: z.string().uuid().optional(),
-        llm: z.object({
-          provider: z.enum(["openai", "anthropic", "gemini"]).default("openai"),
-          model: z.string().min(1).max(120),
-        }),
+        llm: z
+          .object({
+            provider: llmProviderInputSchema.default("openai"),
+            model: z.string().min(1).max(200),
+            auth: z
+              .object({
+                secretId: z.string().uuid().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .superRefine((value, ctx) => {
+            if (!providerSupportsContext(value.provider, "session")) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["provider"],
+                message: `${value.provider} is not available for sessions`,
+              });
+            }
+          })
+          .optional(),
         prompt: z.object({
           system: z.string().max(200_000).optional(),
           instructions: z.string().min(1).max(200_000),
@@ -2497,13 +2990,62 @@ export async function buildServer(input?: {
 
     const engineId = body.data.engineId ?? "gateway.loop.v2";
 
+    const isMember = orgContext.membership.roleKey === "member";
+    const orgSettings = normalizeOrgSettings(
+      await store.getOrganizationSettings({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+      })
+    );
+
+    const resolvedLlm = (() => {
+      if (!isMember) {
+        const candidate = body.data.llm ?? {
+          provider: orgSettings.llm.defaults.session.provider ?? "openai",
+          model: orgSettings.llm.defaults.session.model ?? "gpt-4.1-mini",
+          auth: {
+            secretId: orgSettings.llm.defaults.session.secretId ?? null,
+          },
+        };
+        return {
+          provider: candidate.provider,
+          model: candidate.model.trim(),
+          auth: { secretId: candidate.auth?.secretId ?? null },
+        };
+      }
+      const defaults = orgSettings.llm.defaults.session;
+      if (!defaults.provider || !defaults.model) {
+        throw new AppError(400, {
+          code: "ORG_DEFAULT_LLM_REQUIRED",
+          message: "Members must use organization default session model configuration.",
+        });
+      }
+      return {
+        provider: defaults.provider,
+        model: defaults.model,
+        auth: { secretId: defaults.secretId ?? null },
+      };
+    })();
+
+    if (engineId === "gateway.codex.v2" && resolvedLlm.provider !== "openai" && resolvedLlm.provider !== "openai-codex") {
+      throw badRequest("gateway.codex.v2 sessions support only openai/openai-codex providers.");
+    }
+
+    if (isOAuthRequiredProvider(resolvedLlm.provider) && !resolvedLlm.auth.secretId) {
+      throw badRequest("Provider requires llm.auth.secretId for sessions.");
+    }
+
     const session = await store.createAgentSession({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
       title: body.data.title ?? "",
       engineId,
       toolsetId: body.data.toolsetId ?? null,
-      llm: body.data.llm,
+      llm: {
+        provider: resolvedLlm.provider,
+        model: resolvedLlm.model,
+        auth: { ...(resolvedLlm.auth.secretId ? { secretId: resolvedLlm.auth.secretId } : {}) },
+      },
       prompt: { system: body.data.prompt.system ?? null, instructions: body.data.prompt.instructions },
       tools: body.data.tools,
       limits: body.data.limits ?? {},
@@ -2516,7 +3058,7 @@ export async function buildServer(input?: {
       sessionId: session.id,
       eventType: "session_created",
       level: "info",
-      payload: { engineId, llm: body.data.llm },
+      payload: { engineId, llm: resolvedLlm, enforcedOrgDefault: isMember },
     });
 
     return reply.status(201).send({ session });
@@ -2836,27 +3378,103 @@ export async function buildServer(input?: {
     return uniq;
   }
 
-  function expectedLlmConnectorId(provider: "anthropic" | "openai"): string {
-    return provider === "anthropic" ? "llm.anthropic" : "llm.openai";
+  function expectedLlmConnectorId(provider: LlmProviderId): string {
+    const connectorId = getDefaultConnectorIdForProvider(provider);
+    if (!connectorId) {
+      throw badRequest(`Provider ${provider} does not support secrets in toolset builder context.`);
+    }
+    return normalizeConnectorId(connectorId);
   }
 
-  async function callBuilderLlm(input: { llm: ToolsetBuilderLlmConfig; apiKey: string; messages: OpenAiChatMessage[] }) {
+  function resolveLlmProviderRuntime(input: {
+    provider: LlmProviderId;
+    orgSettings: ReturnType<typeof normalizeOrgSettings>;
+  }): { apiKind: LlmProviderApiKind; apiBaseUrl: string | null } {
+    const providerMeta = getLlmProviderMeta(input.provider);
+    if (!providerMeta) {
+      throw badRequest(`Unsupported provider: ${input.provider}`);
+    }
+    const providerOverride = input.orgSettings.llm.providers[input.provider];
+    return {
+      apiKind: providerOverride?.apiKind ?? providerMeta.apiKind,
+      apiBaseUrl: providerOverride?.baseUrl ?? null,
+    };
+  }
+
+  async function callBuilderLlm(input: {
+    llm: ToolsetBuilderLlmConfig;
+    secretValue: string;
+    messages: OpenAiChatMessage[];
+    orgSettings: ReturnType<typeof normalizeOrgSettings>;
+  }) {
     const timeoutMs = 25_000;
-    return input.llm.provider === "anthropic"
-      ? await anthropicChatCompletion({
-          apiKey: input.apiKey,
-          model: input.llm.model,
-          messages: input.messages,
-          timeoutMs,
-          maxOutputChars: 80_000,
+    const runtime = resolveLlmProviderRuntime({ provider: input.llm.provider, orgSettings: input.orgSettings });
+
+    if (runtime.apiKind === "vertex") {
+      const parsedSecret = z
+        .object({
+          refreshToken: z.string().min(1),
+          projectId: z.string().min(1),
+          location: z.string().min(1),
         })
-      : await openAiChatCompletion({
-          apiKey: input.apiKey,
-          model: input.llm.model,
-          messages: input.messages,
-          timeoutMs,
-          maxOutputChars: 80_000,
-        });
+        .safeParse((() => {
+          try {
+            return JSON.parse(input.secretValue);
+          } catch {
+            return null;
+          }
+        })());
+      if (!parsedSecret.success) {
+        return { ok: false as const, error: "VERTEX_SECRET_INVALID" };
+      }
+      return vertexGenerateContent({
+        refreshToken: parsedSecret.data.refreshToken,
+        projectId: parsedSecret.data.projectId,
+        location: parsedSecret.data.location,
+        model: input.llm.model,
+        messages: input.messages,
+        timeoutMs,
+        maxOutputChars: 80_000,
+        ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+      });
+    }
+
+    const apiKey = input.secretValue.trim();
+    if (!apiKey) {
+      return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
+    }
+
+    if (runtime.apiKind === "anthropic-compatible") {
+      return anthropicChatCompletion({
+        apiKey,
+        model: input.llm.model,
+        messages: input.messages,
+        timeoutMs,
+        maxOutputChars: 80_000,
+        ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+      });
+    }
+
+    if (runtime.apiKind === "google") {
+      return geminiGenerateContent({
+        apiKey,
+        model: input.llm.model,
+        messages: input.messages,
+        timeoutMs,
+        maxOutputChars: 80_000,
+        ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+      });
+    }
+
+    // Provider families without a dedicated builder client currently use OpenAI-compatible chat.
+    return openAiChatCompletion({
+      apiKey,
+      model: input.llm.model,
+      messages: input.messages,
+      timeoutMs,
+      maxOutputChars: 80_000,
+      ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+    });
   }
 
   server.post("/v1/orgs/:orgId/toolsets/builder/sessions", async (request) => {
@@ -2875,24 +3493,32 @@ export async function buildServer(input?: {
       throw badRequest("Invalid builder session payload", parsed.error.flatten());
     }
 
+    const orgSettings = normalizeOrgSettings(
+      await store.getOrganizationSettings({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+      })
+    );
+
     const llm = parsed.data.llm as ToolsetBuilderLlmConfig;
     const expectedConnectorId = expectedLlmConnectorId(llm.provider);
-    const secrets = await store.listConnectorSecrets({
+    const allSecrets = await store.listConnectorSecrets({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: expectedConnectorId,
+      connectorId: null,
     });
+    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
     const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
     if (!secretMeta) {
       throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
     }
 
-    const apiKey = await store.loadConnectorSecretValue({
+    const secretValue = await store.loadConnectorSecretValue({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
       secretId: llm.auth.secretId,
     });
-    if (!apiKey || apiKey.trim().length === 0) {
+    if (!secretValue || secretValue.trim().length === 0) {
       throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
     }
 
@@ -2945,11 +3571,12 @@ export async function buildServer(input?: {
 
       const llmRes = await callBuilderLlm({
         llm,
-        apiKey,
+        secretValue,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
+        orgSettings,
       });
       if (!llmRes.ok) {
         throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
@@ -3022,6 +3649,13 @@ export async function buildServer(input?: {
       throw badRequest("Invalid builder chat payload", parsed.error.flatten());
     }
 
+    const orgSettings = normalizeOrgSettings(
+      await store.getOrganizationSettings({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+      })
+    );
+
     const selected = normalizeSelectedComponentKeys(parsed.data.selectedComponentKeys);
     const message = parsed.data.message.trim();
     await store.appendToolsetBuilderTurn({
@@ -3034,20 +3668,24 @@ export async function buildServer(input?: {
 
     const llm = session.llm as ToolsetBuilderLlmConfig;
     const expectedConnectorId = expectedLlmConnectorId(llm.provider);
-    const secrets = await store.listConnectorSecrets({
+    const allSecrets = await store.listConnectorSecrets({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: expectedConnectorId,
+      connectorId: null,
     });
+    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
     const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
     if (!secretMeta) {
       throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
     }
-    const apiKey = await store.loadConnectorSecretValue({
+    const secretValue = await store.loadConnectorSecretValue({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
       secretId: llm.auth.secretId,
     });
+    if (!secretValue || secretValue.trim().length === 0) {
+      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
+    }
 
     const ranked = rankCatalogItems({ query: message, items: toolsetCatalog, limit: 20 });
     const catalogPreview = ranked.map((it) => ({
@@ -3088,11 +3726,12 @@ export async function buildServer(input?: {
 
     const llmRes = await callBuilderLlm({
       llm,
-      apiKey,
+      secretValue,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
+      orgSettings,
     });
     if (!llmRes.ok) {
       throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
@@ -3166,6 +3805,13 @@ export async function buildServer(input?: {
       throw badRequest("Invalid finalize payload", parsed.error.flatten());
     }
 
+    const orgSettings = normalizeOrgSettings(
+      await store.getOrganizationSettings({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+      })
+    );
+
     const selectedComponentKeys = normalizeSelectedComponentKeys(parsed.data.selectedComponentKeys);
     const selectedComponents = selectedComponentKeys.map((k) => toolsetCatalogByKey.get(k)!).filter(Boolean);
     const selectedMcp = selectedComponents.filter((c) => c.kind === "mcp") as Array<Extract<ToolsetCatalogItem, { kind: "mcp" }>>;
@@ -3173,20 +3819,24 @@ export async function buildServer(input?: {
 
     const llm = session.llm as ToolsetBuilderLlmConfig;
     const expectedConnectorId = expectedLlmConnectorId(llm.provider);
-    const secrets = await store.listConnectorSecrets({
+    const allSecrets = await store.listConnectorSecrets({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: expectedConnectorId,
+      connectorId: null,
     });
+    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
     const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
     if (!secretMeta) {
       throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
     }
-    const apiKey = await store.loadConnectorSecretValue({
+    const secretValue = await store.loadConnectorSecretValue({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
       secretId: llm.auth.secretId,
     });
+    if (!secretValue || secretValue.trim().length === 0) {
+      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
+    }
 
     const turns = await store.listToolsetBuilderTurns({
       organizationId: orgContext.organizationId,
@@ -3221,11 +3871,12 @@ export async function buildServer(input?: {
 
     const llmRes = await callBuilderLlm({
       llm,
-      apiKey,
+      secretValue,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
+      orgSettings,
     });
     if (!llmRes.ok) {
       throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });

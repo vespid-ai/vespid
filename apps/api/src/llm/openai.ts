@@ -21,9 +21,11 @@ export async function openAiChatCompletion(input: {
   timeoutMs: number;
   maxOutputChars?: number;
   maxTokens?: number;
+  apiBaseUrl?: string;
   fetchImpl?: typeof fetch;
 }): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
   const fetchImpl = input.fetchImpl ?? fetch;
+  const apiBaseUrl = input.apiBaseUrl ?? process.env.OPENAI_API_BASE_URL ?? "https://api.openai.com";
 
   const deadline = Date.now() + Math.max(1000, input.timeoutMs);
   const maxTokens =
@@ -41,7 +43,7 @@ export async function openAiChatCompletion(input: {
     const timeout = setTimeout(() => controller.abort(), remainingMs);
 
     try {
-      const response = await fetchImpl("https://api.openai.com/v1/chat/completions", {
+      const response = await fetchImpl(new URL("/v1/chat/completions", apiBaseUrl).toString(), {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -96,4 +98,3 @@ export async function openAiChatCompletion(input: {
     }
   }
 }
-
