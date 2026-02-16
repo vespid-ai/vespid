@@ -101,6 +101,24 @@ Useful options:
 pnpm smoke:channels -- --channels=telegram,slack,msteams
 ```
 
+## Validation Matrix
+
+Automated coverage for channel runtime currently includes:
+
+- Adapter unit matrix (21 channels, happy + malformed + auth-failure):
+  - `apps/gateway/src/channels/adapters/core.test.ts`
+- Runtime manager unit matrix (Core8 + Extended13 route to session/workflow, malformed drop):
+  - `apps/gateway/src/channels/manager.test.ts`
+- End-to-end integration (API + Gateway + DB + Redis):
+  - Core channels happy + malformed:
+    - `tests/channels-core8.integration.test.ts`
+  - Extended channels happy + malformed:
+    - `tests/channels-extended.integration.test.ts`
+  - Auth-gated failure reasons for all 21 channels:
+    - `tests/channels-auth.integration.test.ts`
+- Operator smoke execution script:
+  - `scripts/channel-smoke-matrix.ts`
+
 ### Runtime event sources
 
 - `channel_events`
