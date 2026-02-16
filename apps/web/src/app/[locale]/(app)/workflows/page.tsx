@@ -476,6 +476,26 @@ export default function WorkflowsPage() {
     router.push(`/${locale}/workflows/${trimmed}`);
   }
 
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("workflows.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+        </div>
+        <EmptyState
+          title={t("workflows.errors.orgRequired")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-4">
       <div>

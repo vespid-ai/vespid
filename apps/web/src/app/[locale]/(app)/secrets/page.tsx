@@ -3,7 +3,7 @@
 import { useTranslations } from "next-intl";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared/llm/provider-registry";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { Button } from "../../../../components/ui/button";
@@ -23,6 +23,9 @@ import { AdvancedSection } from "../../../../components/app/advanced-section";
 
 function SecretsPageContent() {
   const t = useTranslations();
+  const router = useRouter();
+  const params = useParams<{ locale?: string | string[] }>();
+  const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
   const searchParams = useSearchParams();
 
@@ -162,6 +165,26 @@ function SecretsPageContent() {
       },
     ] as const;
   }, [selectedId]);
+
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("secrets.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("secrets.warning")}</div>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4">

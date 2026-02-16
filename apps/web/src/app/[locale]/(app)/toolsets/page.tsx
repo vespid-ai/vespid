@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useParams, useRouter } from "next/navigation";
 import { getDefaultModelForProvider, type LlmProviderId } from "@vespid/shared/llm/provider-registry";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
@@ -739,6 +740,9 @@ function ToolsetEditorDialog(props: {
 
 export default function ToolsetsPage() {
   const t = useTranslations();
+  const router = useRouter();
+  const params = useParams<{ locale?: string | string[] }>();
+  const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
 
   const toolsetsQuery = useToolsets(orgId);
@@ -960,6 +964,26 @@ export default function ToolsetsPage() {
     if (!q) return galleryItems;
     return galleryItems.filter((it) => (it.name ?? "").toLowerCase().includes(q) || (it.publicSlug ?? "").toLowerCase().includes(q));
   }, [galleryItems, gallerySearch]);
+
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("toolsets.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("toolsets.subtitle")}</div>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4">

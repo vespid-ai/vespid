@@ -153,6 +153,26 @@ export default function SessionsPage() {
     };
   }
 
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-4">
       <div>
