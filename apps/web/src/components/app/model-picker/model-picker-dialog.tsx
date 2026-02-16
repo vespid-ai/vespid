@@ -4,71 +4,76 @@ import { Command } from "cmdk";
 import { Check, Settings2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Input } from "../../ui/input";
 import { cn } from "../../../lib/cn";
-import { getLocaleFromPathname } from "../../../i18n/pathnames";
-import { splitOpenRouterModelId, type OpenRouterModelItem } from "../../../lib/models/openrouter";
+import { curatedModels, inferProviderFromModelId, providerLabels, type LlmProviderId } from "../llm/model-catalog";
 
-type OpenRouterModelsOk = {
-  source: "openrouter";
-  fetchedAt: string;
-  data: OpenRouterModelItem[];
-  error?: { code: string; message: string; status?: number };
-};
-
-type ProviderGroupId = "openai" | "anthropic" | "google" | "other";
+type ProviderGroupId = LlmProviderId | "other";
 
 type PickerItem = {
   providerId: ProviderGroupId;
   modelId: string;
-  fullId: string;
   name: string;
   recommended: boolean;
+  isCustom?: boolean;
 };
 
 const DISABLED_STORAGE_KEY = "vespid.ui.models.disabled.v1";
+const RECENT_STORAGE_KEY = "vespid.ui.models.recent.v1";
 
-function readDisabledMap(): Record<string, string[]> {
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return {};
+function readJson<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return fallback;
   try {
-    const raw = window.localStorage.getItem(DISABLED_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    return parsed as Record<string, string[]>;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
   } catch {
-    return {};
+    return fallback;
   }
 }
 
-function writeDisabledMap(next: Record<string, string[]>): void {
+function writeJson(key: string, value: unknown): void {
   if (typeof window === "undefined" || typeof window.localStorage === "undefined") return;
   try {
-    window.localStorage.setItem(DISABLED_STORAGE_KEY, JSON.stringify(next));
+    window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // Ignore localStorage quota/unavailable errors.
   }
 }
 
-function normalizeProvider(providerId: string | null): ProviderGroupId {
-  if (providerId === "openai" || providerId === "anthropic" || providerId === "google") return providerId;
+function readDisabledMap(): Record<string, string[]> {
+  const parsed = readJson<unknown>(DISABLED_STORAGE_KEY, {});
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed as Record<string, string[]>;
+}
+
+function writeDisabledMap(next: Record<string, string[]>): void {
+  writeJson(DISABLED_STORAGE_KEY, next);
+}
+
+function readRecents(): string[] {
+  const parsed = readJson<unknown>(RECENT_STORAGE_KEY, []);
+  return Array.isArray(parsed) ? (parsed.filter((v) => typeof v === "string" && v.trim().length > 0) as string[]) : [];
+}
+
+function pushRecent(modelId: string): void {
+  const trimmed = modelId.trim();
+  if (!trimmed) return;
+  const current = readRecents();
+  const next = [trimmed, ...current.filter((x) => x !== trimmed)].slice(0, 20);
+  writeJson(RECENT_STORAGE_KEY, next);
+}
+
+function normalizeProviderGroup(providerId: string | null): ProviderGroupId {
+  if (providerId === "openai" || providerId === "anthropic" || providerId === "gemini" || providerId === "vertex") return providerId;
   return "other";
 }
 
 function groupLabel(t: ReturnType<typeof useTranslations>, id: ProviderGroupId): string {
-  switch (id) {
-    case "openai":
-      return "OpenAI";
-    case "anthropic":
-      return "Anthropic";
-    case "google":
-      return "Google";
-    default:
-      return t("models.otherProviders");
-  }
+  if (id === "other") return t("models.otherProviders");
+  return providerLabels[id];
 }
 
 export function ModelPickerDialog({
@@ -76,11 +81,13 @@ export function ModelPickerDialog({
   onOpenChange,
   value,
   onChange,
+  providerFilter,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   value: string;
   onChange: (next: string) => void;
+  providerFilter?: LlmProviderId;
 }) {
   const t = useTranslations();
   const [tab, setTab] = useState<"pick" | "manage">("pick");
@@ -92,73 +99,68 @@ export function ModelPickerDialog({
     setDisabledMap(readDisabledMap());
   }, [open]);
 
-  const modelsQuery = useQuery({
-    queryKey: ["models", "openrouter", "programming"],
-    queryFn: async () => {
-      const locale =
-        typeof window === "undefined" ? "en" : getLocaleFromPathname(window.location?.pathname ?? "/en");
-      const resp = await fetch(`/${locale}/api/models/openrouter?category=programming&limit=200`, { method: "GET" });
-      const json = (await resp.json()) as OpenRouterModelsOk;
-      return json;
-    },
-    staleTime: 30 * 60 * 1000,
-  });
-
-  const items = useMemo(() => {
-    const data = modelsQuery.data?.data ?? [];
-    const recommendedCount: Record<string, number> = {};
-    const out: PickerItem[] = [];
-
-    for (const m of data) {
-      const parts = splitOpenRouterModelId(m.id);
-      if (!parts) continue;
-      const providerId = normalizeProvider(parts.providerId);
-      const modelId = parts.model;
-
-      const count = recommendedCount[providerId] ?? 0;
-      const recommended = count < 20;
-      recommendedCount[providerId] = count + 1;
-
-      out.push({
-        providerId,
-        modelId,
-        fullId: m.id,
+  const baseItems = useMemo<PickerItem[]>(() => {
+    return curatedModels
+      .filter((m) => (providerFilter ? m.providerId === providerFilter : true))
+      .map((m) => ({
+        providerId: m.providerId,
+        modelId: m.modelId,
         name: m.name,
-        recommended,
-      });
+        recommended: Boolean(m.tags?.includes("recommended")),
+      }));
+  }, [providerFilter]);
+
+  const recentItems = useMemo<PickerItem[]>(() => {
+    const recent = readRecents();
+    const byId = new Map<string, PickerItem>();
+
+    for (const it of baseItems) {
+      byId.set(it.modelId, it);
     }
 
-    // De-dupe within provider by modelId (OpenRouter can list multiple variants).
-    const seen = new Set<string>();
-    return out.filter((it) => {
-      const key = `${it.providerId}:${it.modelId}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [modelsQuery.data]);
+    const out: PickerItem[] = [];
+    for (const modelId of recent) {
+      const known = byId.get(modelId);
+      if (known) {
+        out.push(known);
+        continue;
+      }
+      const inferred = normalizeProviderGroup(inferProviderFromModelId(modelId));
+      if (providerFilter && inferred !== providerFilter) {
+        continue;
+      }
+      out.push({
+        providerId: inferred,
+        modelId,
+        name: modelId,
+        recommended: false,
+        isCustom: true,
+      });
+    }
+    return out;
+    // baseItems already accounts for providerFilter
+  }, [baseItems, providerFilter]);
 
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
     const disabled = disabledMap;
 
-    const visible = items.filter((it) => {
+    const visible = baseItems.filter((it) => {
       const disabledForProvider = disabled[it.providerId] ?? [];
       if (disabledForProvider.includes(it.modelId)) return false;
       if (!q) return true;
       return (
         it.modelId.toLowerCase().includes(q) ||
-        it.fullId.toLowerCase().includes(q) ||
         it.name.toLowerCase().includes(q) ||
-        it.providerId.toLowerCase().includes(q)
+        String(it.providerId).toLowerCase().includes(q)
       );
     });
 
     return visible;
-  }, [items, query, disabledMap]);
+  }, [baseItems, query, disabledMap]);
 
   const grouped = useMemo(() => {
-    const groups: Record<ProviderGroupId, PickerItem[]> = { openai: [], anthropic: [], google: [], other: [] };
+    const groups: Record<ProviderGroupId, PickerItem[]> = { openai: [], anthropic: [], gemini: [], vertex: [], other: [] };
     for (const it of filteredItems) {
       groups[it.providerId].push(it);
     }
@@ -198,16 +200,13 @@ export function ModelPickerDialog({
 
         <div className="px-5 pb-5">
           <div className="flex items-center gap-2">
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("models.searchPlaceholder")}
-            />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("models.searchPlaceholder")} />
             <Button
               variant="outline"
               onClick={() => {
                 const trimmed = query.trim();
                 if (!trimmed) return;
+                pushRecent(trimmed);
                 onChange(trimmed);
                 onOpenChange(false);
               }}
@@ -216,20 +215,45 @@ export function ModelPickerDialog({
             </Button>
           </div>
 
-          {modelsQuery.data?.error ? (
-            <div className="mt-3 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn">
-              {t("models.catalogUnavailable")}
-              <span className="ml-2 text-xs text-muted">
-                {modelsQuery.data.error.message}
-              </span>
-            </div>
-          ) : null}
-
           {tab === "pick" ? (
             <div className="mt-4">
               <Command className="rounded-lg border border-borderSubtle/60 bg-panel/40 shadow-elev2 shadow-inset">
                 <Command.List className="max-h-[420px] overflow-auto p-1">
                   <Command.Empty className="px-3 py-6 text-sm text-muted">{t("models.noResults")}</Command.Empty>
+
+                  {query.trim().length === 0 && recentItems.length > 0 ? (
+                    <Command.Group heading={t("models.recent")} className="px-1 py-2">
+                      {recentItems.map((it) => {
+                        const selected = it.modelId.toLowerCase() === selectedLower;
+                        return (
+                          <Command.Item
+                            key={`recent:${it.modelId}`}
+                            value={`${it.providerId} ${it.modelId} ${it.name}`}
+                            onSelect={() => {
+                              pushRecent(it.modelId);
+                              onChange(it.modelId);
+                              onOpenChange(false);
+                            }}
+                            className={cn(
+                              "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-2 text-sm text-text outline-none",
+                              "aria-selected:bg-panel/70"
+                            )}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate font-medium">{it.name}</span>
+                                {it.isCustom ? (
+                                  <span className="rounded-full bg-panel/60 px-2 py-0.5 text-[11px] text-muted">custom</span>
+                                ) : null}
+                              </div>
+                              <div className="mt-0.5 truncate font-mono text-[11px] text-muted">{it.modelId}</div>
+                            </div>
+                            {selected ? <Check className="h-4 w-4 text-accent" /> : null}
+                          </Command.Item>
+                        );
+                      })}
+                    </Command.Group>
+                  ) : null}
 
                   {(Object.keys(grouped) as ProviderGroupId[]).map((providerId) => {
                     const list = grouped[providerId];
@@ -237,12 +261,13 @@ export function ModelPickerDialog({
                     return (
                       <Command.Group key={providerId} heading={groupLabel(t, providerId)} className="px-1 py-2">
                         {list.map((it) => {
-                          const selected = it.modelId.toLowerCase() === selectedLower || it.fullId.toLowerCase() === selectedLower;
+                          const selected = it.modelId.toLowerCase() === selectedLower;
                           return (
                             <Command.Item
                               key={`${it.providerId}:${it.modelId}`}
                               value={`${it.providerId} ${it.modelId} ${it.name}`}
                               onSelect={() => {
+                                pushRecent(it.modelId);
                                 onChange(it.modelId);
                                 onOpenChange(false);
                               }}
@@ -278,8 +303,8 @@ export function ModelPickerDialog({
 
               <div className="mt-3 rounded-lg border border-borderSubtle/60 bg-panel/40 p-2 shadow-elev2 shadow-inset">
                 <div className="max-h-[420px] overflow-auto p-1">
-                  {(Object.keys({ openai: 1, anthropic: 1, google: 1, other: 1 }) as ProviderGroupId[]).map((providerId) => {
-                    const list = items.filter((it) => it.providerId === providerId);
+                  {(Object.keys({ openai: 1, anthropic: 1, gemini: 1, vertex: 1, other: 1 }) as ProviderGroupId[]).map((providerId) => {
+                    const list = baseItems.filter((it) => it.providerId === providerId);
                     if (!list.length) return null;
                     const disabled = new Set(disabledMap[providerId] ?? []);
 
@@ -287,7 +312,7 @@ export function ModelPickerDialog({
                       query.trim().length >= 2
                         ? list.filter((it) => {
                             const q = query.trim().toLowerCase();
-                            return it.modelId.toLowerCase().includes(q) || it.name.toLowerCase().includes(q) || it.fullId.toLowerCase().includes(q);
+                            return it.modelId.toLowerCase().includes(q) || it.name.toLowerCase().includes(q);
                           })
                         : list;
 
@@ -337,15 +362,9 @@ export function ModelPickerDialog({
               </div>
             </div>
           )}
-
-          <div className="mt-3 text-xs text-muted">
-            {t("models.poweredBy")} <span className="font-mono">OpenRouter</span>
-            {modelsQuery.data?.fetchedAt ? (
-              <span className="ml-2">{t("models.fetchedAt", { ts: modelsQuery.data.fetchedAt })}</span>
-            ) : null}
-          </div>
         </div>
       </DialogContent>
     </Dialog>
   );
 }
+

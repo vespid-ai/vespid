@@ -6,7 +6,7 @@
   "scripts": {
     "build": "pnpm -r --if-present build",
     "dev": "pnpm exec dotenv -e .env -- pnpm --parallel --filter @vespid/api --filter @vespid/web --filter @vespid/worker --filter @vespid/gateway dev",
-    "dev:stop": "kill-port 3000 3001 3002",
+    "dev:stop": "pnpm exec dotenv -e .env -- sh -lc 'kill-port 3000 3001 3002 ${WEB_PORT:-3000}'",
     "dev:restart": "pnpm run dev:stop && pnpm run dev",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test",

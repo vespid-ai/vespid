@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
@@ -15,8 +15,10 @@ import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Separator } from "../../../../components/ui/separator";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useCreateSecret, useDeleteSecret, useRotateSecret, useSecrets } from "../../../../lib/hooks/use-secrets";
 import { apiFetchJson } from "../../../../lib/api";
+import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 
 function SecretsPageContent() {
   const t = useTranslations();
@@ -27,6 +29,8 @@ function SecretsPageContent() {
   const createSecret = useCreateSecret(orgId);
   const rotateSecret = useRotateSecret(orgId);
   const deleteSecret = useDeleteSecret(orgId);
+  const settingsQuery = useOrgSettings(orgId);
+  const updateSettings = useUpdateOrgSettings(orgId);
 
   const secrets = secretsQuery.data?.secrets ?? [];
 
@@ -48,6 +52,60 @@ function SecretsPageContent() {
   const [vertexLocation, setVertexLocation] = useState("us-central1");
 
   const canOperate = Boolean(orgId);
+
+  const [defaultSessionLlm, setDefaultSessionLlm] = useState<LlmConfigValue>({
+    providerId: "openai",
+    modelId: "gpt-4.1-mini",
+    secretId: null,
+  });
+  const [defaultWorkflowAgentRunLlm, setDefaultWorkflowAgentRunLlm] = useState<LlmConfigValue>({
+    providerId: "openai",
+    modelId: "gpt-4.1-mini",
+    secretId: null,
+  });
+  const [defaultToolsetBuilderLlm, setDefaultToolsetBuilderLlm] = useState<LlmConfigValue>({
+    providerId: "anthropic",
+    modelId: "claude-3-5-sonnet-latest",
+    secretId: null,
+  });
+
+  const llmDefaultsInitRef = useRef(false);
+  useEffect(() => {
+    if (llmDefaultsInitRef.current) return;
+    const s = settingsQuery.data?.settings as any;
+    if (!s) return;
+    const d = s.llm?.defaults ?? null;
+    if (!d || typeof d !== "object") return;
+
+    const session = d.session ?? null;
+    if (session && typeof session === "object") {
+      if (typeof session.provider === "string") setDefaultSessionLlm((p) => ({ ...p, providerId: session.provider }));
+      if (typeof session.model === "string") setDefaultSessionLlm((p) => ({ ...p, modelId: session.model }));
+    }
+
+    const wf = d.workflowAgentRun ?? null;
+    if (wf && typeof wf === "object") {
+      setDefaultWorkflowAgentRunLlm((p) => ({
+        ...p,
+        ...(typeof wf.provider === "string" ? { providerId: wf.provider } : {}),
+        ...(typeof wf.model === "string" ? { modelId: wf.model } : {}),
+        ...(typeof wf.secretId === "string" ? { secretId: wf.secretId } : {}),
+      }));
+    }
+
+    const tb = d.toolsetBuilder ?? null;
+    if (tb && typeof tb === "object") {
+      setDefaultToolsetBuilderLlm((p) => ({
+        ...p,
+        ...(typeof tb.provider === "string" ? { providerId: tb.provider } : {}),
+        ...(typeof tb.model === "string" ? { modelId: tb.model } : {}),
+        ...(typeof tb.secretId === "string" ? { secretId: tb.secretId } : {}),
+      }));
+    }
+
+    llmDefaultsInitRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsQuery.data?.settings]);
 
   useEffect(() => {
     const vertex = searchParams.get("vertex");
@@ -109,6 +167,149 @@ function SecretsPageContent() {
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("secrets.title")}</div>
         <div className="mt-1 text-sm text-muted">{t("secrets.warning")}</div>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("secrets.modelDefaults.title")}</CardTitle>
+          <CardDescription>{t("secrets.modelDefaults.subtitle")}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-borderSubtle bg-panel/60 p-4 shadow-elev1">
+              <div className="text-sm font-medium text-text">{t("secrets.modelDefaults.session")}</div>
+              <div className="mt-3">
+                <LlmConfigField orgId={orgId} mode="session" value={defaultSessionLlm} onChange={setDefaultSessionLlm} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={!canOperate || updateSettings.isPending}
+                  onClick={async () => {
+                    if (!orgId) return;
+                    await updateSettings.mutateAsync({
+                      llm: {
+                        defaults: {
+                          session: { provider: defaultSessionLlm.providerId as any, model: defaultSessionLlm.modelId.trim() },
+                        },
+                      },
+                    });
+                    toast.success(t("common.saved"));
+                  }}
+                >
+                  {t("common.save")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canOperate || updateSettings.isPending}
+                  onClick={async () => {
+                    if (!orgId) return;
+                    await updateSettings.mutateAsync({ llm: { defaults: { session: {} } } });
+                    toast.success(t("common.saved"));
+                  }}
+                >
+                  {t("common.clearFilters")}
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-borderSubtle bg-panel/60 p-4 shadow-elev1">
+              <div className="text-sm font-medium text-text">{t("secrets.modelDefaults.workflowAgentRun")}</div>
+              <div className="mt-3">
+                <LlmConfigField orgId={orgId} mode="workflowAgentRun" value={defaultWorkflowAgentRunLlm} onChange={setDefaultWorkflowAgentRunLlm} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={!canOperate || updateSettings.isPending}
+                  onClick={async () => {
+                    if (!orgId) return;
+                    if (defaultWorkflowAgentRunLlm.providerId === "vertex" && !defaultWorkflowAgentRunLlm.secretId) {
+                      toast.error(t("workflows.errors.vertexSecretRequired"));
+                      return;
+                    }
+                    await updateSettings.mutateAsync({
+                      llm: {
+                        defaults: {
+                          workflowAgentRun: {
+                            provider: defaultWorkflowAgentRunLlm.providerId as any,
+                            model: defaultWorkflowAgentRunLlm.modelId.trim(),
+                            secretId: defaultWorkflowAgentRunLlm.secretId ?? null,
+                          },
+                        },
+                      },
+                    });
+                    toast.success(t("common.saved"));
+                  }}
+                >
+                  {t("common.save")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canOperate || updateSettings.isPending}
+                  onClick={async () => {
+                    if (!orgId) return;
+                    await updateSettings.mutateAsync({ llm: { defaults: { workflowAgentRun: {} } } });
+                    toast.success(t("common.saved"));
+                  }}
+                >
+                  {t("common.clearFilters")}
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-borderSubtle bg-panel/60 p-4 shadow-elev1">
+              <div className="text-sm font-medium text-text">{t("secrets.modelDefaults.toolsetBuilder")}</div>
+              <div className="mt-3">
+                <LlmConfigField orgId={orgId} mode="toolsetBuilder" value={defaultToolsetBuilderLlm} onChange={setDefaultToolsetBuilderLlm} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="accent"
+                  disabled={!canOperate || updateSettings.isPending}
+                  onClick={async () => {
+                    if (!orgId) return;
+                    if (!defaultToolsetBuilderLlm.secretId) {
+                      toast.error(t("toolsets.ai.noSecretsHint"));
+                      return;
+                    }
+                    await updateSettings.mutateAsync({
+                      llm: {
+                        defaults: {
+                          toolsetBuilder: {
+                            provider: defaultToolsetBuilderLlm.providerId as any,
+                            model: defaultToolsetBuilderLlm.modelId.trim(),
+                            secretId: defaultToolsetBuilderLlm.secretId ?? null,
+                          },
+                        },
+                      },
+                    });
+                    toast.success(t("common.saved"));
+                  }}
+                >
+                  {t("common.save")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!canOperate || updateSettings.isPending}
+                  onClick={async () => {
+                    if (!orgId) return;
+                    await updateSettings.mutateAsync({ llm: { defaults: { toolsetBuilder: {} } } });
+                    toast.success(t("common.saved"));
+                  }}
+                >
+                  {t("common.clearFilters")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

@@ -1613,7 +1613,7 @@ describe("api hardening foundation", () => {
     }
   });
 
-  it("manages org settings and enforces admin-only access", async () => {
+  it("manages org settings and allows members to read but restricts updates", async () => {
     const ownerSignup = await server.inject({
       method: "POST",
       url: "/v1/auth/signup",
@@ -1675,7 +1675,8 @@ describe("api hardening foundation", () => {
       url: `/v1/orgs/${orgId}/settings`,
       headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
     });
-    expect(memberGetDenied.statusCode).toBe(403);
+    expect(memberGetDenied.statusCode).toBe(200);
+    expect((memberGetDenied.json() as any).settings.tools.shellRunEnabled).toBe(true);
 
     const memberPutDenied = await server.inject({
       method: "PUT",

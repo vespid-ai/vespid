@@ -86,7 +86,7 @@ export function useCreateSession(orgId: string | null) {
       title?: string;
       engineId?: "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
       toolsetId?: string;
-      llm: { provider: "openai" | "anthropic"; model: string };
+      llm: { provider: "openai" | "anthropic" | "gemini"; model: string };
       prompt: { system?: string; instructions: string };
       tools: { allow: string[] };
       selector?: { tag: string } | { group: string };

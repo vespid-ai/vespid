@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Background,
@@ -20,6 +20,7 @@ import {
   upgradeV2ToV3,
   validateV3GraphConstraints,
   workflowDslV3Schema,
+  workflowNodeSchema,
   type WorkflowDsl as WorkflowDslV2,
   type WorkflowDslV3,
 } from "@vespid/workflow";
@@ -31,7 +32,12 @@ import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Textarea } from "../ui/textarea";
 import { useActiveOrgId } from "../../lib/hooks/use-active-org-id";
+import { useOrgSettings } from "../../lib/hooks/use-org-settings";
+import { useSecrets } from "../../lib/hooks/use-secrets";
 import { useUpdateWorkflowDraft, useWorkflow } from "../../lib/hooks/use-workflows";
+import { LlmConfigField, type LlmConfigValue } from "./llm/llm-config-field";
+import { ModelPickerField } from "./model-picker/model-picker-field";
+import { SecretSelectField } from "./secrets/secret-select-field";
 
 type EdgeKind = "always" | "cond_true" | "cond_false";
 
@@ -40,6 +46,8 @@ type WorkflowNodeAny = {
   type: string;
   config?: unknown;
 };
+
+type InspectorTab = "form" | "json";
 
 type EditorState = {
   nodes?: Array<{ id: string; position: { x: number; y: number } }>;
@@ -148,18 +156,260 @@ function safeJsonParse(text: string): { ok: true; value: unknown } | { ok: false
   }
 }
 
+function normalizeStringArray(text: string): string[] {
+  const items = text
+    .split("\n")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+  return Array.from(new Set(items));
+}
+
+function stringifyJson(value: unknown): string {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function readOrgDefaultAgentLlm(settings: any): LlmConfigValue {
+  const d = settings?.llm?.defaults?.workflowAgentRun;
+  const providerId = typeof d?.provider === "string" ? d.provider : "openai";
+  const modelId = typeof d?.model === "string" ? d.model : "gpt-4.1-mini";
+  const secretId = typeof d?.secretId === "string" ? d.secretId : null;
+  return { providerId: providerId as any, modelId, secretId };
+}
+
+function defaultNodeByType(params: {
+  type: string;
+  orgDefaultAgentLlm: LlmConfigValue;
+  secrets: Array<{ id: string; connectorId: string; name: string }>;
+}): WorkflowNodeAny {
+  const { type, orgDefaultAgentLlm, secrets } = params;
+  if (type === "agent.run") {
+    return {
+      id: "",
+      type,
+      config: {
+        llm: {
+          provider: orgDefaultAgentLlm.providerId,
+          model: orgDefaultAgentLlm.modelId,
+          auth: {
+            ...(orgDefaultAgentLlm.secretId ? { secretId: orgDefaultAgentLlm.secretId } : {}),
+            fallbackToEnv: true,
+          },
+        },
+        prompt: {
+          instructions: "Summarize the input and decide the next step.",
+        },
+        tools: {
+          allow: [],
+          execution: "cloud",
+        },
+        output: {
+          mode: "text",
+        },
+        limits: {
+          maxTurns: 8,
+          maxToolCalls: 20,
+          timeoutMs: 60_000,
+          maxOutputChars: 50_000,
+          maxRuntimeChars: 200_000,
+        },
+        execution: {
+          mode: "cloud",
+        },
+      },
+    };
+  }
+  if (type === "agent.execute") {
+    return {
+      id: "",
+      type,
+      config: {
+        task: {
+          type: "shell",
+          script: "echo hello",
+          shell: "sh",
+        },
+        execution: {
+          mode: "cloud",
+        },
+        sandbox: {
+          backend: "docker",
+          network: "none",
+          timeoutMs: 60_000,
+        },
+      },
+    };
+  }
+  if (type === "connector.action") {
+    const defaultGithub = secrets.find((s) => s.connectorId === "github" && s.name === "default") ?? secrets.find((s) => s.connectorId === "github") ?? null;
+    return {
+      id: "",
+      type,
+      config: {
+        connectorId: "github",
+        actionId: "issue.create",
+        input: { repo: "octo/test", title: "Vespid Issue", body: "Created by Vespid connector.action" },
+        auth: {
+          ...(defaultGithub ? { secretId: defaultGithub.id } : { secretId: "" }),
+        },
+        execution: {
+          mode: "cloud",
+        },
+      },
+    };
+  }
+  if (type === "connector.github.issue.create") {
+    const defaultGithub = secrets.find((s) => s.connectorId === "github" && s.name === "default") ?? secrets.find((s) => s.connectorId === "github") ?? null;
+    return {
+      id: "",
+      type,
+      config: {
+        repo: "octo/test",
+        title: "Vespid Issue",
+        body: "Created by Vespid legacy node",
+        auth: { ...(defaultGithub ? { secretId: defaultGithub.id } : { secretId: "" }) },
+      },
+    };
+  }
+  if (type === "http.request") {
+    return {
+      id: "",
+      type,
+      config: {
+        method: "GET",
+        url: "https://example.com",
+        headers: { accept: "application/json" },
+      },
+    };
+  }
+  if (type === "condition") {
+    return {
+      id: "",
+      type,
+      config: {
+        path: "$.ok",
+        op: "eq",
+        value: true,
+      },
+    };
+  }
+  if (type === "parallel.join") {
+    return {
+      id: "",
+      type,
+      config: {
+        mode: "all",
+        failFast: true,
+      },
+    };
+  }
+  return { id: "", type };
+}
+
+function upgradeLegacyGithubIssueCreate(node: WorkflowNodeAny): WorkflowNodeAny {
+  if (node.type !== "connector.github.issue.create") {
+    return node;
+  }
+  const cfg = asObject(node.config) ?? {};
+  const auth = asObject(cfg["auth"]) ?? {};
+  const secretId = typeof auth["secretId"] === "string" ? auth["secretId"] : "";
+  return {
+    ...node,
+    type: "connector.action",
+    config: {
+      connectorId: "github",
+      actionId: "issue.create",
+      input: {
+        repo: asString(cfg["repo"], "octo/test"),
+        title: asString(cfg["title"], "Vespid Issue"),
+        ...(typeof cfg["body"] === "string" ? { body: cfg["body"] } : {}),
+      },
+      auth: { secretId },
+    },
+  };
+}
+
+function JsonValueField(props: {
+  label: string;
+  value: unknown;
+  onApply: (next: unknown) => void;
+  rows?: number;
+  placeholder?: string;
+}) {
+  const [text, setText] = useState<string>(stringifyJson(props.value));
+  const [err, setErr] = useState<string>("");
+
+  useEffect(() => {
+    setText(stringifyJson(props.value));
+    setErr("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.value]);
+
+  return (
+    <div className="grid gap-1.5">
+      <Label>{props.label}</Label>
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          setErr("");
+        }}
+        rows={props.rows ?? 6}
+        placeholder={props.placeholder}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            const parsed = safeJsonParse(text);
+            if (!parsed.ok) {
+              setErr("Invalid JSON");
+              return;
+            }
+            props.onApply(parsed.value);
+          }}
+        >
+          Apply
+        </Button>
+        {err ? <div className="text-xs text-red-700">{err}</div> : null}
+      </div>
+    </div>
+  );
+}
+
 export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: WorkflowGraphEditorProps) {
   const orgId = useActiveOrgId() ?? null;
   const workflowQuery = useWorkflow(orgId, workflowId);
   const updateDraft = useUpdateWorkflowDraft(orgId, workflowId);
+  const orgSettingsQuery = useOrgSettings(orgId);
+  const secretsQuery = useSecrets(orgId);
 
   const [instance, setInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [configJson, setConfigJson] = useState<string>("{}");
+  const [configJsonDirty, setConfigJsonDirty] = useState<boolean>(false);
   const [edgeKind, setEdgeKind] = useState<EdgeKind>("always");
   const [nameDraft, setNameDraft] = useState<string>("");
   const [issues, setIssues] = useState<GraphValidationIssue[]>([]);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("form");
+
+  const bulkInitRef = useRef(false);
+  const [bulkAgentLlm, setBulkAgentLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-4.1-mini", secretId: null });
+  const [bulkTeammateModel, setBulkTeammateModel] = useState<string>("gpt-4.1-mini");
 
   const issueNodeIds = useMemo(
     () => new Set(issues.map((i) => i.nodeId).filter((v): v is string => typeof v === "string" && v.length > 0)),
@@ -193,6 +443,15 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  const orgDefaultAgentLlm = useMemo(() => readOrgDefaultAgentLlm(orgSettingsQuery.data?.settings), [orgSettingsQuery.data?.settings]);
+
+  useEffect(() => {
+    if (bulkInitRef.current) return;
+    setBulkAgentLlm(orgDefaultAgentLlm);
+    setBulkTeammateModel(orgDefaultAgentLlm.modelId);
+    bulkInitRef.current = true;
+  }, [orgDefaultAgentLlm]);
 
   const decoratedNodes = useMemo<Node[]>(() => {
     return nodes.map((n) => {
@@ -250,7 +509,23 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     const node = nodes.find((n) => n.id === selectedNodeId) as any;
     const cfg = node?.data?.node?.config ?? null;
     setConfigJson(JSON.stringify(cfg ?? {}, null, 2));
+    setConfigJsonDirty(false);
   }, [selectedNodeId, nodes]);
+
+  useEffect(() => {
+    if (inspectorTab !== "form") {
+      return;
+    }
+    if (!selectedNodeId) {
+      return;
+    }
+    if (configJsonDirty) {
+      return;
+    }
+    const node = nodes.find((n) => n.id === selectedNodeId) as any;
+    const cfg = node?.data?.node?.config ?? null;
+    setConfigJson(JSON.stringify(cfg ?? {}, null, 2));
+  }, [inspectorTab, selectedNodeId, nodes, configJsonDirty]);
 
   useEffect(() => {
     if (!selectedEdgeId) {
@@ -282,9 +557,24 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     );
   };
 
+  function updateNode(nodeId: string, updater: (current: WorkflowNodeAny) => WorkflowNodeAny) {
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (n.id !== nodeId) {
+          return n;
+        }
+        const current = (n as any).data?.node as WorkflowNodeAny;
+        const next = updater(current);
+        return { ...n, data: { ...(n as any).data, label: next.type, node: next } };
+      })
+    );
+  }
+
   function addNode(type: WorkflowNodeAny["type"]) {
     const id = `${type.replaceAll(".", "_")}-${Math.floor(Math.random() * 100000)}`;
-    const node: WorkflowNodeAny = { id, type };
+    const secrets = secretsQuery.data?.secrets ?? [];
+    const nodeBase = defaultNodeByType({ type, orgDefaultAgentLlm, secrets });
+    const node: WorkflowNodeAny = { ...nodeBase, id, type };
     const position = defaultPosition(nodes.length);
     setNodes((ns) => [
       ...ns,
@@ -296,6 +586,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     ]);
     setSelectedNodeId(id);
     setSelectedEdgeId("");
+    setInspectorTab("form");
   }
 
   async function saveSelectedNodeConfig() {
@@ -307,17 +598,20 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
       toast.error("Invalid JSON config");
       return;
     }
-    setNodes((ns) =>
-      ns.map((n) => {
-        if (n.id !== selectedNodeId) {
-          return n;
-        }
-        const current = (n as any).data?.node as WorkflowNodeAny;
-        const next: WorkflowNodeAny = { ...current, config: parsed.value };
-        return { ...n, data: { ...(n as any).data, node: next } };
-      })
-    );
-    toast.success("Node config updated");
+    const selected = nodes.find((n) => n.id === selectedNodeId) as any;
+    const current = selected?.data?.node as WorkflowNodeAny | undefined;
+    if (!current) {
+      return;
+    }
+    const candidate = { id: current.id, type: current.type, config: parsed.value };
+    const validated = workflowNodeSchema.safeParse(candidate);
+    if (!validated.success) {
+      toast.error(`Invalid config: ${validated.error.issues[0]?.message ?? "Validation error"}`);
+      return;
+    }
+    updateNode(selectedNodeId, (cur) => ({ ...cur, config: parsed.value }));
+    setConfigJsonDirty(false);
+    toast.success("Node updated");
   }
 
   async function saveEdgeKind() {
@@ -352,6 +646,1358 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
       setSelectedEdgeId(issue.edgeId);
       setSelectedNodeId("");
     }
+  }
+
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId) return null;
+    const hit = nodes.find((n) => n.id === selectedNodeId) as any;
+    return (hit?.data?.node as WorkflowNodeAny) ?? null;
+  }, [nodes, selectedNodeId]);
+
+  function renderExecutionSection(params: {
+    nodeId: string;
+    config: Record<string, unknown>;
+    onChange: (next: Record<string, unknown>) => void;
+    label?: string;
+  }) {
+    const exec = asObject(params.config["execution"]) ?? {};
+    const mode = (exec["mode"] === "node" ? "node" : "cloud") as "cloud" | "node";
+    const selector = asObject(exec["selector"]) ?? null;
+    const selectorKind =
+      selector && typeof selector["tag"] === "string"
+        ? "tag"
+        : selector && typeof selector["agentId"] === "string"
+          ? "agentId"
+          : selector && typeof selector["group"] === "string"
+            ? "group"
+            : "none";
+    const selectorValue =
+      selectorKind === "tag"
+        ? String(selector?.tag ?? "")
+        : selectorKind === "agentId"
+          ? String(selector?.agentId ?? "")
+          : selectorKind === "group"
+            ? String(selector?.group ?? "")
+            : "";
+
+    return (
+      <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+        <div className="text-sm font-medium text-text">{params.label ?? "Execution"}</div>
+        <div className="grid gap-1.5">
+          <Label>Mode</Label>
+          <Select
+            value={mode}
+            onValueChange={(v) => {
+              const nextMode = v === "node" ? "node" : "cloud";
+              params.onChange({
+                ...params.config,
+                execution: { ...exec, mode: nextMode, ...(nextMode === "cloud" ? { selector: undefined } : {}) },
+              });
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cloud">cloud</SelectItem>
+              <SelectItem value="node">node</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {mode === "node" ? (
+          <div className="grid gap-2">
+            <div className="grid gap-1.5">
+              <Label>Selector</Label>
+              <Select
+                value={selectorKind}
+                onValueChange={(v) => {
+                  if (v === "none") {
+                    params.onChange({ ...params.config, execution: { ...exec, mode, selector: undefined } });
+                    return;
+                  }
+                  const nextSel =
+                    v === "tag" ? { tag: "" } : v === "agentId" ? { agentId: "" } : v === "group" ? { group: "" } : undefined;
+                  params.onChange({ ...params.config, execution: { ...exec, mode, selector: nextSel } });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">none</SelectItem>
+                  <SelectItem value="tag">tag</SelectItem>
+                  <SelectItem value="agentId">agentId</SelectItem>
+                  <SelectItem value="group">group</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {selectorKind !== "none" ? (
+              <div className="grid gap-1.5">
+                <Label>Value</Label>
+                <Input
+                  value={selectorValue}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const nextSel =
+                      selectorKind === "tag"
+                        ? { tag: raw }
+                        : selectorKind === "agentId"
+                          ? { agentId: raw }
+                          : selectorKind === "group"
+                            ? { group: raw }
+                            : undefined;
+                    params.onChange({ ...params.config, execution: { ...exec, mode, selector: nextSel } });
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderAgentRunForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const prompt = asObject(cfg["prompt"]) ?? {};
+    const llm = asObject(cfg["llm"]) ?? {};
+    const llmAuth = asObject(llm["auth"]) ?? {};
+    const tools = asObject(cfg["tools"]) ?? {};
+    const limits = asObject(cfg["limits"]) ?? {};
+    const output = asObject(cfg["output"]) ?? {};
+    const engine = asObject(cfg["engine"]) ?? {};
+    const team = asObject(cfg["team"]);
+
+    const llmValue: LlmConfigValue = {
+      providerId: (typeof llm["provider"] === "string" ? llm["provider"] : "openai") as any,
+      modelId: asString(llm["model"], "gpt-4.1-mini"),
+      secretId: typeof llmAuth["secretId"] === "string" ? (llmAuth["secretId"] as string) : null,
+    };
+
+    const toolsAllowText = (Array.isArray(tools["allow"]) ? tools["allow"] : []).filter((v) => typeof v === "string").join("\n");
+    const toolsExecution = tools["execution"] === "node" ? "node" : "cloud";
+
+    const outputMode = output["mode"] === "json" ? "json" : "text";
+
+    const maxTurns = asNumber(limits["maxTurns"], 8);
+    const maxToolCalls = asNumber(limits["maxToolCalls"], 20);
+    const timeoutMs = asNumber(limits["timeoutMs"], 60_000);
+
+    const engineId =
+      engine["id"] === "claude.agent-sdk.v1" || engine["id"] === "codex.sdk.v1" || engine["id"] === "vespid.loop.v1"
+        ? (engine["id"] as string)
+        : "vespid.loop.v1";
+
+    const toolsetId = typeof cfg["toolsetId"] === "string" ? (cfg["toolsetId"] as string) : "";
+
+    const teamEnabled = Boolean(team);
+    const teamLeadMode =
+      team && (team["leadMode"] === "delegate_only" || team["leadMode"] === "normal") ? (team["leadMode"] as string) : "normal";
+    const teamMaxParallel = team ? asNumber(team["maxParallel"], 3) : 3;
+    const teammates = team && Array.isArray(team["teammates"]) ? (team["teammates"] as any[]) : [];
+
+    return (
+      <div className="grid gap-3">
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">LLM</div>
+          <LlmConfigField
+            orgId={orgId}
+            mode="workflowAgentRun"
+            value={llmValue}
+            onChange={(next) => {
+              updateNode(node.id, (cur) => {
+                const curCfg = asObject(cur.config) ?? {};
+                const curLlm = asObject(curCfg["llm"]) ?? {};
+                const provider = next.providerId;
+                const model = next.modelId;
+                const secretId = next.secretId;
+                return {
+                  ...cur,
+                  config: {
+                    ...curCfg,
+                    llm: {
+                      ...curLlm,
+                      provider,
+                      model,
+                      auth: { ...(secretId ? { secretId } : {}), fallbackToEnv: true },
+                    },
+                  },
+                };
+              });
+            }}
+          />
+          {llmValue.providerId === "vertex" && !llmValue.secretId ? (
+            <div className="text-xs text-warn">Vertex requires a vertex OAuth secret.</div>
+          ) : null}
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Prompt</div>
+          <div className="grid gap-1.5">
+            <Label>Instructions</Label>
+            <Textarea
+              value={asString(prompt["instructions"], "")}
+              onChange={(e) => {
+                const val = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curPrompt = asObject(curCfg["prompt"]) ?? {};
+                  return { ...cur, config: { ...curCfg, prompt: { ...curPrompt, instructions: val } } };
+                });
+              }}
+              rows={5}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>System (optional)</Label>
+            <Textarea
+              value={typeof prompt["system"] === "string" ? (prompt["system"] as string) : ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curPrompt = asObject(curCfg["prompt"]) ?? {};
+                  return { ...cur, config: { ...curCfg, prompt: { ...curPrompt, system: val.trim().length ? val : undefined } } };
+                });
+              }}
+              rows={3}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Input template (optional)</Label>
+            <Textarea
+              value={typeof prompt["inputTemplate"] === "string" ? (prompt["inputTemplate"] as string) : ""}
+              onChange={(e) => {
+                const val = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curPrompt = asObject(curCfg["prompt"]) ?? {};
+                  return {
+                    ...cur,
+                    config: { ...curCfg, prompt: { ...curPrompt, inputTemplate: val.trim().length ? val : undefined } },
+                  };
+                });
+              }}
+              rows={3}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Tools</div>
+          <div className="grid gap-1.5">
+            <Label>Allowlist (one per line)</Label>
+            <Textarea
+              value={toolsAllowText}
+              onChange={(e) => {
+                const nextAllow = normalizeStringArray(e.target.value);
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curTools = asObject(curCfg["tools"]) ?? {};
+                  return { ...cur, config: { ...curCfg, tools: { ...curTools, allow: nextAllow } } };
+                });
+              }}
+              rows={4}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Execution</Label>
+            <Select
+              value={toolsExecution}
+              onValueChange={(v) => {
+                const nextExec = v === "node" ? "node" : "cloud";
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curTools = asObject(curCfg["tools"]) ?? {};
+                  return { ...cur, config: { ...curCfg, tools: { ...curTools, execution: nextExec } } };
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cloud">cloud</SelectItem>
+                <SelectItem value="node">node</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <JsonValueField
+            label="Auth defaults (advanced)"
+            value={(tools as any)["authDefaults"] ?? {}}
+            onApply={(next) => {
+              updateNode(node.id, (cur) => {
+                const curCfg = asObject(cur.config) ?? {};
+                const curTools = asObject(curCfg["tools"]) ?? {};
+                return { ...cur, config: { ...curCfg, tools: { ...curTools, authDefaults: next } } };
+              });
+            }}
+            rows={6}
+            placeholder='Example: { "connectors": { "github": { "secretId": "uuid" } } }'
+          />
+        </div>
+
+        {renderExecutionSection({
+          nodeId: node.id,
+          config: cfg,
+          onChange: (next) => updateNode(node.id, (cur) => ({ ...cur, config: next })),
+        })}
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Output</div>
+          <div className="grid gap-1.5">
+            <Label>Mode</Label>
+            <Select
+              value={outputMode}
+              onValueChange={(v) => {
+                const nextMode = v === "json" ? "json" : "text";
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curOut = asObject(curCfg["output"]) ?? {};
+                  return { ...cur, config: { ...curCfg, output: { ...curOut, mode: nextMode } } };
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="text">text</SelectItem>
+                <SelectItem value="json">json</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {outputMode === "json" ? (
+            <JsonValueField
+              label="JSON schema (optional)"
+              value={(output as any)["jsonSchema"] ?? {}}
+              onApply={(next) => {
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curOut = asObject(curCfg["output"]) ?? {};
+                  return { ...cur, config: { ...curCfg, output: { ...curOut, jsonSchema: next } } };
+                });
+              }}
+              rows={6}
+            />
+          ) : null}
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Team</div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={teamEnabled}
+              onChange={(e) => {
+                const enabled = e.target.checked;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  if (!enabled) {
+                    const { team: _team, ...rest } = curCfg as any;
+                    return { ...cur, config: rest };
+                  }
+                  const teammate1 = {
+                    id: "teammate-1",
+                    prompt: { instructions: "Help the lead agent by completing delegated tasks." },
+                    tools: { allow: [], execution: "cloud" },
+                    limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
+                    output: { mode: "text" },
+                  };
+                  return {
+                    ...cur,
+                    config: {
+                      ...curCfg,
+                      team: {
+                        mode: "supervisor",
+                        maxParallel: 3,
+                        leadMode: "normal",
+                        teammates: [teammate1],
+                      },
+                    },
+                  };
+                });
+              }}
+            />
+            Enable team
+          </label>
+
+          {teamEnabled ? (
+            <div className="grid gap-3">
+              <div className="grid gap-1.5">
+                <Label>Lead mode</Label>
+                <Select
+                  value={teamLeadMode}
+                  onValueChange={(v) => {
+                    const nextMode = v === "delegate_only" ? "delegate_only" : "normal";
+                    updateNode(node.id, (cur) => {
+                      const curCfg = asObject(cur.config) ?? {};
+                      const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                      return { ...cur, config: { ...curCfg, team: { ...curTeam, leadMode: nextMode } } };
+                    });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">normal</SelectItem>
+                    <SelectItem value="delegate_only">delegate_only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label>Max parallel</Label>
+                <Input
+                  type="number"
+                  value={String(teamMaxParallel)}
+                  onChange={(e) => {
+                    const next = Math.max(1, Math.min(16, Number(e.target.value) || 1));
+                    updateNode(node.id, (cur) => {
+                      const curCfg = asObject(cur.config) ?? {};
+                      const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                      return { ...cur, config: { ...curCfg, team: { ...curTeam, maxParallel: next } } };
+                    });
+                  }}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <div className="text-sm font-medium text-text">Teammates</div>
+                {teammates.map((tm, idx) => {
+                  const tmObj = asObject(tm) ?? {};
+                  const tmPrompt = asObject(tmObj["prompt"]) ?? {};
+                  const tmTools = asObject(tmObj["tools"]) ?? {};
+                  const tmOutput = asObject(tmObj["output"]) ?? {};
+                  const tmLlm = asObject(tmObj["llm"]);
+                  const tmId = asString(tmObj["id"], `teammate-${idx + 1}`);
+                  const canRemove = teammates.length > 1;
+                  const tmAllowText = (Array.isArray(tmTools["allow"]) ? tmTools["allow"] : []).filter((v) => typeof v === "string").join("\n");
+                  const tmOutMode = tmOutput["mode"] === "json" ? "json" : "text";
+                  const tmModel = tmLlm ? asString(tmLlm["model"], "") : "";
+
+                  return (
+                    <div key={`${tmId}-${idx}`} className="grid gap-2 rounded-lg border border-border bg-panel/60 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-medium text-text">{idx + 1}. {tmId}</div>
+                        <div className="ml-auto flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={idx === 0}
+                            onClick={() => {
+                              updateNode(node.id, (cur) => {
+                                const curCfg = asObject(cur.config) ?? {};
+                                const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                                const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                                const a = list[idx - 1];
+                                const b = list[idx];
+                                if (!a || !b) return cur;
+                                list[idx - 1] = b;
+                                list[idx] = a;
+                                return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                              });
+                            }}
+                          >
+                            Up
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={idx === teammates.length - 1}
+                            onClick={() => {
+                              updateNode(node.id, (cur) => {
+                                const curCfg = asObject(cur.config) ?? {};
+                                const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                                const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                                const a = list[idx];
+                                const b = list[idx + 1];
+                                if (!a || !b) return cur;
+                                list[idx] = b;
+                                list[idx + 1] = a;
+                                return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                              });
+                            }}
+                          >
+                            Down
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="danger"
+                            disabled={!canRemove}
+                            onClick={() => {
+                              updateNode(node.id, (cur) => {
+                                const curCfg = asObject(cur.config) ?? {};
+                                const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                                const list = Array.isArray((curTeam as any)["teammates"])
+                                  ? ([(curTeam as any)["teammates"]].flat() as any[])
+                                  : [];
+                                const next = list.filter((_, i) => i !== idx);
+                                return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: next } } };
+                              });
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label>Id</Label>
+                        <Input
+                          value={tmId}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              list[idx] = { ...hit, id: v };
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label>Display name (optional)</Label>
+                        <Input
+                          value={typeof tmObj["displayName"] === "string" ? (tmObj["displayName"] as string) : ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              list[idx] = { ...hit, displayName: v.trim().length ? v : undefined };
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label>Instructions</Label>
+                        <Textarea
+                          value={asString(tmPrompt["instructions"], "")}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              const hitPrompt = asObject((hit as any)["prompt"]) ?? {};
+                              list[idx] = { ...hit, prompt: { ...hitPrompt, instructions: v } };
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                          rows={3}
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label>Model override (optional)</Label>
+                        <ModelPickerField
+                          value={tmModel}
+                          onChange={(next) => {
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              if (!next.trim()) {
+                                const { llm: _llm, ...rest } = hit as any;
+                                list[idx] = rest;
+                              } else {
+                                list[idx] = { ...hit, llm: { model: next.trim() } };
+                              }
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                          placeholder="(inherit)"
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label>Tools allowlist (one per line)</Label>
+                        <Textarea
+                          value={tmAllowText}
+                          onChange={(e) => {
+                            const nextAllow = normalizeStringArray(e.target.value);
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              const hitTools = asObject((hit as any)["tools"]) ?? {};
+                              list[idx] = { ...hit, tools: { ...hitTools, allow: nextAllow, execution: "cloud" } };
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                          rows={3}
+                        />
+                      </div>
+
+                      <div className="grid gap-1.5">
+                        <Label>Output mode</Label>
+                        <Select
+                          value={tmOutMode}
+                          onValueChange={(v) => {
+                            const nextMode = v === "json" ? "json" : "text";
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              const hitOut = asObject((hit as any)["output"]) ?? {};
+                              list[idx] = { ...hit, output: { ...hitOut, mode: nextMode } };
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="text">text</SelectItem>
+                            <SelectItem value="json">json</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {tmOutMode === "json" ? (
+                        <JsonValueField
+                          label="JSON schema (optional)"
+                          value={(tmOutput as any)["jsonSchema"] ?? {}}
+                          onApply={(next) => {
+                            updateNode(node.id, (cur) => {
+                              const curCfg = asObject(cur.config) ?? {};
+                              const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                              const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                              const hit = asObject(list[idx]) ?? {};
+                              const hitOut = asObject((hit as any)["output"]) ?? {};
+                              list[idx] = { ...hit, output: { ...hitOut, jsonSchema: next } };
+                              return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
+                            });
+                          }}
+                          rows={6}
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })}
+
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={teammates.length >= 32}
+                  onClick={() => {
+                    updateNode(node.id, (cur) => {
+                      const curCfg = asObject(cur.config) ?? {};
+                      const curTeam = asObject((curCfg as any)["team"]) ?? {};
+                      const list = Array.isArray((curTeam as any)["teammates"]) ? ([...(curTeam as any)["teammates"]] as any[]) : [];
+                      const nextIdx = list.length + 1;
+                      const next = {
+                        id: `teammate-${nextIdx}`,
+                        prompt: { instructions: "Help the lead agent by completing delegated tasks." },
+                        tools: { allow: [], execution: "cloud" },
+                        limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
+                        output: { mode: "text" },
+                      };
+                      return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: [...list, next] } } };
+                    });
+                  }}
+                >
+                  Add teammate
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Advanced</div>
+
+          <div className="grid gap-1.5">
+            <Label>Toolset ID (optional)</Label>
+            <Input
+              value={toolsetId}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  return { ...cur, config: { ...curCfg, toolsetId: v.length ? v : undefined } };
+                });
+              }}
+              placeholder="uuid"
+            />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Engine</Label>
+            <Select
+              value={engineId}
+              onValueChange={(v) => {
+                const nextId = v === "claude.agent-sdk.v1" || v === "codex.sdk.v1" ? v : "vespid.loop.v1";
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curExec = asObject((curCfg as any)["execution"]) ?? {};
+                  const nextExec = nextId === "vespid.loop.v1" ? curExec : { ...curExec, mode: "node" };
+                  if (nextId !== "vespid.loop.v1" && (curExec as any)["mode"] !== "node") {
+                    toast.info("Engine requires execution.mode=node; updated execution mode.");
+                  }
+                  return {
+                    ...cur,
+                    config: {
+                      ...curCfg,
+                      execution: nextExec,
+                      ...(nextId === "vespid.loop.v1" ? { engine: undefined } : { engine: { id: nextId } }),
+                    },
+                  };
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="vespid.loop.v1">vespid.loop.v1</SelectItem>
+                <SelectItem value="claude.agent-sdk.v1">claude.agent-sdk.v1</SelectItem>
+                <SelectItem value="codex.sdk.v1">codex.sdk.v1</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-1.5">
+              <Label>maxTurns</Label>
+              <Input
+                type="number"
+                value={String(maxTurns)}
+                onChange={(e) => {
+                  const next = Math.max(1, Math.min(64, Number(e.target.value) || 1));
+                  updateNode(node.id, (cur) => {
+                    const curCfg = asObject(cur.config) ?? {};
+                    const curLimits = asObject((curCfg as any)["limits"]) ?? {};
+                    return { ...cur, config: { ...curCfg, limits: { ...curLimits, maxTurns: next } } };
+                  });
+                }}
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label>maxToolCalls</Label>
+              <Input
+                type="number"
+                value={String(maxToolCalls)}
+                onChange={(e) => {
+                  const next = Math.max(0, Math.min(200, Number(e.target.value) || 0));
+                  updateNode(node.id, (cur) => {
+                    const curCfg = asObject(cur.config) ?? {};
+                    const curLimits = asObject((curCfg as any)["limits"]) ?? {};
+                    return { ...cur, config: { ...curCfg, limits: { ...curLimits, maxToolCalls: next } } };
+                  });
+                }}
+              />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>timeoutMs</Label>
+            <Input
+              type="number"
+              value={String(timeoutMs)}
+              onChange={(e) => {
+                const next = Math.max(1000, Math.min(10 * 60 * 1000, Number(e.target.value) || 1000));
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curLimits = asObject((curCfg as any)["limits"]) ?? {};
+                  return { ...cur, config: { ...curCfg, limits: { ...curLimits, timeoutMs: next } } };
+                });
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderAgentExecuteForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const task = asObject(cfg["task"]) ?? {};
+    const sandbox = asObject(cfg["sandbox"]) ?? {};
+    const docker = asObject(sandbox["docker"]) ?? {};
+    const env = asObject(task["env"]) ?? {};
+
+    const script = asString(task["script"], "");
+    const shell = task["shell"] === "bash" ? "bash" : "sh";
+    const backend =
+      sandbox["backend"] === "host" || sandbox["backend"] === "provider" || sandbox["backend"] === "docker" ? (sandbox["backend"] as string) : "docker";
+    const network = sandbox["network"] === "enabled" ? "enabled" : "none";
+    const timeoutMs = asNumber(sandbox["timeoutMs"], 60_000);
+    const dockerImage = typeof docker["image"] === "string" ? (docker["image"] as string) : "";
+    const envPassthroughText = Array.isArray(sandbox["envPassthroughAllowlist"])
+      ? (sandbox["envPassthroughAllowlist"] as any[]).filter((v) => typeof v === "string").join("\n")
+      : "";
+
+    return (
+      <div className="grid gap-3">
+        {renderExecutionSection({
+          nodeId: node.id,
+          config: cfg,
+          onChange: (next) => updateNode(node.id, (cur) => ({ ...cur, config: next })),
+        })}
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Task</div>
+          <div className="grid gap-1.5">
+            <Label>Shell</Label>
+            <Select
+              value={shell}
+              onValueChange={(v) => {
+                const nextShell = v === "bash" ? "bash" : "sh";
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curTask = asObject((curCfg as any)["task"]) ?? {};
+                  return { ...cur, config: { ...curCfg, task: { ...curTask, type: "shell", shell: nextShell } } };
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sh">sh</SelectItem>
+                <SelectItem value="bash">bash</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Script</Label>
+            <Textarea
+              value={script}
+              onChange={(e) => {
+                const v = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curTask = asObject((curCfg as any)["task"]) ?? {};
+                  return { ...cur, config: { ...curCfg, task: { ...curTask, type: "shell", script: v, shell } } };
+                });
+              }}
+              rows={6}
+            />
+          </div>
+          <JsonValueField
+            label="Env (optional)"
+            value={env}
+            onApply={(next) => {
+              updateNode(node.id, (cur) => {
+                const curCfg = asObject(cur.config) ?? {};
+                const curTask = asObject((curCfg as any)["task"]) ?? {};
+                return { ...cur, config: { ...curCfg, task: { ...curTask, type: "shell", env: next } } };
+              });
+            }}
+            rows={6}
+            placeholder='Example: { "FOO": "bar" }'
+          />
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Sandbox (advanced)</div>
+          <div className="grid gap-1.5">
+            <Label>Backend</Label>
+            <Select
+              value={backend}
+              onValueChange={(v) => {
+                const next = v === "host" || v === "provider" ? v : "docker";
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curSandbox = asObject((curCfg as any)["sandbox"]) ?? {};
+                  return { ...cur, config: { ...curCfg, sandbox: { ...curSandbox, backend: next } } };
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="docker">docker</SelectItem>
+                <SelectItem value="host">host</SelectItem>
+                <SelectItem value="provider">provider</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Network</Label>
+            <Select
+              value={network}
+              onValueChange={(v) => {
+                const next = v === "enabled" ? "enabled" : "none";
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curSandbox = asObject((curCfg as any)["sandbox"]) ?? {};
+                  return { ...cur, config: { ...curCfg, sandbox: { ...curSandbox, network: next } } };
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">none</SelectItem>
+                <SelectItem value="enabled">enabled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Timeout (ms)</Label>
+            <Input
+              type="number"
+              value={String(timeoutMs)}
+              onChange={(e) => {
+                const next = Math.max(1000, Math.min(10 * 60 * 1000, Number(e.target.value) || 1000));
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curSandbox = asObject((curCfg as any)["sandbox"]) ?? {};
+                  return { ...cur, config: { ...curCfg, sandbox: { ...curSandbox, timeoutMs: next } } };
+                });
+              }}
+            />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Docker image (optional)</Label>
+            <Input
+              value={dockerImage}
+              onChange={(e) => {
+                const v = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curSandbox = asObject((curCfg as any)["sandbox"]) ?? {};
+                  const curDocker = asObject((curSandbox as any)["docker"]) ?? {};
+                  return { ...cur, config: { ...curCfg, sandbox: { ...curSandbox, docker: { ...curDocker, image: v.trim().length ? v : undefined } } } };
+                });
+              }}
+              placeholder="e.g. node:20-alpine"
+            />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Env passthrough allowlist (one per line)</Label>
+            <Textarea
+              value={envPassthroughText}
+              onChange={(e) => {
+                const next = normalizeStringArray(e.target.value);
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curSandbox = asObject((curCfg as any)["sandbox"]) ?? {};
+                  return { ...cur, config: { ...curCfg, sandbox: { ...curSandbox, envPassthroughAllowlist: next } } };
+                });
+              }}
+              rows={4}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderConnectorActionForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const auth = asObject(cfg["auth"]) ?? {};
+    const connectorId = asString(cfg["connectorId"], "");
+    const actionId = asString(cfg["actionId"], "");
+    const secretId = typeof auth["secretId"] === "string" ? (auth["secretId"] as string) : null;
+
+    return (
+      <div className="grid gap-3">
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Action</div>
+          <div className="grid gap-1.5">
+            <Label>connectorId</Label>
+            <Input
+              value={connectorId}
+              onChange={(e) => {
+                const next = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curAuth = asObject((curCfg as any)["auth"]) ?? {};
+                  // Changing the connector should clear secret selection by default.
+                  const nextAuth = next !== asString(curCfg["connectorId"], "") ? { ...curAuth, secretId: undefined } : curAuth;
+                  return { ...cur, config: { ...curCfg, connectorId: next, auth: nextAuth } };
+                });
+              }}
+              placeholder="github"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>actionId</Label>
+            <Input value={actionId} onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), actionId: e.target.value } }))} />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Secret</Label>
+            <SecretSelectField
+              orgId={orgId}
+              connectorId={connectorId || "github"}
+              value={secretId}
+              onChange={(next) => {
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curAuth = asObject((curCfg as any)["auth"]) ?? {};
+                  return { ...cur, config: { ...curCfg, auth: { ...curAuth, secretId: next ?? "" } } };
+                });
+              }}
+              required
+            />
+          </div>
+
+          <JsonValueField
+            label="Input (JSON)"
+            value={cfg["input"] ?? {}}
+            onApply={(next) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), input: next } }))}
+            rows={8}
+          />
+        </div>
+
+        {renderExecutionSection({
+          nodeId: node.id,
+          config: cfg,
+          onChange: (next) => updateNode(node.id, (cur) => ({ ...cur, config: next })),
+        })}
+      </div>
+    );
+  }
+
+  function renderLegacyGithubIssueCreateForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const auth = asObject(cfg["auth"]) ?? {};
+    const secretId = typeof auth["secretId"] === "string" ? (auth["secretId"] as string) : null;
+    const repo = asString(cfg["repo"], "");
+    const title = asString(cfg["title"], "");
+    const body = typeof cfg["body"] === "string" ? (cfg["body"] as string) : "";
+
+    return (
+      <div className="grid gap-3">
+        <div className="rounded-lg border border-border bg-panel/50 p-3 text-xs text-muted">
+          Legacy node type. Prefer <span className="font-mono">connector.action</span>.
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">GitHub Issue</div>
+          <div className="grid gap-1.5">
+            <Label>repo</Label>
+            <Input value={repo} onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), repo: e.target.value } }))} placeholder="owner/repo" />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>title</Label>
+            <Input value={title} onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), title: e.target.value } }))} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>body (optional)</Label>
+            <Textarea value={body} onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), body: e.target.value } }))} rows={6} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Secret</Label>
+            <SecretSelectField
+              orgId={orgId}
+              connectorId="github"
+              value={secretId}
+              onChange={(next) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), auth: { secretId: next ?? "" } } }))}
+              required
+            />
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            updateNode(node.id, (cur) => upgradeLegacyGithubIssueCreate(cur));
+            toast.success("Upgraded node to connector.action");
+          }}
+        >
+          Upgrade to connector.action (github issue.create)
+        </Button>
+      </div>
+    );
+  }
+
+  function renderHttpRequestForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const method =
+      cfg["method"] === "GET" ||
+      cfg["method"] === "POST" ||
+      cfg["method"] === "PUT" ||
+      cfg["method"] === "PATCH" ||
+      cfg["method"] === "DELETE" ||
+      cfg["method"] === "HEAD" ||
+      cfg["method"] === "OPTIONS"
+        ? (cfg["method"] as string)
+        : "GET";
+    const url = asString(cfg["url"], "");
+    const headers = asObject(cfg["headers"]) ?? {};
+    const entries = Object.entries(headers).filter(([k, v]) => typeof k === "string" && typeof v === "string") as Array<[string, string]>;
+
+    return (
+      <div className="grid gap-3">
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Request</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="grid gap-1.5">
+              <Label>Method</Label>
+              <Select value={method} onValueChange={(v) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), method: v } }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label>URL</Label>
+              <Input value={url} onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), url: e.target.value } }))} placeholder="https://example.com" />
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <div className="text-sm font-medium text-text">Headers</div>
+            {entries.map(([k, v]) => (
+              <div key={k} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                <Input
+                  value={k}
+                  onChange={(e) => {
+                    const nextKey = e.target.value;
+                    updateNode(node.id, (cur) => {
+                      const curCfg = asObject(cur.config) ?? {};
+                      const curHeaders = asObject((curCfg as any)["headers"]) ?? {};
+                      const val = curHeaders[k];
+                      const nextHeaders: Record<string, unknown> = { ...curHeaders };
+                      delete nextHeaders[k];
+                      if (nextKey.trim().length) {
+                        nextHeaders[nextKey] = typeof val === "string" ? val : "";
+                      }
+                      return { ...cur, config: { ...curCfg, headers: nextHeaders } };
+                    });
+                  }}
+                  placeholder="header"
+                />
+                <Input
+                  value={v}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    updateNode(node.id, (cur) => {
+                      const curCfg = asObject(cur.config) ?? {};
+                      const curHeaders = asObject((curCfg as any)["headers"]) ?? {};
+                      return { ...cur, config: { ...curCfg, headers: { ...curHeaders, [k]: nextVal } } };
+                    });
+                  }}
+                  placeholder="value"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    updateNode(node.id, (cur) => {
+                      const curCfg = asObject(cur.config) ?? {};
+                      const curHeaders = asObject((curCfg as any)["headers"]) ?? {};
+                      const nextHeaders: Record<string, unknown> = { ...curHeaders };
+                      delete nextHeaders[k];
+                      return { ...cur, config: { ...curCfg, headers: nextHeaders } };
+                    });
+                  }}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curHeaders = asObject((curCfg as any)["headers"]) ?? {};
+                  const baseKey = "x-header";
+                  let key = baseKey;
+                  let i = 1;
+                  while (Object.prototype.hasOwnProperty.call(curHeaders, key)) {
+                    key = `${baseKey}-${i}`;
+                    i += 1;
+                  }
+                  return { ...cur, config: { ...curCfg, headers: { ...curHeaders, [key]: "" } } };
+                });
+              }}
+            >
+              Add header
+            </Button>
+          </div>
+
+          <JsonValueField
+            label="Body (JSON, optional)"
+            value={cfg["body"] ?? {}}
+            onApply={(next) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), body: next } }))}
+            rows={8}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function renderConditionForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const path = asString(cfg["path"], "");
+    const op =
+      cfg["op"] === "eq" ||
+      cfg["op"] === "neq" ||
+      cfg["op"] === "contains" ||
+      cfg["op"] === "exists" ||
+      cfg["op"] === "gt" ||
+      cfg["op"] === "gte" ||
+      cfg["op"] === "lt" ||
+      cfg["op"] === "lte"
+        ? (cfg["op"] as string)
+        : "eq";
+    const rawValue = (cfg as any)["value"];
+    const valueText = typeof rawValue === "string" ? rawValue : rawValue === null ? "null" : typeof rawValue === "number" || typeof rawValue === "boolean" ? String(rawValue) : "";
+
+    return (
+      <div className="grid gap-3">
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Condition</div>
+          <div className="grid gap-1.5">
+            <Label>path</Label>
+            <Input value={path} onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), path: e.target.value } }))} placeholder="$.ok" />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>op</Label>
+            <Select value={op} onValueChange={(v) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), op: v } }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {["eq", "neq", "contains", "exists", "gt", "gte", "lt", "lte"].map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {k}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {op !== "exists" ? (
+            <div className="grid gap-1.5">
+              <Label>value</Label>
+              <Input
+                value={valueText}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  let parsed: unknown = v;
+                  const json = safeJsonParse(v);
+                  if (json.ok && (typeof json.value === "string" || typeof json.value === "number" || typeof json.value === "boolean" || json.value === null)) {
+                    parsed = json.value;
+                  }
+                  updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), value: parsed } }));
+                }}
+                placeholder='Try: "foo", 123, true, null'
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderParallelJoinForm(node: WorkflowNodeAny) {
+    const cfg = asObject(node.config) ?? {};
+    const failFast = asBoolean(cfg["failFast"], true);
+    return (
+      <div className="grid gap-3">
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Join</div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={failFast}
+              onChange={(e) => updateNode(node.id, (cur) => ({ ...cur, config: { ...(asObject(cur.config) ?? {}), failFast: e.target.checked } }))}
+            />
+            failFast
+          </label>
+        </div>
+      </div>
+    );
+  }
+
+  function renderNodeInspector(node: WorkflowNodeAny) {
+    if (inspectorTab === "json") {
+      return (
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="node-config">Config (JSON)</Label>
+            <Textarea
+              id="node-config"
+              value={configJson}
+              onChange={(e) => {
+                setConfigJson(e.target.value);
+                setConfigJsonDirty(true);
+              }}
+              rows={12}
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="accent" onClick={saveSelectedNodeConfig}>
+              Apply
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setConfigJson(stringifyJson(node.config));
+                setConfigJsonDirty(false);
+              }}
+            >
+              Reset
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    if (node.type === "agent.run") return renderAgentRunForm(node);
+    if (node.type === "agent.execute") return renderAgentExecuteForm(node);
+    if (node.type === "connector.action") return renderConnectorActionForm(node);
+    if (node.type === "connector.github.issue.create") return renderLegacyGithubIssueCreateForm(node);
+    if (node.type === "http.request") return renderHttpRequestForm(node);
+    if (node.type === "condition") return renderConditionForm(node);
+    if (node.type === "parallel.join") return renderParallelJoinForm(node);
+
+    return (
+      <div className="grid gap-3">
+        <div className="rounded-lg border border-border bg-panel/50 p-3 text-sm text-muted">
+          No form available for node type <span className="font-mono">{node.type}</span>. Use Advanced JSON.
+        </div>
+        <Button type="button" variant="outline" onClick={() => setInspectorTab("json")}>
+          Open Advanced JSON
+        </Button>
+      </div>
+    );
   }
 
   function buildDraftDsl() {
@@ -577,6 +2223,144 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                   <Input id="workflow-name" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} />
                 </div>
 
+                <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                  <div className="text-sm font-medium text-text">Bulk model actions</div>
+
+                  <div className="grid gap-2">
+                    <div className="text-xs text-muted">Agent.run default model (apply to nodes)</div>
+                    <LlmConfigField orgId={orgId} mode="workflowAgentRun" value={bulkAgentLlm} onChange={setBulkAgentLlm} />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setBulkAgentLlm(orgDefaultAgentLlm)}
+                        disabled={!orgId}
+                      >
+                        Reset to org default
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setNodes((prev) =>
+                            prev.map((n) => {
+                              const nodeAny = (n as any).data?.node as WorkflowNodeAny | undefined;
+                              if (!nodeAny || nodeAny.type !== "agent.run") return n;
+                              const cfg = asObject(nodeAny.config) ?? {};
+                              const llm = asObject((cfg as any)["llm"]) ?? {};
+                              const nextCfg = {
+                                ...cfg,
+                                llm: {
+                                  ...llm,
+                                  provider: bulkAgentLlm.providerId,
+                                  model: bulkAgentLlm.modelId,
+                                  auth: { ...(bulkAgentLlm.secretId ? { secretId: bulkAgentLlm.secretId } : {}), fallbackToEnv: true },
+                                },
+                              };
+                              const nextNode: WorkflowNodeAny = { ...nodeAny, config: nextCfg };
+                              return { ...n, data: { ...(n as any).data, label: nextNode.type, node: nextNode } };
+                            })
+                          );
+                          toast.success("Applied model to all agent.run nodes");
+                        }}
+                        disabled={!orgId}
+                      >
+                        Apply to all agent.run nodes
+                      </Button>
+                      {selectedNode?.type === "agent.run" ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            const cfg = asObject(selectedNode.config) ?? {};
+                            const llm = asObject((cfg as any)["llm"]) ?? {};
+                            const auth = asObject((llm as any)["auth"]) ?? {};
+                            const nextBulk: LlmConfigValue = {
+                              providerId: (typeof llm["provider"] === "string" ? llm["provider"] : "openai") as any,
+                              modelId: asString(llm["model"], "gpt-4.1-mini"),
+                              secretId: typeof auth["secretId"] === "string" ? (auth["secretId"] as string) : null,
+                            };
+                            setBulkAgentLlm(nextBulk);
+                            toast.success("Copied selected agent.run model into bulk editor");
+                          }}
+                        >
+                          Use selected agent.run model
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2 pt-2">
+                    <div className="text-xs text-muted">Teammate model overrides (model-only)</div>
+                    <ModelPickerField value={bulkTeammateModel} onChange={setBulkTeammateModel} />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const model = bulkTeammateModel.trim();
+                          if (!model) {
+                            toast.error("Model is required");
+                            return;
+                          }
+                          setNodes((prev) =>
+                            prev.map((n) => {
+                              const nodeAny = (n as any).data?.node as WorkflowNodeAny | undefined;
+                              if (!nodeAny || nodeAny.type !== "agent.run") return n;
+                              const cfg = asObject(nodeAny.config) ?? {};
+                              const team = asObject((cfg as any)["team"]);
+                              if (!team) return n;
+                              const teammates = Array.isArray((team as any)["teammates"]) ? ([...(team as any)["teammates"]] as any[]) : [];
+                              const nextTeammates = teammates.map((t) => {
+                                const tm = asObject(t) ?? {};
+                                return { ...tm, llm: { model } };
+                              });
+                              const nextCfg = { ...cfg, team: { ...team, teammates: nextTeammates } };
+                              const nextNode: WorkflowNodeAny = { ...nodeAny, config: nextCfg };
+                              return { ...n, data: { ...(n as any).data, node: nextNode } };
+                            })
+                          );
+                          toast.success("Applied teammate model override");
+                        }}
+                      >
+                        Apply to all teammates
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setNodes((prev) =>
+                            prev.map((n) => {
+                              const nodeAny = (n as any).data?.node as WorkflowNodeAny | undefined;
+                              if (!nodeAny || nodeAny.type !== "agent.run") return n;
+                              const cfg = asObject(nodeAny.config) ?? {};
+                              const team = asObject((cfg as any)["team"]);
+                              if (!team) return n;
+                              const teammates = Array.isArray((team as any)["teammates"]) ? ([...(team as any)["teammates"]] as any[]) : [];
+                              const nextTeammates = teammates.map((t) => {
+                                const tm = asObject(t) ?? {};
+                                const { llm: _llm, ...rest } = tm as any;
+                                return rest;
+                              });
+                              const nextCfg = { ...cfg, team: { ...team, teammates: nextTeammates } };
+                              const nextNode: WorkflowNodeAny = { ...nodeAny, config: nextCfg };
+                              return { ...n, data: { ...(n as any).data, node: nextNode } };
+                            })
+                          );
+                          toast.success("Cleared teammate model overrides");
+                        }}
+                      >
+                        Clear teammate overrides
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid gap-2">
                   <div className="text-sm font-medium">Add Node</div>
                   <div className="flex flex-wrap gap-2">
@@ -603,25 +2387,48 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               </CardContent>
             </Card>
 
-            {selectedNodeId ? (
+            {selectedNodeId && selectedNode ? (
               <Card>
                 <CardHeader>
                   <CardTitle>Node</CardTitle>
-                  <CardDescription className="break-all">{selectedNodeId}</CardDescription>
+                  <CardDescription className="break-all">
+                    <div className="font-mono text-xs">{selectedNode.type}</div>
+                    <div className="mt-1">{selectedNodeId}</div>
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-3">
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="node-config">Config (JSON)</Label>
-                    <Textarea id="node-config" value={configJson} onChange={(e) => setConfigJson(e.target.value)} rows={10} />
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="accent" onClick={saveSelectedNodeConfig}>
-                      Apply Config
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={inspectorTab === "form" ? "accent" : "outline"}
+                      onClick={() => {
+                        setConfigJson(stringifyJson(selectedNode.config));
+                        setConfigJsonDirty(false);
+                        setInspectorTab("form");
+                      }}
+                    >
+                      Form
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => setSelectedNodeId("")}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={inspectorTab === "json" ? "accent" : "outline"}
+                      onClick={() => {
+                        // Reset editor to current node config when entering JSON mode.
+                        setConfigJson(stringifyJson(selectedNode.config));
+                        setConfigJsonDirty(false);
+                        setInspectorTab("json");
+                      }}
+                    >
+                      Advanced JSON
+                    </Button>
+                    <Button size="sm" variant="outline" className="ml-auto" onClick={() => setSelectedNodeId("")}>
                       Close
                     </Button>
                   </div>
+
+                  {renderNodeInspector(selectedNode)}
                 </CardContent>
               </Card>
             ) : null}

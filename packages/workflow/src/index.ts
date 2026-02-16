@@ -62,7 +62,8 @@ const nodeExecutionSelectorSchema = z.union([
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
-  config: z.object({
+  config: z
+    .object({
     toolsetId: z.string().uuid().optional(),
     llm: z.object({
       provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default(defaultAgentLlmProvider),
@@ -181,7 +182,16 @@ const agentRunNodeSchema = z.object({
           .max(32),
       })
       .optional(),
-  }),
+    })
+    .superRefine((value, ctx) => {
+      if (value.llm.provider === "vertex" && !value.llm.auth?.secretId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "vertex provider requires llm.auth.secretId",
+          path: ["llm", "auth", "secretId"],
+        });
+      }
+    }),
 });
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [
