@@ -9,9 +9,10 @@ export type CreditPack = {
   productName?: string;
 };
 
-export function useCreditPacks() {
+export function useCreditPacks(enabled = true) {
   return useQuery({
     queryKey: ["billing", "packs"],
+    enabled,
     queryFn: async () => {
       return apiFetchJson<{ enabled: boolean; packs: CreditPack[] }>(`/v1/billing/credits/packs`, { method: "GET" });
     },
@@ -76,4 +77,3 @@ export function useCheckoutCredits(orgId: string | null) {
     },
   });
 }
-

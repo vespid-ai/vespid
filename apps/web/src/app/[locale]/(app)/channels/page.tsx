@@ -165,6 +165,26 @@ export default function ChannelsPage() {
     }
   }
 
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("channels.subtitle")}</div>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-4">
       <div>
@@ -414,7 +434,14 @@ export default function ChannelsPage() {
         </CardHeader>
         <CardContent className="grid gap-3">
           {pendingRequests.length === 0 ? (
-            <div className="text-sm text-muted">{t("channels.pairing.empty")}</div>
+            <EmptyState
+              title={t("channels.pairing.empty")}
+              action={
+                <Button variant="outline" onClick={() => pairingQuery.refetch()}>
+                  {t("common.refresh")}
+                </Button>
+              }
+            />
           ) : (
             pendingRequests.map((request) => (
               <div key={request.id} className="rounded-xl border border-borderSubtle bg-panel/35 p-3">

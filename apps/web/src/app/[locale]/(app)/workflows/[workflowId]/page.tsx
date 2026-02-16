@@ -221,6 +221,65 @@ export default function WorkflowDetailPage() {
     }
   }
 
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("workflows.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (workflowQuery.isLoading && !loadedWorkflow) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("workflows.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState title={t("common.loading")} />
+      </div>
+    );
+  }
+
+  if (!loadedWorkflow) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("workflows.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState title={t("common.notFound")} />
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">

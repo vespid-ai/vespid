@@ -755,7 +755,7 @@ export default function ToolsetsPage() {
   const chatBuilderSession = useChatToolsetBuilderSession(orgId);
   const finalizeBuilderSession = useFinalizeToolsetBuilderSession(orgId);
 
-  const galleryQuery = usePublicToolsetGallery();
+  const galleryQuery = usePublicToolsetGallery(Boolean(orgId));
   const adoptToolset = useAdoptPublicToolset(orgId);
 
   const [aiOpen, setAiOpen] = useState(false);

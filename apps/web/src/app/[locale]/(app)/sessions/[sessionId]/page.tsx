@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
+import { EmptyState } from "../../../../../components/ui/empty-state";
 import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
 import { Separator } from "../../../../../components/ui/separator";
@@ -178,6 +179,65 @@ export default function SessionDetailPage() {
   const session = sessionQuery.data?.session ?? null;
   const pinnedAgentId = session?.pinnedAgentId ?? null;
 
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (sessionQuery.isLoading && !session) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState title={t("common.loading")} />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState title={t("common.notFound")} />
+      </div>
+    );
+  }
+
   async function send() {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -255,7 +315,14 @@ export default function SessionDetailPage() {
           <div className="rounded-2xl border border-borderSubtle bg-panel/40 p-3 shadow-elev1">
             <div className="grid gap-2">
               {events.length === 0 ? (
-                <div className="text-sm text-muted">{t("sessions.chat.empty")}</div>
+                <EmptyState
+                  title={t("sessions.chat.empty")}
+                  action={
+                    <Button size="sm" variant="outline" onClick={() => connectWs()} disabled={!canConnect || connected}>
+                      {t("sessions.ws.reconnect")}
+                    </Button>
+                  }
+                />
               ) : (
                 events.map((e) => (
                   <div key={e.seq} className="grid gap-1">

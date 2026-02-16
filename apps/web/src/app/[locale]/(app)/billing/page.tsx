@@ -2,7 +2,7 @@
 
 import { Suspense, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
@@ -21,6 +21,9 @@ function formatCurrency(unitAmount: number, currency: string): string {
 
 function BillingPageContent() {
   const t = useTranslations();
+  const router = useRouter();
+  const params = useParams<{ locale?: string | string[] }>();
+  const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
   const searchParams = useSearchParams();
 
@@ -28,7 +31,7 @@ function BillingPageContent() {
   const [cursor, setCursor] = useState<string | null>(null);
 
   const balanceQuery = useCreditsBalance(orgId);
-  const packsQuery = useCreditPacks();
+  const packsQuery = useCreditPacks(Boolean(orgId));
   const ledgerQuery = useCreditLedger(orgId, { limit: 20, cursor });
   const checkout = useCheckoutCredits(orgId);
 
@@ -43,6 +46,26 @@ function BillingPageContent() {
     if (typeof value !== "number") return t("common.loading");
     return value.toLocaleString();
   }, [balanceQuery.data?.balanceCredits]);
+
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("billing.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("billing.subtitle")}</div>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4">

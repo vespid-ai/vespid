@@ -20,6 +20,7 @@ import { Badge } from "../../../../../../../components/ui/badge";
 import { Button } from "../../../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../../../components/ui/card";
 import { Chip } from "../../../../../../../components/ui/chip";
+import { EmptyState } from "../../../../../../../components/ui/empty-state";
 import { Input } from "../../../../../../../components/ui/input";
 import { JsonExplorer } from "../../../../../../../components/ui/json-explorer";
 import { ScrollArea } from "../../../../../../../components/ui/scroll-area";
@@ -386,6 +387,70 @@ export default function RunReplayPage() {
     );
   }, [run, selectedEvent]);
 
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("runs.detailsHint")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (runQuery.isLoading && !run) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState title={t("common.loading")} />
+      </div>
+    );
+  }
+
+  if (!run) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
+          </div>
+          <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState
+          title={t("common.notFound")}
+          action={
+            <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
+              {t("common.back")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -467,7 +532,17 @@ export default function RunReplayPage() {
 
               <ScrollArea className="h-[calc(100%-156px)]">
                 <div className="p-2">
-                  {groups.length === 0 ? <div className="px-2 py-6 text-sm text-muted">{t("runs.noEvents")}</div> : null}
+                  {groups.length === 0 ? (
+                    <EmptyState
+                      className="p-4"
+                      title={t("runs.noEvents")}
+                      action={
+                        <Button size="sm" variant="outline" onClick={() => eventsQuery.refetch()}>
+                          {t("common.refresh")}
+                        </Button>
+                      }
+                    />
+                  ) : null}
 
                   {groups.map((group) => {
                     const attemptKey = group.attempt === null ? "unknown" : String(group.attempt);

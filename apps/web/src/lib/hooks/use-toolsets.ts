@@ -145,9 +145,10 @@ export function useUnpublishToolset(orgId: string | null) {
   });
 }
 
-export function usePublicToolsetGallery() {
+export function usePublicToolsetGallery(enabled = true) {
   return useQuery({
     queryKey: ["toolset-gallery"],
+    enabled,
     queryFn: async () => {
       return apiFetchJson<{ items: PublicToolsetCard[] }>(`/v1/toolset-gallery`, { method: "GET" });
     },

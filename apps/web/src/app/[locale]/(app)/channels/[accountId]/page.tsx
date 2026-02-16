@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
+import { EmptyState } from "../../../../../components/ui/empty-state";
 import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../../components/ui/select";
@@ -113,6 +114,70 @@ export default function ChannelAccountDetailPage() {
     }
     return new Date(ms).toLocaleString();
   }, [account?.createdAt]);
+
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.detail.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("channels.detail.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/channels`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (accountQuery.isLoading && !account) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.detail.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("channels.detail.subtitle")}</div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/channels`)}>
+            {t("common.back")}
+          </Button>
+        </div>
+        <EmptyState title={t("common.loading")} />
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("channels.detail.title")}</div>
+            <div className="mt-1 text-sm text-muted">{t("channels.detail.subtitle")}</div>
+          </div>
+        </div>
+        <EmptyState
+          title={t("common.notFound")}
+          description={t("channels.detail.subtitle")}
+          action={
+            <Button variant="outline" onClick={() => router.push(`/${locale}/channels`)}>
+              {t("common.back")}
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
 
   async function onSave() {
     try {
@@ -521,7 +586,14 @@ export default function ChannelAccountDetailPage() {
           </div>
 
           {allowlistEntries.length === 0 ? (
-            <div className="text-sm text-muted">{t("channels.detail.allowlistEmpty")}</div>
+            <EmptyState
+              title={t("channels.detail.allowlistEmpty")}
+              action={
+                <Button variant="outline" onClick={() => allowlistQuery.refetch()}>
+                  {t("common.refresh")}
+                </Button>
+              }
+            />
           ) : (
             <div className="grid gap-2">
               {allowlistEntries.map((entry) => (
@@ -547,7 +619,14 @@ export default function ChannelAccountDetailPage() {
         </CardHeader>
         <CardContent className="grid gap-3">
           {pendingRequests.length === 0 ? (
-            <div className="text-sm text-muted">{t("channels.pairing.empty")}</div>
+            <EmptyState
+              title={t("channels.pairing.empty")}
+              action={
+                <Button variant="outline" onClick={() => pairingQuery.refetch()}>
+                  {t("common.refresh")}
+                </Button>
+              }
+            />
           ) : (
             pendingRequests.map((request) => (
               <div key={request.id} className="rounded-xl border border-borderSubtle bg-panel/35 p-3">
@@ -606,7 +685,14 @@ export default function ChannelAccountDetailPage() {
               ))}
             </div>
           ) : (
-            <div className="text-sm text-muted">{t("channels.detail.eventsEmpty")}</div>
+            <EmptyState
+              title={t("channels.detail.eventsEmpty")}
+              action={
+                <Button variant="outline" onClick={() => statusQuery.refetch()}>
+                  {t("common.refresh")}
+                </Button>
+              }
+            />
           )}
         </CardContent>
       </Card>

@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { CodeBlock } from "../../../../components/ui/code-block";
 import { Badge } from "../../../../components/ui/badge";
@@ -25,6 +26,9 @@ function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
 
 export default function AgentsPage() {
   const t = useTranslations();
+  const router = useRouter();
+  const params = useParams<{ locale?: string | string[] }>();
+  const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const orgId = useActiveOrgId();
 
   const agentsQuery = useAgents(orgId);
@@ -143,6 +147,26 @@ export default function AgentsPage() {
     setPairingToken(payload.token);
     setPairingExpiresAt(payload.expiresAt);
     toast.success(t("agents.pairingCreated"));
+  }
+
+  if (!orgId) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("agents.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("agents.subtitle")}</div>
+        </div>
+        <EmptyState
+          title={t("org.requireActive")}
+          description={t("onboarding.subtitle")}
+          action={
+            <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
+              {t("onboarding.goOrg")}
+            </Button>
+          }
+        />
+      </div>
+    );
   }
 
   return (
