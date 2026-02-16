@@ -2209,7 +2209,7 @@ export async function buildServer(input?: {
     return { ok: true };
   });
 
-  server.get("/v1/orgs/:orgId/agents", async (request) => {
+  async function listExecutorsHandler(request: any) {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string };
     if (!params.orgId) {
@@ -2218,78 +2218,93 @@ export async function buildServer(input?: {
 
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
     if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage agents");
+      throw forbidden("Role is not allowed to manage executors");
     }
 
-    const agents = await store.listOrganizationAgents({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
+    const executors = await store.listOrganizationExecutors({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
     const nowMs = Date.now();
-    const staleMsRaw = Number(process.env.GATEWAY_AGENT_STALE_MS ?? 60_000);
+    const staleMsRaw = Number(process.env.GATEWAY_EXECUTOR_STALE_MS ?? process.env.GATEWAY_AGENT_STALE_MS ?? 60_000);
     const staleMs = Number.isFinite(staleMsRaw) ? staleMsRaw : 60_000;
     const onlineWindowMs = Math.min(5 * 60_000, Math.max(30_000, staleMs));
 
     return {
-      agents: agents.map((agent) => {
-        const lastSeenMs = agent.lastSeenAt ? new Date(agent.lastSeenAt).getTime() : null;
+      executors: executors.map((executor) => {
+        const lastSeenMs = executor.lastSeenAt ? new Date(executor.lastSeenAt).getTime() : null;
         const online = Boolean(lastSeenMs && nowMs - lastSeenMs < onlineWindowMs);
-        const status = agent.revokedAt ? "revoked" : online ? "online" : "offline";
+        const status = executor.revokedAt ? "revoked" : online ? "online" : "offline";
         const reportedTagsRaw =
-          agent.capabilities && typeof agent.capabilities === "object"
-            ? (agent.capabilities as any).tags
+          executor.capabilities && typeof executor.capabilities === "object"
+            ? (executor.capabilities as any).labels
             : null;
-        const reportedTags = Array.isArray(reportedTagsRaw)
+        const reportedLabels = Array.isArray(reportedTagsRaw)
           ? reportedTagsRaw.filter((item): item is string => typeof item === "string")
           : [];
         return {
-          id: agent.id,
-          name: agent.name,
+          id: executor.id,
+          name: executor.name,
           status,
-          lastSeenAt: agent.lastSeenAt,
-          createdAt: agent.createdAt,
-          revokedAt: agent.revokedAt,
-          tags: agent.tags ?? [],
-          reportedTags,
+          lastSeenAt: executor.lastSeenAt,
+          createdAt: executor.createdAt,
+          revokedAt: executor.revokedAt,
+          labels: executor.labels ?? [],
+          reportedLabels,
         };
       }),
     };
-  });
+  }
 
-  server.put("/v1/orgs/:orgId/agents/:agentId/tags", async (request) => {
+  server.get("/v1/orgs/:orgId/agents", listExecutorsHandler);
+  server.get("/v1/orgs/:orgId/executors", listExecutorsHandler);
+
+  async function setExecutorLabelsHandler(request: any) {
     const auth = requireAuth(request);
-    const params = request.params as { orgId?: string; agentId?: string };
-    if (!params.orgId || !params.agentId) {
-      throw badRequest("Missing orgId or agentId");
+    const params = request.params as { orgId?: string; executorId?: string; agentId?: string };
+    const targetId = params.executorId ?? params.agentId ?? null;
+    if (!params.orgId || !targetId) {
+      throw badRequest("Missing orgId or executorId");
     }
 
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
     if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage agents");
+      throw forbidden("Role is not allowed to manage executors");
     }
 
     const body = z
       .object({
-        tags: z.array(z.string().min(1).max(64)).max(50),
+        labels: z.array(z.string().min(1).max(64)).max(50),
       })
       .safeParse(request.body);
     if (!body.success) {
-      throw badRequest("Invalid tags payload", body.error.flatten());
+      throw badRequest("Invalid labels payload", body.error.flatten());
     }
 
-    const normalized = [...new Set(body.data.tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0))];
+    const normalized = [...new Set(body.data.labels.map((label) => label.trim()).filter((label) => label.length > 0))];
 
-    const updated = await store.setOrganizationAgentTags({
+    const updated = await store.setOrganizationExecutorLabels({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      agentId: params.agentId,
-      tags: normalized,
+      executorId: targetId,
+      labels: normalized,
     });
     if (!updated) {
       throw agentNotFound();
     }
 
-    return { ok: true, agent: { id: updated.id, tags: updated.tags ?? [] } };
-  });
+    return { ok: true, executor: { id: updated.id, labels: updated.labels ?? [] } };
+  }
 
-  server.post("/v1/orgs/:orgId/agents/pairing-tokens", async (request, reply) => {
+  server.put("/v1/orgs/:orgId/agents/:agentId/tags", async (request) => {
+    // Backward-compatible alias.
+    const body = request.body as any;
+    request.body = { labels: Array.isArray(body?.tags) ? body.tags : [] };
+    return await setExecutorLabelsHandler(request);
+  });
+  server.put("/v1/orgs/:orgId/executors/:executorId/labels", setExecutorLabelsHandler);
+
+  async function createExecutorPairingTokenHandler(request: any, reply: any) {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string };
     if (!params.orgId) {
@@ -2298,13 +2313,13 @@ export async function buildServer(input?: {
 
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
     if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage agents");
+      throw forbidden("Role is not allowed to manage executors");
     }
 
     const token = `${orgContext.organizationId}.${crypto.randomBytes(24).toString("base64url")}`;
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-    await store.createAgentPairingToken({
+    await store.createExecutorPairingToken({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
       tokenHash: sha256Hex(token),
@@ -2312,24 +2327,28 @@ export async function buildServer(input?: {
     });
 
     return reply.status(201).send({ token, expiresAt: expiresAt.toISOString() });
-  });
+  }
 
-  server.post("/v1/orgs/:orgId/agents/:agentId/revoke", async (request) => {
+  server.post("/v1/orgs/:orgId/agents/pairing-tokens", createExecutorPairingTokenHandler);
+  server.post("/v1/orgs/:orgId/executors/pairing-tokens", createExecutorPairingTokenHandler);
+
+  async function revokeExecutorHandler(request: any) {
     const auth = requireAuth(request);
-    const params = request.params as { orgId?: string; agentId?: string };
-    if (!params.orgId || !params.agentId) {
-      throw badRequest("Missing orgId or agentId");
+    const params = request.params as { orgId?: string; executorId?: string; agentId?: string };
+    const targetId = params.executorId ?? params.agentId ?? null;
+    if (!params.orgId || !targetId) {
+      throw badRequest("Missing orgId or executorId");
     }
 
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
     if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage agents");
+      throw forbidden("Role is not allowed to manage executors");
     }
 
-    const ok = await store.revokeOrganizationAgent({
+    const ok = await store.revokeOrganizationExecutor({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      agentId: params.agentId,
+      executorId: targetId,
     });
 
     if (!ok) {
@@ -2337,7 +2356,10 @@ export async function buildServer(input?: {
     }
 
     return { ok: true };
-  });
+  }
+
+  server.post("/v1/orgs/:orgId/agents/:agentId/revoke", revokeExecutorHandler);
+  server.post("/v1/orgs/:orgId/executors/:executorId/revoke", revokeExecutorHandler);
 
   server.post("/v1/orgs/:orgId/sessions", async (request, reply) => {
     const auth = requireAuth(request);
@@ -2351,7 +2373,7 @@ export async function buildServer(input?: {
     const body = z
       .object({
         title: z.string().max(200).optional(),
-        engineId: z.enum(["vespid.loop.v1", "codex.sdk.v1", "claude.agent-sdk.v1"]).optional(),
+        engineId: z.enum(["gateway.loop.v2", "gateway.codex.v2", "gateway.claude.v2"]).optional(),
         toolsetId: z.string().uuid().optional(),
         llm: z.object({
           provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
@@ -2377,10 +2399,7 @@ export async function buildServer(input?: {
       throw badRequest("Invalid session payload", body.error.flatten());
     }
 
-    const engineId = body.data.engineId ?? "vespid.loop.v1";
-    if (engineId !== "vespid.loop.v1" && engineId !== "codex.sdk.v1") {
-      throw badRequest("Only vespid.loop.v1 and codex.sdk.v1 are supported for sessions in this edition.");
-    }
+    const engineId = body.data.engineId ?? "gateway.loop.v2";
 
     const session = await store.createAgentSession({
       organizationId: orgContext.organizationId,
@@ -3245,7 +3264,7 @@ export async function buildServer(input?: {
     return reply.status(201).send({ toolset: adopted });
   });
 
-  server.post("/v1/agents/pair", async (request, reply) => {
+  async function pairExecutorHandler(request: any, reply: any) {
     const parsed = agentPairSchema.safeParse(request.body);
     if (!parsed.success) {
       throw badRequest("Invalid agent pairing payload", parsed.error.flatten());
@@ -3257,7 +3276,7 @@ export async function buildServer(input?: {
     }
 
     const tokenHash = sha256Hex(parsed.data.pairingToken);
-    const existing = await store.getAgentPairingTokenByHash({ organizationId: orgId, tokenHash });
+    const existing = await store.getExecutorPairingTokenByHash({ organizationId: orgId, tokenHash });
     if (!existing) {
       throw pairingTokenInvalid();
     }
@@ -3268,29 +3287,32 @@ export async function buildServer(input?: {
       throw pairingTokenExpired();
     }
 
-    const consumed = await store.consumeAgentPairingToken({ organizationId: orgId, tokenHash });
+    const consumed = await store.consumeExecutorPairingToken({ organizationId: orgId, tokenHash });
     if (!consumed) {
       throw pairingTokenInvalid();
     }
 
-    const agentToken = `${orgId}.${crypto.randomBytes(32).toString("base64url")}`;
-    const agent = await store.createOrganizationAgent({
+    const executorToken = `${orgId}.${crypto.randomBytes(32).toString("base64url")}`;
+    const executor = await store.createOrganizationExecutor({
       organizationId: orgId,
       name: parsed.data.name,
-      tokenHash: sha256Hex(agentToken),
+      tokenHash: sha256Hex(executorToken),
       createdByUserId: existing.createdByUserId,
       capabilities: parsed.data.capabilities ?? null,
     });
 
-    const gatewayWsUrl = process.env.GATEWAY_WS_URL ?? "ws://localhost:3002/ws";
+    const gatewayWsUrl = process.env.GATEWAY_WS_URL ?? "ws://localhost:3002/ws/executor";
 
     return reply.status(201).send({
-      agentId: agent.id,
-      agentToken,
+      executorId: executor.id,
+      executorToken,
       organizationId: orgId,
       gatewayWsUrl,
     });
-  });
+  }
+
+  server.post("/v1/agents/pair", pairExecutorHandler);
+  server.post("/v1/executors/pair", pairExecutorHandler);
 
   server.post("/v1/orgs/:orgId/workflows", async (request, reply) => {
     const auth = requireAuth(request);

@@ -77,13 +77,13 @@ const agentRunNodeSchema = z.object({
     }),
     execution: z
       .object({
-        mode: z.enum(["cloud", "node"]).default("cloud"),
+        mode: z.literal("gateway").default("gateway"),
         selector: nodeExecutionSelectorSchema.optional(),
       })
-      .default({ mode: "cloud" }),
+      .default({ mode: "gateway" }),
     engine: z
       .object({
-        id: z.enum(["vespid.loop.v1", "claude.agent-sdk.v1", "codex.sdk.v1"]).default("vespid.loop.v1"),
+        id: z.enum(["gateway.loop.v2", "gateway.claude.v2", "gateway.codex.v2"]).default("gateway.loop.v2"),
       })
       .optional(),
     prompt: z.object({
@@ -95,7 +95,7 @@ const agentRunNodeSchema = z.object({
       .object({
         // Tool IDs; enforcement is runtime-level.
         allow: z.array(z.string().min(1).max(120)),
-        execution: z.enum(["cloud", "node"]).default("cloud"),
+        execution: z.enum(["cloud", "executor"]).default("cloud"),
         // Optional auth defaults so the agent does not need to reference secret UUIDs in tool calls.
         authDefaults: z
           .object({
@@ -181,17 +181,7 @@ const agentRunNodeSchema = z.object({
           .max(32),
       })
       .optional(),
-  })
-    .superRefine((value, ctx) => {
-      const engineId = value.engine?.id ?? "vespid.loop.v1";
-      if (engineId !== "vespid.loop.v1" && value.execution.mode !== "node") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "agent.run engine requires execution.mode=node",
-          path: ["execution", "mode"],
-        });
-      }
-    }),
+  }),
 });
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [
@@ -208,7 +198,7 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
       .object({
         execution: z
           .object({
-            mode: z.enum(["cloud", "node"]).default("cloud"),
+            mode: z.enum(["cloud", "executor"]).default("executor"),
             selector: nodeExecutionSelectorSchema.optional(),
           })
           .optional(),
@@ -229,7 +219,7 @@ export const workflowNodeSchema = z.discriminatedUnion("type", [
       }),
       execution: z
         .object({
-          mode: z.enum(["cloud", "node"]).default("cloud"),
+          mode: z.enum(["cloud", "executor"]).default("cloud"),
           selector: nodeExecutionSelectorSchema.optional(),
         })
         .optional(),
@@ -291,13 +281,13 @@ export const workflowDslAnySchema = z.union([workflowDslSchema, workflowDslV3Sch
 
 function isRemoteExecutionMode(node: z.infer<typeof workflowNodeSchema>): boolean {
   if (node.type === "agent.execute") {
-    return (node.config?.execution?.mode ?? "cloud") === "node";
+    return (node.config?.execution?.mode ?? "executor") === "executor";
   }
   if (node.type === "agent.run") {
-    return (node.config.execution?.mode ?? "cloud") === "node";
+    return true;
   }
   if (node.type === "connector.action") {
-    return (node.config.execution?.mode ?? "cloud") === "node";
+    return (node.config.execution?.mode ?? "cloud") === "executor";
   }
   return false;
 }

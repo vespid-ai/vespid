@@ -161,12 +161,13 @@ export function createHostBackend(): SandboxBackend {
         nodeId: ctx.nodeId,
         attemptCount: ctx.attemptCount,
       });
+      const resolvedCwd = ctx.workdirHostPath && ctx.workdirHostPath.trim().length > 0 ? ctx.workdirHostPath : cwd;
 
       const timeoutMs = ctx.timeoutMs ?? 30_000;
       const env = buildEnv(ctx);
 
       const result = await runHost({
-        cwd,
+        cwd: resolvedCwd,
         env,
         shell: ctx.shell,
         script: ctx.script,

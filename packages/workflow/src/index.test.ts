@@ -30,7 +30,7 @@ describe("workflow dsl", () => {
           config: {
             toolsetId: "00000000-0000-0000-0000-000000000000",
             llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
-            execution: { mode: "cloud" },
+            execution: { mode: "gateway" },
             prompt: { instructions: "Say hello." },
             tools: {
               allow: [],
@@ -61,7 +61,7 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
-  it("accepts agent.run with anthropic provider and node execution selector", () => {
+  it("accepts agent.run with anthropic provider and gateway execution selector", () => {
     const parsed = workflowDslSchema.parse({
       version: "v2",
       trigger: { type: "trigger.manual" },
@@ -71,7 +71,7 @@ describe("workflow dsl", () => {
           type: "agent.run",
           config: {
             llm: { provider: "anthropic", model: "claude-3-5-sonnet-latest", auth: { fallbackToEnv: true } },
-            execution: { mode: "node", selector: { tag: "west" } },
+            execution: { mode: "gateway", selector: { tag: "west" } },
             prompt: { instructions: "Say hello." },
             tools: { allow: [], execution: "cloud" },
             limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
@@ -84,28 +84,27 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
-  it("rejects external engine when execution.mode is not node", () => {
-    expect(() =>
-      workflowDslSchema.parse({
-        version: "v2",
-        trigger: { type: "trigger.manual" },
-        nodes: [
-          {
-            id: "n1",
-            type: "agent.run",
-            config: {
-              llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
-              execution: { mode: "cloud" },
-              engine: { id: "codex.sdk.v1" },
-              prompt: { instructions: "Say hello." },
-              tools: { allow: [], execution: "cloud" },
-              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
-              output: { mode: "text" },
-            },
+  it("accepts gateway codex engine with gateway execution mode", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+            execution: { mode: "gateway" },
+            engine: { id: "gateway.codex.v2" },
+            prompt: { instructions: "Say hello." },
+            tools: { allow: [], execution: "cloud" },
+            limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+            output: { mode: "text" },
           },
-        ],
-      })
-    ).toThrow();
+        },
+      ],
+    });
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
   it("accepts agent.run when tools.allow is empty", () => {
@@ -231,7 +230,7 @@ describe("workflow dsl", () => {
       graph: {
         nodes: {
           root: { id: "root", type: "http.request" },
-          a: { id: "a", type: "agent.execute", config: { execution: { mode: "node" } } },
+          a: { id: "a", type: "agent.execute", config: { execution: { mode: "executor" } } },
           b: { id: "b", type: "http.request" },
           join: { id: "join", type: "parallel.join", config: { mode: "all", failFast: true } },
         },

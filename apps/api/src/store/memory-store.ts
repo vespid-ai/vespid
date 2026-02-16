@@ -4,11 +4,13 @@ import type {
   AppStore,
   AgentToolsetRecord,
   AgentPairingTokenRecord,
+  ExecutorPairingTokenRecord,
   ConnectorSecretRecord,
   InvitationAcceptResultRecord,
   InvitationRecord,
   MembershipRecord,
   OrganizationAgentRecord,
+  OrganizationExecutorRecord,
   OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
   OrganizationRecord,
@@ -54,6 +56,7 @@ export class MemoryAppStore implements AppStore {
   private processedStripeEvents = new Set<string>();
   private orgBillingAccounts = new Map<string, { stripeCustomerId: string }>();
   private agentPairingTokensByHash = new Map<string, AgentPairingTokenRecord>();
+  private executorPairingTokensByHash = new Map<string, ExecutorPairingTokenRecord>();
   private organizationAgents = new Map<
     string,
     (OrganizationAgentRecord & {
@@ -61,6 +64,13 @@ export class MemoryAppStore implements AppStore {
     })
   >();
   private organizationAgentIdByTokenHash = new Map<string, string>();
+  private organizationExecutors = new Map<
+    string,
+    (OrganizationExecutorRecord & {
+      tokenHash: string;
+    })
+  >();
+  private organizationExecutorIdByTokenHash = new Map<string, string>();
   private toolsets = new Map<string, AgentToolsetRecord>();
   private toolsetBuilderSessions = new Map<string, ToolsetBuilderSessionRecord>();
   private toolsetBuilderTurnsBySessionId = new Map<string, ToolsetBuilderTurnRecord[]>();
@@ -1239,6 +1249,141 @@ export class MemoryAppStore implements AppStore {
     }
     const updated = { ...existing, revokedAt: nowIso() };
     this.organizationAgents.set(updated.id, updated);
+    return true;
+  }
+
+  async createExecutorPairingToken(input: {
+    organizationId: string;
+    actorUserId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<ExecutorPairingTokenRecord> {
+    const token: ExecutorPairingTokenRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt.toISOString(),
+      usedAt: null,
+      createdByUserId: input.actorUserId,
+      createdAt: nowIso(),
+    };
+    this.executorPairingTokensByHash.set(token.tokenHash, token);
+    return token;
+  }
+
+  async getExecutorPairingTokenByHash(input: {
+    organizationId: string;
+    actorUserId?: string;
+    tokenHash: string;
+  }): Promise<ExecutorPairingTokenRecord | null> {
+    const token = this.executorPairingTokensByHash.get(input.tokenHash);
+    if (!token || token.organizationId !== input.organizationId) {
+      return null;
+    }
+    return token;
+  }
+
+  async consumeExecutorPairingToken(input: {
+    organizationId: string;
+    tokenHash: string;
+  }): Promise<ExecutorPairingTokenRecord | null> {
+    const token = this.executorPairingTokensByHash.get(input.tokenHash);
+    if (!token || token.organizationId !== input.organizationId) {
+      return null;
+    }
+    if (token.usedAt) {
+      return null;
+    }
+    if (new Date(token.expiresAt).getTime() <= Date.now()) {
+      return null;
+    }
+    const updated: ExecutorPairingTokenRecord = { ...token, usedAt: nowIso() };
+    this.executorPairingTokensByHash.set(updated.tokenHash, updated);
+    return updated;
+  }
+
+  async createOrganizationExecutor(input: {
+    organizationId: string;
+    name: string;
+    tokenHash: string;
+    createdByUserId: string;
+    capabilities?: unknown;
+  }): Promise<OrganizationExecutorRecord> {
+    const executorId = crypto.randomUUID();
+    const executor: OrganizationExecutorRecord = {
+      id: executorId,
+      organizationId: input.organizationId,
+      name: input.name,
+      revokedAt: null,
+      lastSeenAt: null,
+      capabilities: input.capabilities ?? null,
+      labels: [],
+      createdByUserId: input.createdByUserId,
+      createdAt: nowIso(),
+    };
+    this.organizationExecutors.set(executor.id, { ...executor, tokenHash: input.tokenHash });
+    this.organizationExecutorIdByTokenHash.set(input.tokenHash, executor.id);
+    return executor;
+  }
+
+  async listOrganizationExecutors(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<OrganizationExecutorRecord[]> {
+    return [...this.organizationExecutors.values()]
+      .filter((executor) => executor.organizationId === input.organizationId)
+      .map((executor) => ({
+        id: executor.id,
+        organizationId: executor.organizationId,
+        name: executor.name,
+        revokedAt: executor.revokedAt,
+        lastSeenAt: executor.lastSeenAt,
+        capabilities: executor.capabilities,
+        labels: executor.labels ?? [],
+        createdByUserId: executor.createdByUserId,
+        createdAt: executor.createdAt,
+      }));
+  }
+
+  async setOrganizationExecutorLabels(input: {
+    organizationId: string;
+    actorUserId: string;
+    executorId: string;
+    labels: string[];
+  }): Promise<OrganizationExecutorRecord | null> {
+    const existing = this.organizationExecutors.get(input.executorId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return null;
+    }
+    const updated: OrganizationExecutorRecord = {
+      id: existing.id,
+      organizationId: existing.organizationId,
+      name: existing.name,
+      revokedAt: existing.revokedAt,
+      lastSeenAt: existing.lastSeenAt,
+      capabilities: existing.capabilities,
+      labels: input.labels,
+      createdByUserId: existing.createdByUserId,
+      createdAt: existing.createdAt,
+    };
+    this.organizationExecutors.set(updated.id, { ...updated, tokenHash: (existing as any).tokenHash });
+    return updated;
+  }
+
+  async revokeOrganizationExecutor(input: {
+    organizationId: string;
+    actorUserId: string;
+    executorId: string;
+  }): Promise<boolean> {
+    const existing = this.organizationExecutors.get(input.executorId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return false;
+    }
+    if (existing.revokedAt) {
+      return true;
+    }
+    const updated = { ...existing, revokedAt: nowIso() };
+    this.organizationExecutors.set(updated.id, updated);
     return true;
   }
 

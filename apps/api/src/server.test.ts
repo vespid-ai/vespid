@@ -329,18 +329,23 @@ describe("api hardening foundation", () => {
 
     const pairAgent = await server.inject({
       method: "POST",
-      url: "/v1/agents/pair",
+      url: "/v1/executors/pair",
       payload: {
         pairingToken: pairingBody.token,
-        name: "test-agent",
+        name: "test-executor",
         agentVersion: "0.0.0-test",
         capabilities: { kinds: ["connector.action", "agent.execute"] },
       },
     });
     expect(pairAgent.statusCode).toBe(201);
-    const pairAgentBody = pairAgent.json() as { agentId: string; agentToken: string; organizationId: string; gatewayWsUrl: string };
+    const pairAgentBody = pairAgent.json() as {
+      executorId: string;
+      executorToken: string;
+      organizationId: string;
+      gatewayWsUrl: string;
+    };
     expect(pairAgentBody.organizationId).toBe(orgId);
-    expect(pairAgentBody.agentToken).toContain(`${orgId}.`);
+    expect(pairAgentBody.executorToken).toContain(`${orgId}.`);
     expect(pairAgentBody.gatewayWsUrl.length).toBeGreaterThan(5);
 
     const listAgents = await server.inject({
@@ -352,12 +357,12 @@ describe("api hardening foundation", () => {
       },
     });
     expect(listAgents.statusCode).toBe(200);
-    const listBody = listAgents.json() as { agents: Array<{ id: string; status: string }> };
-    expect(listBody.agents.some((agent) => agent.id === pairAgentBody.agentId)).toBe(true);
+    const listBody = listAgents.json() as { executors: Array<{ id: string; status: string }> };
+    expect(listBody.executors.some((executor) => executor.id === pairAgentBody.executorId)).toBe(true);
 
     const revoke = await server.inject({
       method: "POST",
-      url: `/v1/orgs/${orgId}/agents/${pairAgentBody.agentId}/revoke`,
+      url: `/v1/orgs/${orgId}/agents/${pairAgentBody.executorId}/revoke`,
       headers: {
         authorization: `Bearer ${ownerToken}`,
         "x-org-id": orgId,
@@ -368,10 +373,10 @@ describe("api hardening foundation", () => {
 
     const pairingReuse = await server.inject({
       method: "POST",
-      url: "/v1/agents/pair",
+      url: "/v1/executors/pair",
       payload: {
         pairingToken: pairingBody.token,
-        name: "reuse-agent",
+        name: "reuse-executor",
         agentVersion: "0.0.0-test",
         capabilities: { kinds: ["connector.action", "agent.execute"] },
       },
@@ -1364,7 +1369,7 @@ describe("api hardening foundation", () => {
           graph: {
             nodes: {
               root: { id: "root", type: "http.request" },
-              a: { id: "a", type: "agent.execute", config: { execution: { mode: "node" } } },
+              a: { id: "a", type: "agent.execute", config: { execution: { mode: "executor" } } },
               b: { id: "b", type: "http.request" },
               join: { id: "join", type: "parallel.join", config: { mode: "all", failFast: true } },
             },

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AgentToolDefinition, AgentToolExecuteResult } from "./types.js";
-import { runAgentLoop, type AgentTeamMeta } from "@vespid/agent-runtime";
+import { runAgentLoop, type AgentTeamMeta } from "../agent-loop.js";
 
 const teamDelegateArgsSchema = z.object({
   teammateId: z.string().min(1).max(64),

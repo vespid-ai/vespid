@@ -31,7 +31,7 @@ export default function SessionsPage() {
   const toolsets = toolsetsQuery.data?.toolsets ?? [];
 
   const [title, setTitle] = useState("Personal session");
-  const [engineId, setEngineId] = useState<"vespid.loop.v1" | "codex.sdk.v1">("vespid.loop.v1");
+  const [engineId, setEngineId] = useState<"gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2">("gateway.loop.v2");
   const [toolsetId, setToolsetId] = useState<string>("");
   const [selectorTag, setSelectorTag] = useState<string>("");
 
@@ -120,19 +120,27 @@ export default function SessionsPage() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  variant={engineId === "vespid.loop.v1" ? "accent" : "outline"}
-                  onClick={() => setEngineId("vespid.loop.v1")}
+                  variant={engineId === "gateway.loop.v2" ? "accent" : "outline"}
+                  onClick={() => setEngineId("gateway.loop.v2")}
                   disabled={!canOperate}
                 >
-                  vespid.loop.v1
+                  gateway.loop.v2
                 </Button>
                 <Button
                   size="sm"
-                  variant={engineId === "codex.sdk.v1" ? "accent" : "outline"}
-                  onClick={() => setEngineId("codex.sdk.v1")}
+                  variant={engineId === "gateway.codex.v2" ? "accent" : "outline"}
+                  onClick={() => setEngineId("gateway.codex.v2")}
                   disabled={!canOperate}
                 >
-                  codex.sdk.v1
+                  gateway.codex.v2
+                </Button>
+                <Button
+                  size="sm"
+                  variant={engineId === "gateway.claude.v2" ? "accent" : "outline"}
+                  onClick={() => setEngineId("gateway.claude.v2")}
+                  disabled={!canOperate}
+                >
+                  gateway.claude.v2
                 </Button>
               </div>
               <div className="text-xs text-muted">{t("sessions.engineHint")}</div>
@@ -149,7 +157,7 @@ export default function SessionsPage() {
                   size="sm"
                   variant={provider === "openai" ? "accent" : "outline"}
                   onClick={() => setProvider("openai")}
-                  disabled={!canOperate || engineId === "codex.sdk.v1"}
+                  disabled={!canOperate || engineId === "gateway.codex.v2" || engineId === "gateway.claude.v2"}
                 >
                   OpenAI
                 </Button>
@@ -157,12 +165,12 @@ export default function SessionsPage() {
                   size="sm"
                   variant={provider === "anthropic" ? "accent" : "outline"}
                   onClick={() => setProvider("anthropic")}
-                  disabled={!canOperate || engineId === "codex.sdk.v1"}
+                  disabled={!canOperate || engineId === "gateway.codex.v2" || engineId === "gateway.claude.v2"}
                 >
                   Anthropic
                 </Button>
               </div>
-              {engineId === "codex.sdk.v1" ? (
+              {engineId === "gateway.codex.v2" || engineId === "gateway.claude.v2" ? (
                 <div className="text-xs text-muted">{t("sessions.codexProviderHint")}</div>
               ) : null}
             </div>
@@ -253,7 +261,12 @@ export default function SessionsPage() {
                     engineId,
                     ...(toolsetId.trim().length > 0 ? { toolsetId: toolsetId.trim() } : {}),
                     llm: {
-                      provider: engineId === "codex.sdk.v1" ? "openai" : provider,
+                      provider:
+                        engineId === "gateway.codex.v2"
+                          ? "openai"
+                          : engineId === "gateway.claude.v2"
+                            ? "anthropic"
+                            : provider,
                       model: model.trim(),
                     },
                     prompt: {

@@ -8,10 +8,14 @@ import {
   agentSessions,
   agentToolsets,
   connectorSecrets,
+  executionWorkspaces,
+  executorPairingTokens,
+  managedExecutors,
   organizationBillingAccounts,
   organizationCreditBalances,
   organizationCreditLedger,
   organizationAgents,
+  organizationExecutors,
   memberships,
   organizationInvitations,
   organizations,
@@ -1460,6 +1464,220 @@ export async function consumeAgentPairingToken(
   return row ?? null;
 }
 
+export async function createExecutionWorkspace(
+  db: Db,
+  input: {
+    id?: string;
+    organizationId: string;
+    ownerType: "session" | "workflow_run" | "adhoc";
+    ownerId: string;
+    currentVersion?: number;
+    currentObjectKey: string;
+    currentEtag?: string | null;
+  }
+) {
+  const [row] = await db
+    .insert(executionWorkspaces)
+    .values({
+      id: input.id,
+      organizationId: input.organizationId,
+      ownerType: input.ownerType,
+      ownerId: input.ownerId,
+      currentVersion: input.currentVersion ?? 0,
+      currentObjectKey: input.currentObjectKey,
+      currentEtag: input.currentEtag ?? null,
+      lockToken: null,
+      lockExpiresAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create execution workspace");
+  }
+  return row;
+}
+
+export async function getExecutionWorkspaceByOwner(
+  db: Db,
+  input: { organizationId: string; ownerType: "session" | "workflow_run" | "adhoc"; ownerId: string }
+) {
+  const [row] = await db
+    .select()
+    .from(executionWorkspaces)
+    .where(
+      and(
+        eq(executionWorkspaces.organizationId, input.organizationId),
+        eq(executionWorkspaces.ownerType, input.ownerType),
+        eq(executionWorkspaces.ownerId, input.ownerId)
+      )
+    );
+  return row ?? null;
+}
+
+export async function tryLockExecutionWorkspace(
+  db: Db,
+  input: { organizationId: string; workspaceId: string; lockToken: string; lockTtlSec: number }
+) {
+  const expiresAt = new Date(Date.now() + Math.max(1, input.lockTtlSec) * 1000);
+  const [row] = await db
+    .update(executionWorkspaces)
+    .set({ lockToken: input.lockToken, lockExpiresAt: expiresAt, updatedAt: new Date() })
+    .where(
+      and(
+        eq(executionWorkspaces.organizationId, input.organizationId),
+        eq(executionWorkspaces.id, input.workspaceId),
+        or(isNull(executionWorkspaces.lockExpiresAt), lt(executionWorkspaces.lockExpiresAt, sql`now()`))
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function commitExecutionWorkspaceVersion(
+  db: Db,
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    expectedCurrentVersion: number;
+    nextObjectKey: string;
+    nextEtag?: string | null;
+  }
+) {
+  const [row] = await db
+    .update(executionWorkspaces)
+    .set({
+      currentVersion: input.expectedCurrentVersion + 1,
+      currentObjectKey: input.nextObjectKey,
+      currentEtag: input.nextEtag ?? null,
+      lockToken: null,
+      lockExpiresAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(executionWorkspaces.organizationId, input.organizationId),
+        eq(executionWorkspaces.id, input.workspaceId),
+        eq(executionWorkspaces.currentVersion, input.expectedCurrentVersion)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function createExecutorPairingToken(
+  db: Db,
+  input: { organizationId: string; tokenHash: string; expiresAt: Date; createdByUserId: string }
+) {
+  const [row] = await db
+    .insert(executorPairingTokens)
+    .values({
+      organizationId: input.organizationId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt,
+      createdByUserId: input.createdByUserId,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create executor pairing token");
+  }
+  return row;
+}
+
+export async function getExecutorPairingTokenByHash(db: Db, input: { organizationId: string; tokenHash: string }) {
+  const [row] = await db
+    .select()
+    .from(executorPairingTokens)
+    .where(
+      and(eq(executorPairingTokens.organizationId, input.organizationId), eq(executorPairingTokens.tokenHash, input.tokenHash))
+    );
+  return row ?? null;
+}
+
+export async function consumeExecutorPairingToken(db: Db, input: { organizationId: string; tokenHash: string }) {
+  const [row] = await db
+    .update(executorPairingTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(executorPairingTokens.organizationId, input.organizationId),
+        eq(executorPairingTokens.tokenHash, input.tokenHash),
+        isNull(executorPairingTokens.usedAt),
+        gt(executorPairingTokens.expiresAt, sql`now()`)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function createOrganizationExecutor(
+  db: Db,
+  input: { id?: string; organizationId: string; name: string; tokenHash: string; createdByUserId: string; capabilities?: unknown }
+) {
+  const [row] = await db
+    .insert(organizationExecutors)
+    .values({
+      id: input.id,
+      organizationId: input.organizationId,
+      name: input.name,
+      tokenHash: input.tokenHash,
+      revokedAt: null,
+      lastSeenAt: new Date(),
+      capabilities: (input.capabilities ?? null) as any,
+      labels: [],
+      createdByUserId: input.createdByUserId,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create organization executor");
+  }
+  return row;
+}
+
+export async function getOrganizationExecutorByTokenHash(db: Db, input: { organizationId: string; tokenHash: string }) {
+  const [row] = await db
+    .select()
+    .from(organizationExecutors)
+    .where(and(eq(organizationExecutors.organizationId, input.organizationId), eq(organizationExecutors.tokenHash, input.tokenHash)));
+  return row ?? null;
+}
+
+export async function listOrganizationExecutors(db: Db, input: { organizationId: string }) {
+  const rows = await db
+    .select()
+    .from(organizationExecutors)
+    .where(eq(organizationExecutors.organizationId, input.organizationId))
+    .orderBy(desc(organizationExecutors.createdAt));
+  return rows;
+}
+
+export async function setOrganizationExecutorLabels(db: Db, input: { organizationId: string; executorId: string; labels: string[] }) {
+  const [row] = await db
+    .update(organizationExecutors)
+    .set({ labels: input.labels })
+    .where(and(eq(organizationExecutors.organizationId, input.organizationId), eq(organizationExecutors.id, input.executorId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function touchOrganizationExecutorLastSeen(db: Db, input: { organizationId: string; executorId: string }) {
+  const [row] = await db
+    .update(organizationExecutors)
+    .set({ lastSeenAt: new Date() })
+    .where(and(eq(organizationExecutors.organizationId, input.organizationId), eq(organizationExecutors.id, input.executorId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function revokeOrganizationExecutor(db: Db, input: { organizationId: string; executorId: string }) {
+  const [row] = await db
+    .update(organizationExecutors)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(organizationExecutors.organizationId, input.organizationId), eq(organizationExecutors.id, input.executorId)))
+    .returning();
+  return row ?? null;
+}
+
 export async function createOrganizationAgent(
   db: Db,
   input: {
@@ -1957,6 +2175,30 @@ export async function touchAgentSessionActivity(db: Db, input: { organizationId:
   const [row] = await db
     .update(agentSessions)
     .set({ lastActivityAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function setAgentSessionRuntime(
+  db: Db,
+  input: { organizationId: string; sessionId: string; runtime: unknown }
+) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ runtime: input.runtime as any, updatedAt: new Date() })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function setAgentSessionWorkspaceId(
+  db: Db,
+  input: { organizationId: string; sessionId: string; workspaceId: string | null }
+) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ workspaceId: input.workspaceId, updatedAt: new Date() })
     .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
     .returning();
   return row ?? null;

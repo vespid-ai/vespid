@@ -136,6 +136,18 @@ export type OrganizationAgentRecord = {
   createdAt: string;
 };
 
+export type OrganizationExecutorRecord = {
+  id: string;
+  organizationId: string;
+  name: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+  capabilities: unknown;
+  labels: string[];
+  createdByUserId: string;
+  createdAt: string;
+};
+
 export type UserOrgSummaryRecord = {
   organization: OrganizationRecord;
   membership: MembershipRecord;
@@ -160,6 +172,16 @@ export type OrganizationCreditLedgerEntryRecord = {
 };
 
 export type AgentPairingTokenRecord = {
+  id: string;
+  organizationId: string;
+  tokenHash: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdByUserId: string;
+  createdAt: string;
+};
+
+export type ExecutorPairingTokenRecord = {
   id: string;
   organizationId: string;
   tokenHash: string;
@@ -513,6 +535,38 @@ export interface AppStore {
     organizationId: string;
     actorUserId: string;
     agentId: string;
+  }): Promise<boolean>;
+
+  createExecutorPairingToken(input: {
+    organizationId: string;
+    actorUserId: string;
+    tokenHash: string;
+    expiresAt: Date;
+  }): Promise<ExecutorPairingTokenRecord>;
+  getExecutorPairingTokenByHash(input: {
+    organizationId: string;
+    actorUserId?: string;
+    tokenHash: string;
+  }): Promise<ExecutorPairingTokenRecord | null>;
+  consumeExecutorPairingToken(input: { organizationId: string; tokenHash: string }): Promise<ExecutorPairingTokenRecord | null>;
+  createOrganizationExecutor(input: {
+    organizationId: string;
+    name: string;
+    tokenHash: string;
+    createdByUserId: string;
+    capabilities?: unknown;
+  }): Promise<OrganizationExecutorRecord>;
+  listOrganizationExecutors(input: { organizationId: string; actorUserId: string }): Promise<OrganizationExecutorRecord[]>;
+  setOrganizationExecutorLabels(input: {
+    organizationId: string;
+    actorUserId: string;
+    executorId: string;
+    labels: string[];
+  }): Promise<OrganizationExecutorRecord | null>;
+  revokeOrganizationExecutor(input: {
+    organizationId: string;
+    actorUserId: string;
+    executorId: string;
   }): Promise<boolean>;
 
   listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }): Promise<AgentToolsetRecord[]>;

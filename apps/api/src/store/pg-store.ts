@@ -31,6 +31,13 @@ import {
   listOrganizationAgents as dbListOrganizationAgents,
   setOrganizationAgentTags as dbSetOrganizationAgentTags,
   revokeOrganizationAgent as dbRevokeOrganizationAgent,
+  createExecutorPairingToken as dbCreateExecutorPairingToken,
+  getExecutorPairingTokenByHash as dbGetExecutorPairingTokenByHash,
+  consumeExecutorPairingToken as dbConsumeExecutorPairingToken,
+  createOrganizationExecutor as dbCreateOrganizationExecutor,
+  listOrganizationExecutors as dbListOrganizationExecutors,
+  setOrganizationExecutorLabels as dbSetOrganizationExecutorLabels,
+  revokeOrganizationExecutor as dbRevokeOrganizationExecutor,
   createAgentToolset as dbCreateAgentToolset,
   listAgentToolsetsByOrg as dbListAgentToolsetsByOrg,
   getAgentToolsetById as dbGetAgentToolsetById,
@@ -87,8 +94,10 @@ import type {
   AgentSessionRecord,
   AgentToolsetRecord,
   AppStore,
+  ExecutorPairingTokenRecord,
   OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
+  OrganizationExecutorRecord,
   OrganizationSettings,
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
@@ -1603,6 +1612,140 @@ export class PgAppStore implements AppStore {
     const row = await this.withOrgContext(
       { userId: input.actorUserId, organizationId: input.organizationId },
       async (db) => dbRevokeOrganizationAgent(db, { organizationId: input.organizationId, agentId: input.agentId })
+    );
+    return Boolean(row);
+  }
+
+  async createExecutorPairingToken(input: { organizationId: string; actorUserId: string; tokenHash: string; expiresAt: Date }): Promise<ExecutorPairingTokenRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateExecutorPairingToken(db, {
+          organizationId: input.organizationId,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt,
+          createdByUserId: input.actorUserId,
+        })
+    );
+
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      tokenHash: row.tokenHash,
+      expiresAt: toIso(row.expiresAt),
+      usedAt: row.usedAt ? toIso(row.usedAt) : null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async getExecutorPairingTokenByHash(input: { organizationId: string; actorUserId?: string; tokenHash: string }): Promise<ExecutorPairingTokenRecord | null> {
+    const row = await this.withOrgContext(
+      input.actorUserId
+        ? { userId: input.actorUserId, organizationId: input.organizationId }
+        : { organizationId: input.organizationId },
+      async (db) => dbGetExecutorPairingTokenByHash(db, { organizationId: input.organizationId, tokenHash: input.tokenHash })
+    );
+    if (!row) return null;
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      tokenHash: row.tokenHash,
+      expiresAt: toIso(row.expiresAt),
+      usedAt: row.usedAt ? toIso(row.usedAt) : null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async consumeExecutorPairingToken(input: { organizationId: string; tokenHash: string }): Promise<ExecutorPairingTokenRecord | null> {
+    const row = await this.withOrgContext(
+      { organizationId: input.organizationId },
+      async (db) => dbConsumeExecutorPairingToken(db, { organizationId: input.organizationId, tokenHash: input.tokenHash })
+    );
+    if (!row) return null;
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      tokenHash: row.tokenHash,
+      expiresAt: toIso(row.expiresAt),
+      usedAt: row.usedAt ? toIso(row.usedAt) : null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async createOrganizationExecutor(input: { organizationId: string; name: string; tokenHash: string; createdByUserId: string; capabilities?: unknown }): Promise<OrganizationExecutorRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.createdByUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateOrganizationExecutor(db, {
+          organizationId: input.organizationId,
+          name: input.name,
+          tokenHash: input.tokenHash,
+          createdByUserId: input.createdByUserId,
+          capabilities: input.capabilities ?? null,
+        })
+    );
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      capabilities: row.capabilities,
+      labels: (row.labels ?? []) as any,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listOrganizationExecutors(input: { organizationId: string; actorUserId: string }): Promise<OrganizationExecutorRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbListOrganizationExecutors(db, { organizationId: input.organizationId })
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      capabilities: row.capabilities,
+      labels: (row.labels ?? []) as any,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    }));
+  }
+
+  async setOrganizationExecutorLabels(input: { organizationId: string; actorUserId: string; executorId: string; labels: string[] }): Promise<OrganizationExecutorRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbSetOrganizationExecutorLabels(db, {
+          organizationId: input.organizationId,
+          executorId: input.executorId,
+          labels: input.labels,
+        })
+    );
+    if (!row) return null;
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      capabilities: row.capabilities,
+      labels: (row.labels ?? []) as any,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async revokeOrganizationExecutor(input: { organizationId: string; actorUserId: string; executorId: string }): Promise<boolean> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbRevokeOrganizationExecutor(db, { organizationId: input.organizationId, executorId: input.executorId })
     );
     return Boolean(row);
   }

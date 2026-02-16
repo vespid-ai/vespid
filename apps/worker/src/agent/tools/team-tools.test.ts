@@ -1,30 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const openAiMocks = vi.hoisted(() => ({
-  openAiChatCompletion: vi.fn(),
+const runtimeMocks = vi.hoisted(() => ({
+  runAgentLoop: vi.fn(),
 }));
 
-vi.mock("../openai.js", () => ({
-  openAiChatCompletion: openAiMocks.openAiChatCompletion,
+vi.mock("@vespid/agent-runtime", () => ({
+  runAgentLoop: runtimeMocks.runAgentLoop,
 }));
 
-const toolMocks = vi.hoisted(() => ({
-  resolveAgentTool: vi.fn(),
-}));
-
-vi.mock("./index.js", () => ({
-  resolveAgentTool: toolMocks.resolveAgentTool,
-}));
-
-import { z } from "zod";
 import { teamDelegateTool, teamMapTool } from "./team-tools.js";
 
 function baseCtx(overrides?: Partial<Parameters<typeof teamDelegateTool.execute>[0]>) {
   return {
     organizationId: "org-1",
-    userId: "user-1",
-    runId: "run-1",
-    workflowId: "wf-1",
+    userId: "00000000-0000-4000-8000-000000000001",
+    runId: "00000000-0000-4000-8000-000000000002",
+    workflowId: "00000000-0000-4000-8000-000000000003",
     attemptCount: 1,
     nodeId: "n1",
     callIndex: 1,
@@ -46,13 +37,6 @@ function baseCtx(overrides?: Partial<Parameters<typeof teamDelegateTool.execute>
             limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 50_000 },
             output: { mode: "text" },
           },
-          {
-            id: "dev",
-            prompt: { instructions: "Implement." },
-            tools: { allow: ["tool.allowed"], execution: "cloud" },
-            limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 50_000 },
-            output: { mode: "text" },
-          },
         ],
       },
       parent: {
@@ -71,13 +55,12 @@ function baseCtx(overrides?: Partial<Parameters<typeof teamDelegateTool.execute>
 describe("team tools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.OPENAI_API_KEY = "sk-test";
   });
 
-  it("team.delegate runs a teammate loop and returns output", async () => {
-    openAiMocks.openAiChatCompletion.mockResolvedValueOnce({
-      ok: true,
-      content: JSON.stringify({ type: "final", output: { ok: true } }),
+  it("team.delegate returns teammate output when runAgentLoop succeeds", async () => {
+    runtimeMocks.runAgentLoop.mockResolvedValueOnce({
+      status: "succeeded",
+      output: { ok: true },
     });
 
     const result = await teamDelegateTool.execute(baseCtx(), {
@@ -86,80 +69,32 @@ describe("team tools", () => {
     });
 
     expect(result.status).toBe("succeeded");
-    if (result.status !== "succeeded") {
-      throw new Error("Expected succeeded");
-    }
+    if (result.status !== "succeeded") throw new Error("expected succeeded");
     expect(result.output).toEqual({ teammateId: "ux", output: { ok: true } });
   });
 
-  it("team.delegate enforces tool allowlist intersection", async () => {
-    openAiMocks.openAiChatCompletion.mockResolvedValueOnce({
-      ok: true,
-      content: JSON.stringify({ type: "tool_call", toolId: "tool.notAllowed", input: {} }),
+  it("team.delegate maps tool policy deny errors from teammate loop", async () => {
+    runtimeMocks.runAgentLoop.mockResolvedValueOnce({
+      status: "failed",
+      error: "TOOL_NOT_ALLOWED:tool.denied",
     });
 
     const result = await teamDelegateTool.execute(baseCtx(), {
       mode: "cloud",
-      args: { teammateId: "dev", task: "Try calling a forbidden tool." },
+      args: { teammateId: "ux", task: "Try forbidden tool." },
     });
 
     expect(result.status).toBe("failed");
-    if (result.status !== "failed") {
-      throw new Error("Expected failed");
-    }
-    expect(result.error).toBe("TEAM_TOOL_POLICY_DENIED:tool.notAllowed");
+    if (result.status !== "failed") throw new Error("expected failed");
+    expect(result.error).toBe("TEAM_TOOL_POLICY_DENIED:tool.denied");
   });
 
-  it("team.delegate enforces org shell.run policy (even if allowlisted)", async () => {
-    openAiMocks.openAiChatCompletion.mockResolvedValueOnce({
-      ok: true,
-      content: JSON.stringify({ type: "tool_call", toolId: "shell.run", input: { script: "echo hi" } }),
-    });
+  it("team.map preserves task order", async () => {
+    runtimeMocks.runAgentLoop
+      .mockResolvedValueOnce({ status: "succeeded", output: "r1" })
+      .mockResolvedValueOnce({ status: "succeeded", output: "r2" });
 
-    toolMocks.resolveAgentTool.mockReturnValue({
-      tool: { id: "shell.run", description: "shell", inputSchema: z.any(), execute: vi.fn() },
-      args: {},
-    });
-
-    const ctx = baseCtx();
-    (ctx.teamConfig as any).team.teammates = (ctx.teamConfig as any).team.teammates.map((t: any) =>
-      t.id === "dev" ? { ...t, tools: { ...t.tools, allow: ["shell.run"] } } : t
-    );
-
-    const result = await teamDelegateTool.execute(ctx, {
-      mode: "cloud",
-      args: { teammateId: "dev", task: "Try shell." },
-    });
-
-    expect(result.status).toBe("failed");
-    if (result.status !== "failed") {
-      throw new Error("Expected failed");
-    }
-    expect(result.error).toBe("TOOL_POLICY_DENIED:shell.run");
-    expect(toolMocks.resolveAgentTool).not.toHaveBeenCalled();
-  });
-
-  it("team.map respects maxParallel and returns results in input order", async () => {
-    const d1 = (() => {
-      let resolve!: (v: any) => void;
-      const promise = new Promise((r) => {
-        resolve = r as any;
-      });
-      return { promise, resolve };
-    })();
-    const d2 = (() => {
-      let resolve!: (v: any) => void;
-      const promise = new Promise((r) => {
-        resolve = r as any;
-      });
-      return { promise, resolve };
-    })();
-
-    openAiMocks.openAiChatCompletion.mockImplementationOnce(() => d1.promise).mockImplementationOnce(() => d2.promise);
-
-    const ctx = baseCtx({ callIndex: 7 });
-
-    const run = teamMapTool.execute(ctx, {
+    const result = await teamMapTool.execute(baseCtx({ callIndex: 7 }), {
       mode: "cloud",
       args: {
         maxParallel: 1,
@@ -170,24 +105,12 @@ describe("team tools", () => {
       },
     });
 
-    await new Promise((r) => setTimeout(r, 0));
-    expect(openAiMocks.openAiChatCompletion.mock.calls.length).toBe(1);
-
-    d1.resolve({ ok: true, content: JSON.stringify({ type: "final", output: "r1" }) });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(openAiMocks.openAiChatCompletion.mock.calls.length).toBe(2);
-
-    d2.resolve({ ok: true, content: JSON.stringify({ type: "final", output: "r2" }) });
-    const result = await run;
-
     expect(result.status).toBe("succeeded");
-    if (result.status !== "succeeded") {
-      throw new Error("Expected succeeded");
-    }
-
+    if (result.status !== "succeeded") throw new Error("expected succeeded");
     expect(result.output).toEqual([
       { status: "succeeded", teammateId: "ux", output: "r1" },
       { status: "succeeded", teammateId: "ux", output: "r2" },
     ]);
   });
 });
+

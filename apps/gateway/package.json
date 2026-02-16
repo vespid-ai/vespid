@@ -15,8 +15,11 @@
     "test": "vitest run --exclude 'dist/**' --passWithNoTests"
   },
   "dependencies": {
+    "@vespid/agent-runtime": "workspace:*",
     "@vespid/db": "workspace:*",
     "@vespid/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.883.0",
+    "@aws-sdk/s3-request-presigner": "^3.883.0",
     "bullmq": "^5.69.1",
     "fastify": "^5.6.1",
     "ioredis": "^5.9.3",

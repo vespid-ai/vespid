@@ -1,6 +1,5 @@
 import type { WorkflowNodeExecutor } from "@vespid/shared";
 import { z } from "zod";
-import { runAgentLoop } from "./agent-loop.js";
 
 const agentRunTeamTeammateSchema = z.object({
   id: z.string().min(1).max(64),
@@ -61,7 +60,7 @@ const agentRunNodeSchema = z.object({
     }),
     execution: z
       .object({
-        mode: z.enum(["cloud", "node"]).default("cloud"),
+        mode: z.literal("gateway").default("gateway"),
         selector: z
           .union([
             z.object({ tag: z.string().min(1).max(64) }),
@@ -70,10 +69,10 @@ const agentRunNodeSchema = z.object({
           ])
           .optional(),
       })
-      .default({ mode: "cloud" }),
+      .default({ mode: "gateway" }),
     engine: z
       .object({
-        id: z.enum(["vespid.loop.v1", "claude.agent-sdk.v1", "codex.sdk.v1"]).default("vespid.loop.v1"),
+        id: z.enum(["gateway.loop.v2", "gateway.claude.v2", "gateway.codex.v2"]).default("gateway.loop.v2"),
       })
       .optional(),
     prompt: z.object({
@@ -83,7 +82,7 @@ const agentRunNodeSchema = z.object({
     }),
     tools: z.object({
       allow: z.array(z.string().min(1).max(120)),
-      execution: z.enum(["cloud", "node"]).default("cloud"),
+      execution: z.enum(["cloud", "executor"]).default("cloud"),
       authDefaults: z
         .object({
           connectors: z.record(z.string().min(1).max(80), z.object({ secretId: z.string().uuid() })).optional(),
@@ -115,21 +114,6 @@ function unique(items: string[]): string[] {
     }
   }
   return out;
-}
-
-function normalizeLlmAuth(auth: { secretId?: string | undefined; fallbackToEnv?: true | undefined }) {
-  return {
-    ...(auth.secretId ? { secretId: auth.secretId } : {}),
-    ...(auth.fallbackToEnv ? { fallbackToEnv: true as const } : {}),
-  };
-}
-
-function normalizePrompt(prompt: { system?: string | undefined; instructions: string; inputTemplate?: string | undefined }) {
-  return {
-    ...(prompt.system ? { system: prompt.system } : {}),
-    instructions: prompt.instructions,
-    ...(prompt.inputTemplate ? { inputTemplate: prompt.inputTemplate } : {}),
-  };
 }
 
 function parseDefaultToolsetId(settings: unknown): string | null {
@@ -168,8 +152,6 @@ export function createAgentRunExecutor(input: {
   } | null>;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor {
-  const fetchImpl = input.fetchImpl ?? fetch;
-
   return {
     nodeType: "agent.run",
     async execute(context) {
@@ -181,215 +163,89 @@ export function createAgentRunExecutor(input: {
       const node = nodeParsed.data;
       const team = node.config.team ?? null;
       const policyToolAllow = node.config.tools.allow ?? [];
-      const toolAuthDefaults = node.config.tools.authDefaults?.connectors
-        ? { connectors: node.config.tools.authDefaults.connectors }
-        : null;
-
       const leadMode = team?.leadMode ?? "normal";
-      const leadEffectiveAllow =
-        team && leadMode === "delegate_only" ? ["team.delegate", "team.map"] : policyToolAllow;
-
+      const leadEffectiveAllow = team && leadMode === "delegate_only" ? ["team.delegate", "team.map"] : policyToolAllow;
       const effectiveAllow = team ? unique([...leadEffectiveAllow, "team.delegate", "team.map"]) : unique(leadEffectiveAllow);
 
-      const execution = node.config.execution ?? { mode: "cloud" as const };
-      const engineId = node.config.engine?.id ?? "vespid.loop.v1";
+      const selector = node.config.execution.selector ?? null;
+      const timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, node.config.limits.timeoutMs));
 
-      if (engineId !== "vespid.loop.v1" && execution.mode !== "node") {
-        return { status: "failed", error: "AGENT_ENGINE_REQUIRES_NODE_EXECUTION" };
-      }
-
-      if (execution.mode === "node") {
-        const githubApiBaseUrl = input.getGithubApiBaseUrl();
-        // Resume path: the continuation worker stores the remote result under runtime.pendingRemoteResult.
-        if (context.pendingRemoteResult) {
-          const pending = context.pendingRemoteResult as any;
-          const remote = pending && typeof pending === "object" && "result" in pending ? (pending as any).result : pending;
-          if (remote && typeof remote === "object" && (remote as any).status === "succeeded") {
-            return {
-              status: "succeeded",
-              output: (remote as any).output ?? null,
-              runtime:
-                context.runtime && typeof context.runtime === "object"
-                  ? { ...(context.runtime as any), pendingRemoteResult: null }
-                  : { pendingRemoteResult: null },
-            };
-          }
-          if (remote && typeof remote === "object" && (remote as any).status === "failed") {
-            return {
-              status: "failed",
-              error: (remote as any).error ?? "REMOTE_EXECUTION_FAILED",
-              runtime:
-                context.runtime && typeof context.runtime === "object"
-                  ? { ...(context.runtime as any), pendingRemoteResult: null }
-                  : { pendingRemoteResult: null },
-            };
-          }
-          return { status: "failed", error: "REMOTE_RESULT_INVALID" };
+      let toolsetPayload: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null = null;
+      const effectiveToolsetId = node.config.toolsetId ?? parseDefaultToolsetId(context.organizationSettings);
+      if (effectiveToolsetId) {
+        if (!input.loadToolsetById) {
+          return { status: "failed", error: "TOOLSET_LOADER_NOT_CONFIGURED" };
         }
-
-        const llmApiKey =
-          node.config.llm.auth.secretId
-            ? await input.loadSecretValue({
-                organizationId: context.organizationId,
-                userId: context.requestedByUserId,
-                secretId: node.config.llm.auth.secretId,
-              })
-            : null;
-
-        const connectorSecretsByConnectorId: Record<string, string> = {};
-        if (toolAuthDefaults?.connectors) {
-          for (const [connectorId, auth] of Object.entries(toolAuthDefaults.connectors)) {
-            const value = await input.loadSecretValue({
-              organizationId: context.organizationId,
-              userId: context.requestedByUserId,
-              secretId: auth.secretId,
-            });
-            if (value && value.trim().length > 0) {
-              connectorSecretsByConnectorId[connectorId] = value;
-            }
-          }
+        const loaded = await input.loadToolsetById({ organizationId: context.organizationId, toolsetId: effectiveToolsetId });
+        if (!loaded) {
+          return { status: "failed", error: "TOOLSET_NOT_FOUND" };
         }
-
-        const selector = execution.selector ?? null;
-        const timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, node.config.limits.timeoutMs));
-
-        let toolsetPayload: { id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null = null;
-        const effectiveToolsetId = node.config.toolsetId ?? parseDefaultToolsetId(context.organizationSettings);
-        if (effectiveToolsetId) {
-          if (!input.loadToolsetById) {
-            return { status: "failed", error: "TOOLSET_LOADER_NOT_CONFIGURED" };
-          }
-          const loaded = await input.loadToolsetById({ organizationId: context.organizationId, toolsetId: effectiveToolsetId });
-          if (!loaded) {
-            return { status: "failed", error: "TOOLSET_NOT_FOUND" };
-          }
-          toolsetPayload = {
-            id: loaded.id,
-            name: loaded.name,
-            mcpServers: loaded.mcpServers ?? [],
-            agentSkills: loaded.agentSkills ?? [],
-          };
-          if (context.emitEvent) {
-            await context.emitEvent({
-              eventType: "agent_toolset_applied",
-              level: "info",
-              payload: { toolsetId: loaded.id, toolsetName: loaded.name, engineId },
-            });
-          }
-        }
-
-        const nodeForRemote = {
-          ...node,
-          config: {
-            ...node.config,
-            tools: {
-              ...node.config.tools,
-              allow: effectiveAllow,
-            },
-          },
-        };
-
-        return {
-          status: "blocked",
-          block: {
-            kind: "agent.run",
-            payload: {
-              nodeId: node.id,
-              node: nodeForRemote,
-              policyToolsAllow: policyToolAllow,
-              effectiveToolsAllow: effectiveAllow,
-              runId: context.runId,
-              workflowId: context.workflowId,
-              attemptCount: context.attemptCount,
-              ...(context.runInput !== undefined ? { runInput: context.runInput } : {}),
-              ...(context.steps !== undefined ? { steps: context.steps } : {}),
-              ...(context.organizationSettings !== undefined ? { organizationSettings: context.organizationSettings } : {}),
-              ...(toolsetPayload ? { toolset: toolsetPayload } : {}),
-              env: { githubApiBaseUrl },
-              secrets: {
-                ...(llmApiKey && llmApiKey.trim().length > 0 ? { llmApiKey } : {}),
-                ...(Object.keys(connectorSecretsByConnectorId).length > 0
-                  ? { connectorSecretsByConnectorId }
-                  : {}),
-              },
-            },
-            ...(selector && typeof selector === "object" && "tag" in selector ? { selectorTag: (selector as any).tag } : {}),
-            ...(selector && typeof selector === "object" && "agentId" in selector ? { selectorAgentId: (selector as any).agentId } : {}),
-            ...(selector && typeof selector === "object" && "group" in selector ? { selectorGroup: (selector as any).group } : {}),
-            timeoutMs,
-          },
+        toolsetPayload = {
+          id: loaded.id,
+          name: loaded.name,
+          mcpServers: loaded.mcpServers ?? [],
+          agentSkills: loaded.agentSkills ?? [],
         };
       }
 
-      return await runAgentLoop({
-        organizationId: context.organizationId,
-        workflowId: context.workflowId,
-        runId: context.runId,
-        attemptCount: context.attemptCount,
-        requestedByUserId: context.requestedByUserId,
-        nodeId: node.id,
-        nodeType: "agent.run",
-        runInput: context.runInput,
-        steps: context.steps,
-        organizationSettings: context.organizationSettings,
-        runtime: context.runtime,
-        pendingRemoteResult: context.pendingRemoteResult,
-        githubApiBaseUrl: input.getGithubApiBaseUrl(),
-        loadSecretValue: input.loadSecretValue,
-        fetchImpl,
-        managedCredits:
-          !node.config.llm.auth.secretId && input.managedCredits
-            ? {
-                ensureAvailable: ({ minCredits }) =>
-                  input.managedCredits!.ensureAvailable({
-                    organizationId: context.organizationId,
-                    userId: context.requestedByUserId,
-                    minCredits,
-                  }),
-                charge: ({ credits, inputTokens, outputTokens, provider, model, turn }) =>
-                  input.managedCredits!.charge({
-                    organizationId: context.organizationId,
-                    userId: context.requestedByUserId,
-                    workflowId: context.workflowId,
-                    runId: context.runId,
-                    nodeId: node.id,
-                    attemptCount: context.attemptCount,
-                    provider,
-                    model,
-                    turn,
-                    credits,
-                    inputTokens,
-                    outputTokens,
-                  }),
-              }
-            : null,
+      const llmProvider =
+        (node.config.engine?.id ?? "gateway.loop.v2") === "gateway.codex.v2"
+          ? "openai"
+          : (node.config.engine?.id ?? "gateway.loop.v2") === "gateway.claude.v2"
+            ? "anthropic"
+            : node.config.llm.provider;
+
+      const nodeForGateway = {
+        ...node,
         config: {
-          llm: { provider: node.config.llm.provider, model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
-          prompt: normalizePrompt(node.config.prompt),
+          ...node.config,
+          llm: { ...node.config.llm, provider: llmProvider },
           tools: {
+            ...node.config.tools,
             allow: effectiveAllow,
-            execution: node.config.tools.execution,
-            ...(toolAuthDefaults ? { authDefaults: toolAuthDefaults } : {}),
           },
-          limits: node.config.limits,
-          output: node.config.output,
         },
-        persistNodeId: node.id,
-        allowRemoteBlocked: true,
-        ...(context.emitEvent ? { emitEvent: context.emitEvent } : {}),
-        ...(context.checkpointRuntime ? { checkpointRuntime: context.checkpointRuntime } : {}),
-        teamConfig: {
-          team,
-          parent: {
+      };
+
+      const connectorSecretIdsByConnectorId = node.config.tools.authDefaults?.connectors
+        ? Object.fromEntries(
+            Object.entries(node.config.tools.authDefaults.connectors)
+              .filter(([, auth]) => typeof auth?.secretId === "string" && auth.secretId.length > 0)
+              .map(([connectorId, auth]) => [connectorId, auth.secretId])
+          )
+        : {};
+
+      return {
+        status: "blocked",
+        block: {
+          kind: "agent.run",
+          payload: {
             nodeId: node.id,
-            llm: { provider: node.config.llm.provider, model: node.config.llm.model, auth: normalizeLlmAuth(node.config.llm.auth) },
-            policyToolAllow,
-            runInput: context.runInput ?? null,
-            steps: context.steps ?? [],
-            organizationSettings: context.organizationSettings ?? null,
+            node: nodeForGateway,
+            policyToolsAllow: policyToolAllow,
+            effectiveToolsAllow: effectiveAllow,
+            runId: context.runId,
+            workflowId: context.workflowId,
+            attemptCount: context.attemptCount,
+            ...(context.runInput !== undefined ? { runInput: context.runInput } : {}),
+            ...(context.steps !== undefined ? { steps: context.steps } : {}),
+            ...(context.organizationSettings !== undefined ? { organizationSettings: context.organizationSettings } : {}),
+            ...(toolsetPayload ? { toolset: toolsetPayload } : {}),
+            env: { githubApiBaseUrl: input.getGithubApiBaseUrl() },
+            secretRefs: {
+              ...(node.config.llm.auth.secretId ? { llmSecretId: node.config.llm.auth.secretId } : {}),
+              ...(Object.keys(connectorSecretIdsByConnectorId).length > 0
+                ? { connectorSecretIdsByConnectorId }
+                : {}),
+            },
           },
+          ...(selector && typeof selector === "object" && "tag" in selector ? { selectorTag: (selector as any).tag } : {}),
+          ...(selector && typeof selector === "object" && "agentId" in selector ? { selectorAgentId: (selector as any).agentId } : {}),
+          ...(selector && typeof selector === "object" && "group" in selector ? { selectorGroup: (selector as any).group } : {}),
+          timeoutMs,
         },
-      });
+      };
     },
   };
 }
+

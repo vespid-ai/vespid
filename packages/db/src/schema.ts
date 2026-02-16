@@ -255,6 +255,62 @@ export const agentPairingTokens = pgTable("agent_pairing_tokens", {
   agentPairingTokensOrgCreatedAtIdx: index("agent_pairing_tokens_org_created_at_idx").on(table.organizationId, table.createdAt),
 }));
 
+export const executionWorkspaces = pgTable("execution_workspaces", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  ownerType: text("owner_type").notNull(),
+  ownerId: uuid("owner_id").notNull(),
+  currentVersion: bigint("current_version", { mode: "number" }).notNull().default(0),
+  currentObjectKey: text("current_object_key").notNull(),
+  currentEtag: text("current_etag"),
+  lockToken: text("lock_token"),
+  lockExpiresAt: timestamp("lock_expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  executionWorkspacesOrgOwnerUnique: uniqueIndex("execution_workspaces_org_owner_unique").on(table.organizationId, table.ownerType, table.ownerId),
+  executionWorkspacesOrgCurrentVersionIdx: index("execution_workspaces_org_current_version_idx").on(table.organizationId, table.currentVersion),
+}));
+
+export const organizationExecutors = pgTable("organization_executors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  capabilities: jsonb("capabilities"),
+  labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  organizationExecutorsTokenHashUnique: uniqueIndex("organization_executors_token_hash_unique").on(table.tokenHash),
+  organizationExecutorsOrgCreatedAtIdx: index("organization_executors_org_created_at_idx").on(table.organizationId, table.createdAt),
+}));
+
+export const executorPairingTokens = pgTable("executor_pairing_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  executorPairingTokensTokenHashUnique: uniqueIndex("executor_pairing_tokens_token_hash_unique").on(table.tokenHash),
+  executorPairingTokensOrgCreatedAtIdx: index("executor_pairing_tokens_org_created_at_idx").on(table.organizationId, table.createdAt),
+}));
+
+export const managedExecutors = pgTable("managed_executors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull().default(""),
+  labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
+  capabilities: jsonb("capabilities"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  managedExecutorsCreatedAtIdx: index("managed_executors_created_at_idx").on(table.createdAt, table.id),
+}));
+
 export const agentToolsets = pgTable("agent_toolsets", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -309,7 +365,7 @@ export const agentSessions = pgTable("agent_sessions", {
   pinnedAgentId: uuid("pinned_agent_id").references(() => organizationAgents.id, { onDelete: "set null" }),
   selectorTag: text("selector_tag"),
   selectorGroup: text("selector_group"),
-  engineId: text("engine_id").notNull().default("vespid.loop.v1"),
+  engineId: text("engine_id").notNull().default("gateway.loop.v2"),
   toolsetId: uuid("toolset_id").references(() => agentToolsets.id, { onDelete: "set null" }),
   llmProvider: text("llm_provider").notNull().default("openai"),
   llmModel: text("llm_model").notNull().default("gpt-4.1-mini"),
@@ -317,6 +373,9 @@ export const agentSessions = pgTable("agent_sessions", {
   limits: jsonb("limits").notNull().default(sql`'{}'::jsonb`),
   promptSystem: text("prompt_system"),
   promptInstructions: text("prompt_instructions").notNull().default(""),
+  runtime: jsonb("runtime").notNull().default(sql`'{}'::jsonb`),
+  workspaceId: uuid("workspace_id").references(() => executionWorkspaces.id, { onDelete: "set null" }),
+  executorSelector: jsonb("executor_selector"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
@@ -347,6 +406,9 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   connectorSecrets: many(connectorSecrets),
   agents: many(organizationAgents),
   agentPairingTokens: many(agentPairingTokens),
+  executionWorkspaces: many(executionWorkspaces),
+  executors: many(organizationExecutors),
+  executorPairingTokens: many(executorPairingTokens),
   toolsets: many(agentToolsets),
   toolsetBuilderSessions: many(toolsetBuilderSessions),
   agentSessions: many(agentSessions),
@@ -478,6 +540,10 @@ export const agentSessionsRelations = relations(agentSessions, ({ one, many }) =
     fields: [agentSessions.pinnedAgentId],
     references: [organizationAgents.id],
   }),
+  workspace: one(executionWorkspaces, {
+    fields: [agentSessions.workspaceId],
+    references: [executionWorkspaces.id],
+  }),
   events: many(agentSessionEvents),
 }));
 
@@ -504,6 +570,10 @@ export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;
 export type DbConnectorSecret = typeof connectorSecrets.$inferSelect;
 export type DbOrganizationAgent = typeof organizationAgents.$inferSelect;
 export type DbAgentPairingToken = typeof agentPairingTokens.$inferSelect;
+export type DbExecutionWorkspace = typeof executionWorkspaces.$inferSelect;
+export type DbOrganizationExecutor = typeof organizationExecutors.$inferSelect;
+export type DbExecutorPairingToken = typeof executorPairingTokens.$inferSelect;
+export type DbManagedExecutor = typeof managedExecutors.$inferSelect;
 export type DbAgentToolset = typeof agentToolsets.$inferSelect;
 export type DbToolsetBuilderSession = typeof toolsetBuilderSessions.$inferSelect;
 export type DbToolsetBuilderTurn = typeof toolsetBuilderTurns.$inferSelect;

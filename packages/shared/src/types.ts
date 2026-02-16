@@ -88,6 +88,7 @@ export type WorkflowRunJobPayload = {
 };
 
 export type GatewayExecutionKind = "connector.action" | "agent.execute" | "agent.run";
+export type GatewayToolKind = Exclude<GatewayExecutionKind, "agent.run">;
 
 export type GatewayDispatchRequest = {
   organizationId: string;
@@ -167,4 +168,94 @@ export type GatewayServerExecuteMessage = {
 export type GatewayServerExecuteAckMessage = {
   type: "execute_ack";
   requestId: string;
+};
+
+export type ExecutorPool = "managed" | "byon";
+
+export type WorkspacePointerV1 = {
+  workspaceId: string;
+  version: number;
+  objectKey: string;
+  etag?: string | null;
+};
+
+export type WorkspaceAccessV1 = {
+  // Optional for version 0 / empty workspaces.
+  downloadUrl?: string | null;
+  // Upload target for the next version (single-writer per workspace in v1).
+  upload: { url: string; objectKey: string; version: number };
+};
+
+export type ToolPolicyV1 = {
+  // Default-deny network unless explicitly enabled for this invocation.
+  networkModeDefaultDeny: boolean;
+  // Executor should treat "enabled" as an explicit opt-in; default is "none".
+  networkMode: "none" | "enabled";
+  timeoutMs: number;
+  outputMaxChars: number;
+  mountsAllowlist: Array<{ containerPath: string; mode: "ro" | "rw" }>;
+};
+
+export type ExecutorSelectorV1 = {
+  pool: ExecutorPool;
+  labels?: string[];
+  group?: string;
+  tag?: string;
+};
+
+export type GatewayExecutorHelloV2 = {
+  type: "executor_hello_v2";
+  executorVersion: string;
+  // For BYON, this is the control-plane executor id.
+  executorId: string;
+  pool: ExecutorPool;
+  // BYON executors are org-bound. Managed executors may omit.
+  organizationId?: string;
+  name?: string | null;
+  labels: string[];
+  maxInFlight: number;
+  // Executors only run tool workloads, never agent brains.
+  kinds: GatewayToolKind[];
+  resourceHints?: { cpu?: number; memoryMb?: number };
+};
+
+export type GatewayInvokeToolV2 = {
+  type: "invoke_tool_v2";
+  requestId: string;
+  organizationId: string;
+  userId: string;
+  kind: GatewayToolKind;
+  payload: unknown;
+  // Connector actions may require a secret to call third-party APIs.
+  // Never populated for shell-like tools.
+  secret?: string;
+  toolPolicy: ToolPolicyV1;
+  workspace: WorkspacePointerV1;
+  workspaceAccess: WorkspaceAccessV1;
+  idempotencyKey?: string;
+};
+
+export type GatewayToolEventV2 = {
+  type: "tool_event_v2";
+  requestId: string;
+  event: RemoteExecutionEvent;
+};
+
+export type GatewayToolResultV2 = {
+  type: "tool_result_v2";
+  requestId: string;
+  status: "succeeded" | "failed";
+  output?: unknown;
+  error?: string;
+  workspace?: WorkspacePointerV1;
+};
+
+export type GatewayBrainSessionEventV2 = {
+  type: "session_event_v2";
+  sessionId: string;
+  seq: number;
+  eventType: string;
+  level: "info" | "warn" | "error";
+  payload: unknown;
+  createdAt: string;
 };

@@ -84,7 +84,7 @@ export function useCreateSession(orgId: string | null) {
   return useMutation({
     mutationFn: async (input: {
       title?: string;
-      engineId?: "vespid.loop.v1" | "codex.sdk.v1";
+      engineId?: "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
       toolsetId?: string;
       llm: { provider: "openai" | "anthropic"; model: string };
       prompt: { system?: string; instructions: string };
@@ -102,4 +102,3 @@ export function useCreateSession(orgId: string | null) {
     },
   });
 }
-

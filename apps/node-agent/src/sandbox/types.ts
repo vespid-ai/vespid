@@ -17,6 +17,7 @@ export type ExecuteShellTaskContext = {
   timeoutMs: number | null;
   dockerImage: string | null;
   envPassthroughAllowlist: string[];
+  workdirHostPath?: string | null;
 };
 
 export type SandboxExecuteResult =

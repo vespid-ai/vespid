@@ -121,8 +121,8 @@ async function pairAgent(input: {
   name: string;
   agentVersion: string;
   tags?: string[];
-}): Promise<Pick<NodeAgentConfig, "agentId" | "agentToken" | "organizationId" | "gatewayWsUrl">> {
-  const url = new URL("/v1/agents/pair", input.apiBaseUrl);
+}): Promise<{ executorId: string; executorToken: string; organizationId: string; gatewayWsUrl: string }> {
+  const url = new URL("/v1/executors/pair", input.apiBaseUrl);
   const response = await fetch(url.toString(), {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -131,8 +131,8 @@ async function pairAgent(input: {
         name: input.name,
         agentVersion: input.agentVersion,
         capabilities: {
-          kinds: ["connector.action", "agent.execute", "agent.run"],
-          ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+          kinds: ["connector.action", "agent.execute"],
+          ...(input.tags && input.tags.length > 0 ? { labels: input.tags } : {}),
         },
       }),
     });
@@ -143,8 +143,8 @@ async function pairAgent(input: {
   }
   const parsed = z
     .object({
-      agentId: z.string().uuid(),
-      agentToken: z.string().min(1),
+      executorId: z.string().uuid(),
+      executorToken: z.string().min(1),
       organizationId: z.string().uuid(),
       gatewayWsUrl: z.string().min(1),
     })
@@ -169,16 +169,16 @@ async function main(): Promise<void> {
     });
 
     const config: NodeAgentConfig = {
-      agentId: paired.agentId,
-      agentToken: paired.agentToken,
+      executorId: paired.executorId,
+      executorToken: paired.executorToken,
       organizationId: paired.organizationId,
       gatewayWsUrl: paired.gatewayWsUrl,
       apiBaseUrl: parsed.apiBase,
-      name,
-      agentVersion,
+      executorName: name,
+      executorVersion: agentVersion,
       capabilities: {
-        kinds: ["connector.action", "agent.execute", "agent.run"],
-        ...(parsed.tags && parsed.tags.length > 0 ? { tags: parsed.tags } : {}),
+        kinds: ["connector.action", "agent.execute"],
+        ...(parsed.tags && parsed.tags.length > 0 ? { labels: parsed.tags } : {}),
       },
     };
 

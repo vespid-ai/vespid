@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { runAgentLoop } from "./agent-loop.js";
+import { runAgentLoop } from "@vespid/agent-runtime";
 
 function makeBaseInput() {
   return {

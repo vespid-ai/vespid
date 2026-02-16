@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+export type OpenAiChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 const chatCompletionsResponseSchema = z.object({
   choices: z
@@ -12,17 +12,27 @@ const chatCompletionsResponseSchema = z.object({
       })
     )
     .min(1),
+  usage: z
+    .object({
+      prompt_tokens: z.number().int().nonnegative().optional(),
+      completion_tokens: z.number().int().nonnegative().optional(),
+      total_tokens: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
 export async function openAiChatCompletion(input: {
   apiKey: string;
   model: string;
-  messages: ChatMessage[];
+  messages: OpenAiChatMessage[];
   timeoutMs: number;
   maxOutputChars?: number;
   maxTokens?: number;
   fetchImpl?: typeof fetch;
-}): Promise<{ ok: true; content: string } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; content: string; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }
+  | { ok: false; error: string }
+> {
   const fetchImpl = input.fetchImpl ?? fetch;
 
   const deadline = Date.now() + Math.max(1000, input.timeoutMs);
@@ -79,7 +89,19 @@ export async function openAiChatCompletion(input: {
         return { ok: false, error: "OPENAI_RESPONSE_EMPTY" };
       }
 
-      return { ok: true, content };
+      const promptTokens = parsed.data.usage?.prompt_tokens ?? 0;
+      const completionTokens = parsed.data.usage?.completion_tokens ?? 0;
+      const totalTokens = parsed.data.usage?.total_tokens ?? promptTokens + completionTokens;
+
+      return {
+        ok: true,
+        content,
+        usage: {
+          inputTokens: Math.max(0, Math.floor(promptTokens)),
+          outputTokens: Math.max(0, Math.floor(completionTokens)),
+          totalTokens: Math.max(0, Math.floor(totalTokens)),
+        },
+      };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return { ok: false, error: "LLM_TIMEOUT" };
@@ -96,4 +118,3 @@ export async function openAiChatCompletion(input: {
     }
   }
 }
-

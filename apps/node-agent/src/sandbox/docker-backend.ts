@@ -169,6 +169,14 @@ async function runDocker(
 export function createDockerBackend(): SandboxBackend {
   const limits = defaultLimits();
   async function resolveWorkdirHostPath(ctx: ExecuteShellTaskContext): Promise<string> {
+    if (ctx.workdirHostPath && ctx.workdirHostPath.trim().length > 0) {
+      try {
+        await fs.chmod(ctx.workdirHostPath, 0o777);
+      } catch {
+        // ignore
+      }
+      return ctx.workdirHostPath;
+    }
     const resolvedWorkdir = await resolveRunWorkdirHostPath({
       organizationId: ctx.organizationId,
       runId: ctx.runId,
