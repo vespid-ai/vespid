@@ -37,6 +37,7 @@ export function LlmConfigField(props: {
     <div className="grid gap-3">
       <LlmModelField
         value={modelValue}
+        orgId={props.orgId}
         allowedProviders={allowedProviders}
         disabled={props.disabled ?? false}
         onChange={(next) => {

@@ -33,3 +33,21 @@ Object.defineProperty(globalThis.window, "localStorage", {
   configurable: true,
   writable: true,
 });
+
+class ResizeObserverMock {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+Object.defineProperty(globalThis, "ResizeObserver", {
+  value: ResizeObserverMock,
+  configurable: true,
+  writable: true,
+});
+
+Object.defineProperty(globalThis.Element.prototype, "scrollIntoView", {
+  value: () => {},
+  configurable: true,
+  writable: true,
+});

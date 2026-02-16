@@ -69,7 +69,7 @@
   },
   "sessions": {
     "title": "Sessions",
-    "subtitle": "Interactive, node-hosted agent sessions pinned to a connected node host.",
+    "subtitle": "Create and run AI sessions in a few steps.",
     "untitled": "Untitled session",
     "table": {
       "title": "Title",
@@ -80,7 +80,7 @@
     },
     "create": {
       "title": "Create session",
-      "subtitle": "Sessions run on node hosts. LLM credentials must be configured on the node host environment (BYOK).",
+      "subtitle": "Pick an engine, model, and instructions to start.",
       "button": "Create",
       "created": "Session created."
     },
@@ -100,15 +100,15 @@
       "selectorTag": "Selector tag (optional)",
       "tools": "Allowed tools"
     },
-    "engineHint": "Sessions support gateway.loop.v2, gateway.codex.v2, and gateway.claude.v2.",
-    "codexProviderHint": "gateway.codex.v2 uses OpenAI provider only.",
-    "modelHint": "The model must match the selected provider and engine policy.",
+    "engineHint": "Balanced works for most tasks. Coding and Reasoning are optimized presets.",
+    "codexProviderHint": "Coding engine currently supports OpenAI models.",
+    "modelHint": "Choose a provider first, then pick a model.",
     "saveAsOrgDefault": "Save as org default",
     "toolsetPlaceholder": "uuid (optional)",
     "toolsetResolved": "Resolved",
-    "toolsetHint": "If set, toolset skills are injected as read-only context for gateway brain execution.",
+    "toolsetHint": "Optional: add a toolset if this session needs extra capabilities.",
     "selectorTagPlaceholder": "e.g. west",
-    "selectorHint": "Routing uses executor selector tags in the gateway execution plane.",
+    "selectorHint": "Optional: choose where this session should run.",
     "extraToolsPlaceholder": "Comma-separated tool IDs (optional)",
     "toolsHint": "{count} tool(s) allowed",
     "pinnedAgent": "Pinned agent",
@@ -137,6 +137,11 @@
       "llm": "LLM",
       "toolset": "Toolset",
       "selector": "Selector"
+    },
+    "engineOptions": {
+      "loop": "Balanced (gateway.loop.v2)",
+      "codex": "Coding (gateway.codex.v2)",
+      "claude": "Reasoning (gateway.claude.v2)"
     }
   },
   "commandPalette": {
@@ -190,7 +195,7 @@
   },
   "org": {
     "requireActive": "Set an active organization first.",
-    "subtitle": "Tenant context is required for org-scoped API calls.",
+    "subtitle": "Set your active organization before using app features.",
     "active": "Active organization",
     "noActive": "No active org",
     "shortLabel": "Org {id}",
@@ -212,12 +217,12 @@
   },
   "auth": {
     "title": "Auth",
-    "subtitle": "Cookie-based auth with refresh token, designed for multi-tenant SaaS.",
+    "subtitle": "Sign in to continue and start your first setup flow.",
     "sessionTitle": "Session",
     "loggedInAs": "Logged in as {email}",
     "goToApp": "Go to App",
     "passwordLoginTitle": "Password login",
-    "passwordLoginDescription": "Bootstrap-only UI. Replace with product-grade auth UI later.",
+    "passwordLoginDescription": "Use your email and password to sign in.",
     "email": "Email",
     "password": "Password",
     "signup": "Sign up",
@@ -233,7 +238,7 @@
   },
   "workflows": {
     "title": "Workflows",
-    "subtitle": "Fluent-style SaaS shell + agent cockpit. Start from a template, then refine.",
+    "subtitle": "Build workflows step by step and run them safely.",
     "createTitle": "Create workflow",
     "defaultAgentModel": "Default agent model",
     "agentNodes": "Agent nodes",
@@ -463,6 +468,11 @@
       "lastSeen": "Last seen",
       "created": "Created",
       "tags": "Tags"
+    },
+    "pairingSteps": {
+      "step1": "1. Create a pairing token",
+      "step2": "2. Run the node agent command with the token",
+      "step3": "3. Refresh this page and verify the agent is online"
     }
   },
   "toolsets": {
@@ -649,14 +659,14 @@
   "billing": {
     "credits": "Credits",
     "title": "Billing",
-    "subtitle": "Manage credits, view ledger entries, and top up via Stripe.",
+    "subtitle": "Manage credits and top up when needed.",
     "status": {
       "success": "Top up completed. Credits will appear shortly.",
       "cancel": "Checkout cancelled."
     },
     "balance": {
       "title": "Credits balance",
-      "caption": "Credits are used only for managed LLM usage. BYOK usage is billed by your provider."
+      "caption": "Managed credits are billed here. Calls with your own key are billed by your provider."
     },
     "topup": {
       "title": "Top up credits",
@@ -674,7 +684,8 @@
       "when": "When",
       "reason": "Reason",
       "delta": "Delta"
-    }
+    },
+    "setupGuide": "View setup guide"
   },
   "marketing": {
     "nav": {
@@ -1013,10 +1024,10 @@
   },
   "channels": {
     "title": "Channels",
-    "subtitle": "Manage organization channel accounts with secure session and workflow routing.",
+    "subtitle": "Connect and manage your messaging channels.",
     "create": {
       "title": "Create channel account",
-      "subtitle": "Each account is org-scoped. Inbound org context is resolved from account mapping only.",
+      "subtitle": "Create one channel account to start receiving and sending messages.",
       "button": "Create account",
       "created": "Channel account created.",
       "dependencies": "Dependencies",
@@ -1107,6 +1118,60 @@
       "allowlistRequired": "Allowlist scope and subject are required.",
       "metadataRequired": "Metadata field is required: {key}.",
       "testSendRequired": "Conversation ID and message text are required."
+    },
+    "policy": {
+      "dm": {
+        "pairing": "Approve each user first",
+        "allowlist": "Allow known users only",
+        "open": "Allow all users",
+        "disabled": "Disable direct messages"
+      },
+      "group": {
+        "allowlist": "Allow known groups only",
+        "open": "Allow all groups",
+        "disabled": "Disable group messages"
+      }
+    },
+    "scope": {
+      "sender": "Sender",
+      "dm": "Direct message",
+      "group": "Group",
+      "conversation": "Conversation"
     }
+  },
+  "advanced": {
+    "title": "Advanced settings",
+    "description": "Optional options for power users.",
+    "show": "Show",
+    "hide": "Hide"
+  },
+  "providerPicker": {
+    "title": "Choose provider",
+    "filterConnected": "Connected",
+    "filterRecommended": "Recommended",
+    "filterAll": "All providers",
+    "searchProvider": "Search provider...",
+    "noResults": "No matching providers.",
+    "badgeConnected": "Connected",
+    "badgeRecommended": "Recommended",
+    "badgeOauth": "OAuth",
+    "modelPlaceholder": "e.g. gpt-4.1-mini",
+    "searchModel": "Search model"
+  },
+  "onboarding": {
+    "title": "Get started",
+    "subtitle": "Complete these steps to start quickly.",
+    "stepLogin": "1. Signed in",
+    "stepOrg": "2. Choose organization",
+    "stepSecretOptional": "3. Connect model key (optional)",
+    "stepFirstResource": "4. Create first session/workflow",
+    "goOrg": "Go to organization",
+    "goSession": "Create session",
+    "goWorkflow": "Create workflow",
+    "goSecrets": "Configure model key"
+  },
+  "emptyState": {
+    "nextStep": "Next step",
+    "noData": "Nothing here yet"
   }
 }

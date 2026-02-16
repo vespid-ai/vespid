@@ -2,11 +2,21 @@
 
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
+import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared/llm/provider-registry";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { cn } from "../../../lib/cn";
 import { ModelPickerDialog } from "../model-picker/model-picker-dialog";
-import { defaultModelByProvider, inferProviderFromModelId, providerLabels, type LlmProviderId } from "./model-catalog";
+import { useSecrets } from "../../../lib/hooks/use-secrets";
+import { ProviderPicker } from "./provider-picker";
+import {
+  defaultModelByProvider,
+  inferProviderFromModelId,
+  providerConnectorById,
+  providerLabels,
+  providerRecommendedById,
+  type LlmProviderId,
+} from "./model-catalog";
 
 export type LlmModelValue = { providerId: LlmProviderId; modelId: string };
 
@@ -14,15 +24,24 @@ export function LlmModelField(props: {
   value: LlmModelValue;
   onChange: (next: LlmModelValue) => void;
   allowedProviders: LlmProviderId[];
+  orgId?: string | null;
   disabled?: boolean;
 }) {
+  const t = useTranslations();
   const allowed = useMemo(() => {
-    const set = new Set(props.allowedProviders);
-    return props.allowedProviders.filter((p) => set.has(p));
+    const out: LlmProviderId[] = [];
+    const seen = new Set<LlmProviderId>();
+    for (const providerId of props.allowedProviders) {
+      if (seen.has(providerId)) continue;
+      seen.add(providerId);
+      out.push(providerId);
+    }
+    return out;
   }, [props.allowedProviders]);
 
   const providerLockedRef = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const secretsQuery = useSecrets(props.orgId ?? null);
 
   // If the provider is constrained externally, treat it as locked.
   useEffect(() => {
@@ -59,35 +78,54 @@ export function LlmModelField(props: {
     props.onChange({ providerId: nextProvider, modelId });
   }
 
-  const providerButtons = allowed.map((p) => (
-    <Button
-      key={p}
-      type="button"
-      size="sm"
-      variant={props.value.providerId === p ? "accent" : "outline"}
-      disabled={!canEditProvider}
-      onClick={() => setProvider(p)}
-    >
-      {providerLabels[p]}
-    </Button>
-  ));
+  const connectedConnectors = useMemo(() => {
+    const secrets = secretsQuery.data?.secrets ?? [];
+    return new Set(secrets.map((secret) => normalizeConnectorId(secret.connectorId)));
+  }, [secretsQuery.data?.secrets]);
+
+  const providerItems = useMemo(() => {
+    return allowed.map((providerId) => {
+      const connectorId = providerConnectorById[providerId];
+      return {
+        id: providerId,
+        label: providerLabels[providerId] ?? providerId,
+        recommended: providerRecommendedById[providerId] ?? false,
+        connected: connectorId ? connectedConnectors.has(connectorId) : true,
+        oauth: isOAuthRequiredProvider(providerId),
+      };
+    });
+  }, [allowed, connectedConnectors]);
 
   return (
     <div className="grid gap-2">
-      <div className={cn("flex flex-wrap gap-2", allowed.length <= 1 ? "opacity-90" : "")}>
-        {providerButtons}
-      </div>
+      <ProviderPicker
+        value={props.value.providerId}
+        items={providerItems}
+        disabled={!canEditProvider}
+        onChange={setProvider}
+        labels={{
+          title: t("providerPicker.title"),
+          connected: t("providerPicker.filterConnected"),
+          recommended: t("providerPicker.filterRecommended"),
+          all: t("providerPicker.filterAll"),
+          searchPlaceholder: t("providerPicker.searchProvider"),
+          noResults: t("providerPicker.noResults"),
+          badgeConnected: t("providerPicker.badgeConnected"),
+          badgeRecommended: t("providerPicker.badgeRecommended"),
+          badgeOauth: t("providerPicker.badgeOauth"),
+        }}
+      />
 
       <div className="flex items-center gap-2">
         <Input
           value={props.value.modelId}
           onChange={(e) => setModelId(e.target.value)}
-          placeholder="e.g. gpt-4.1-mini"
+          placeholder={t("providerPicker.modelPlaceholder")}
           disabled={props.disabled}
         />
         <Button type="button" variant="outline" onClick={() => setPickerOpen(true)} className="shrink-0" disabled={props.disabled}>
           <Search className="mr-2 h-4 w-4" />
-          Search
+          {t("providerPicker.searchModel")}
         </Button>
       </div>
 
@@ -105,4 +143,3 @@ export function LlmModelField(props: {
     </div>
   );
 }
-

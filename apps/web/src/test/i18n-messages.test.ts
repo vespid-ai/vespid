@@ -37,6 +37,10 @@ describe("i18n message coverage", () => {
       "auth.subtitle",
       "auth.passwordLoginTitle",
       "org.createTitle",
+      "advanced.title",
+      "providerPicker.title",
+      "onboarding.title",
+      "billing.setupGuide",
     ];
 
     for (const key of required) {

@@ -47,6 +47,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Separator } from "../ui/separator";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Sheet, SheetClose, SheetContent, SheetTrigger } from "../ui/sheet";
@@ -92,6 +93,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [draftOrgId, setDraftOrgId] = useState<string>("");
   const [orgSummaries, setOrgSummaries] = useState<Array<{ id: string; name: string; roleKey: string }>>([]);
   const [creditsBalance, setCreditsBalance] = useState<number | null>(null);
+  const [hasOrgSecrets, setHasOrgSecrets] = useState(false);
+  const [hasStarterResource, setHasStarterResource] = useState(false);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -174,6 +177,48 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [session.data?.session, activeOrgId]);
 
   useEffect(() => {
+    if (!session.data?.session || !activeOrgId) {
+      setHasOrgSecrets(false);
+      setHasStarterResource(false);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const [secretsRes, sessionsRes, workflowsRes] = await Promise.allSettled([
+        apiFetchJson<{ secrets: Array<{ id: string }> }>(
+          `/v1/orgs/${activeOrgId}/secrets`,
+          { method: "GET" },
+          { orgScoped: true }
+        ),
+        apiFetchJson<{ sessions: Array<{ id: string }> }>(
+          `/v1/orgs/${activeOrgId}/sessions?limit=1`,
+          { method: "GET" },
+          { orgScoped: true }
+        ),
+        apiFetchJson<{ workflows: Array<{ id: string }> }>(
+          `/v1/orgs/${activeOrgId}/workflows?limit=1`,
+          { method: "GET" },
+          { orgScoped: true }
+        ),
+      ]);
+
+      if (cancelled) return;
+
+      const secretCount = secretsRes.status === "fulfilled" ? (secretsRes.value.secrets ?? []).length : 0;
+      const sessionCount = sessionsRes.status === "fulfilled" ? (sessionsRes.value.sessions ?? []).length : 0;
+      const workflowCount = workflowsRes.status === "fulfilled" ? (workflowsRes.value.workflows ?? []).length : 0;
+
+      setHasOrgSecrets(secretCount > 0);
+      setHasStarterResource(sessionCount > 0 || workflowCount > 0);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.data?.session, activeOrgId]);
+
+  useEffect(() => {
     setReachability(getApiReachability());
     return subscribeApiReachability((next) => setReachability(next));
   }, []);
@@ -238,6 +283,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     Date.now() - reachability.unreachableAt < 2 * 60_000;
 
   const themeLabel = mounted ? (theme ?? "system") : "system";
+  const onboardingVisible = Boolean(session.data?.session) && (!activeOrgId || !hasStarterResource);
 
   function SettingsDropdown({ iconOnly }: { iconOnly?: boolean }) {
     return (
@@ -515,18 +561,22 @@ export function AppShell({ children }: { children: ReactNode }) {
                         <div className="mt-4">
                           <div className="text-xs font-medium text-muted">{t("org.active")}</div>
                           <div className="mt-2 grid gap-2">
-                            <select
-                              value={activeOrgId}
-                              onChange={(e) => applyOrgId(e.target.value)}
-                              className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/55 px-2 text-sm text-text shadow-elev1 outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                            <Select
+                              value={activeOrgId || "__none__"}
+                              onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
                             >
-                              <option value="">{t("org.noActive")}</option>
-                              {knownOrgIds.map((id) => (
-                                <option key={id} value={id}>
-                                  {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
-                                </option>
-                              ))}
-                            </select>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
+                                {knownOrgIds.map((id) => (
+                                  <SelectItem key={id} value={id}>
+                                    {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             <input
                               value={draftOrgId}
                               onChange={(e) => setDraftOrgId(e.target.value)}
@@ -601,18 +651,22 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <PopoverContent align="start" className="w-[420px]">
                         <div className="text-xs font-medium text-muted">{t("org.active")}</div>
                         <div className="mt-2 grid gap-2">
-                          <select
-                            value={activeOrgId}
-                            onChange={(e) => applyOrgId(e.target.value)}
-                            className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/55 px-2 text-sm text-text shadow-elev1 outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
+                          <Select
+                            value={activeOrgId || "__none__"}
+                            onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
                           >
-                            <option value="">{t("org.noActive")}</option>
-                            {knownOrgIds.map((id) => (
-                              <option key={id} value={id}>
-                                {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
-                              </option>
-                            ))}
-                          </select>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
+                              {knownOrgIds.map((id) => (
+                                <SelectItem key={id} value={id}>
+                                  {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                           <input
                             value={draftOrgId}
                             onChange={(e) => setDraftOrgId(e.target.value)}
@@ -665,6 +719,43 @@ export function AppShell({ children }: { children: ReactNode }) {
                     </Badge>
                     <div className="min-w-0 flex-1 text-muted">
                       {t("errors.apiUnreachable.description", { base: reachability.base || getApiBase() })}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {onboardingVisible ? (
+                <div className="border-t border-borderSubtle bg-panel/40 px-3 md:px-4 py-3">
+                  <div className="grid gap-2">
+                    <div className="text-sm font-medium text-text">{t("onboarding.title")}</div>
+                    <div className="text-xs text-muted">{t("onboarding.subtitle")}</div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <Badge variant="ok">{t("onboarding.stepLogin")}</Badge>
+                      <Badge variant={activeOrgId ? "ok" : "warn"}>{t("onboarding.stepOrg")}</Badge>
+                      <Badge variant={hasOrgSecrets ? "ok" : "neutral"}>{t("onboarding.stepSecretOptional")}</Badge>
+                      <Badge variant={hasStarterResource ? "ok" : "warn"}>{t("onboarding.stepFirstResource")}</Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {!activeOrgId ? (
+                        <Button size="sm" variant="accent" asChild>
+                          <Link href={`/${locale}/org`}>{t("onboarding.goOrg")}</Link>
+                        </Button>
+                      ) : null}
+                      {activeOrgId && !hasStarterResource ? (
+                        <>
+                          <Button size="sm" variant="accent" asChild>
+                            <Link href={`/${locale}/sessions`}>{t("onboarding.goSession")}</Link>
+                          </Button>
+                          <Button size="sm" variant="outline" asChild>
+                            <Link href={`/${locale}/workflows`}>{t("onboarding.goWorkflow")}</Link>
+                          </Button>
+                        </>
+                      ) : null}
+                      {activeOrgId && !hasOrgSecrets ? (
+                        <Button size="sm" variant="outline" asChild>
+                          <Link href={`/${locale}/secrets`}>{t("onboarding.goSecrets")}</Link>
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </div>

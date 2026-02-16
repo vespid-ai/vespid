@@ -8,7 +8,6 @@ import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared/ll
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
-import { CodeBlock } from "../../../../components/ui/code-block";
 import { DataTable } from "../../../../components/ui/data-table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../../../../components/ui/dialog";
 import { EmptyState } from "../../../../components/ui/empty-state";
@@ -20,6 +19,7 @@ import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-
 import { useCreateSecret, useDeleteSecret, useRotateSecret, useSecrets } from "../../../../lib/hooks/use-secrets";
 import { apiFetchJson } from "../../../../lib/api";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { AdvancedSection } from "../../../../components/app/advanced-section";
 
 function SecretsPageContent() {
   const t = useTranslations();
@@ -36,7 +36,6 @@ function SecretsPageContent() {
   const secrets = secretsQuery.data?.secrets ?? [];
 
   const [selectedId, setSelectedId] = useState<string>("");
-  const [showDebug, setShowDebug] = useState(false);
 
   const selected = useMemo(() => secrets.find((s) => s.id === selectedId) ?? null, [secrets, selectedId]);
 
@@ -210,6 +209,13 @@ function SecretsPageContent() {
                 >
                   {t("common.save")}
                 </Button>
+              </div>
+              <AdvancedSection
+                id="secrets-default-session-advanced"
+                title={t("advanced.title")}
+                description={t("advanced.description")}
+                labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+              >
                 <Button
                   size="sm"
                   variant="outline"
@@ -222,7 +228,7 @@ function SecretsPageContent() {
                 >
                   {t("common.clearFilters")}
                 </Button>
-              </div>
+              </AdvancedSection>
             </div>
 
             <div className="rounded-2xl border border-borderSubtle bg-panel/60 p-4 shadow-elev1">
@@ -257,6 +263,13 @@ function SecretsPageContent() {
                 >
                   {t("common.save")}
                 </Button>
+              </div>
+              <AdvancedSection
+                id="secrets-default-workflow-advanced"
+                title={t("advanced.title")}
+                description={t("advanced.description")}
+                labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+              >
                 <Button
                   size="sm"
                   variant="outline"
@@ -269,7 +282,7 @@ function SecretsPageContent() {
                 >
                   {t("common.clearFilters")}
                 </Button>
-              </div>
+              </AdvancedSection>
             </div>
 
             <div className="rounded-2xl border border-borderSubtle bg-panel/60 p-4 shadow-elev1">
@@ -304,6 +317,13 @@ function SecretsPageContent() {
                 >
                   {t("common.save")}
                 </Button>
+              </div>
+              <AdvancedSection
+                id="secrets-default-toolset-advanced"
+                title={t("advanced.title")}
+                description={t("advanced.description")}
+                labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+              >
                 <Button
                   size="sm"
                   variant="outline"
@@ -316,7 +336,7 @@ function SecretsPageContent() {
                 >
                   {t("common.clearFilters")}
                 </Button>
-              </div>
+              </AdvancedSection>
             </div>
           </div>
         </CardContent>
@@ -621,16 +641,6 @@ function SecretsPageContent() {
         </CardContent>
       </Card>
 
-      <div>
-        <Button variant="ghost" onClick={() => setShowDebug((v) => !v)}>
-          {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
-        </Button>
-        {showDebug ? (
-          <div className="mt-2">
-            <CodeBlock value={{ orgId, secrets: secretsQuery.data }} />
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }

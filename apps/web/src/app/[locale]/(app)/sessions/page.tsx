@@ -10,6 +10,7 @@ import { DataTable } from "../../../../components/ui/data-table";
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
 import { Separator } from "../../../../components/ui/separator";
 import { Textarea } from "../../../../components/ui/textarea";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
@@ -21,6 +22,7 @@ import { useCreateSession, useSessions, type AgentSession } from "../../../../li
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { providersForContext, type LlmProviderId } from "../../../../components/app/llm/model-catalog";
+import { AdvancedSection } from "../../../../components/app/advanced-section";
 
 export default function SessionsPage() {
   const t = useTranslations();
@@ -159,6 +161,7 @@ export default function SessionsPage() {
       </div>
 
       <Card>
+        <div id="session-create-card" />
         <CardHeader>
           <CardTitle>{t("sessions.create.title")}</CardTitle>
           <CardDescription>{t("sessions.create.subtitle")}</CardDescription>
@@ -172,32 +175,24 @@ export default function SessionsPage() {
 
             <div className="grid gap-2">
               <Label>{t("sessions.fields.engine")}</Label>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  size="sm"
-                  {...choiceButtonProps(engineId === "gateway.loop.v2")}
-                  onClick={() => setEngineId("gateway.loop.v2")}
-                  disabled={!canOperate}
-                >
-                  gateway.loop.v2
-                </Button>
-                <Button
-                  size="sm"
-                  {...choiceButtonProps(engineId === "gateway.codex.v2")}
-                  onClick={() => setEngineId("gateway.codex.v2")}
-                  disabled={!canOperate}
-                >
-                  gateway.codex.v2
-                </Button>
-                <Button
-                  size="sm"
-                  {...choiceButtonProps(engineId === "gateway.claude.v2")}
-                  onClick={() => setEngineId("gateway.claude.v2")}
-                  disabled={!canOperate}
-                >
-                  gateway.claude.v2
-                </Button>
-              </div>
+              <Select
+                value={engineId}
+                onValueChange={(next) => {
+                  const normalized =
+                    next === "gateway.codex.v2" || next === "gateway.claude.v2" ? next : "gateway.loop.v2";
+                  setEngineId(normalized);
+                }}
+                disabled={!canOperate}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gateway.loop.v2">{t("sessions.engineOptions.loop")}</SelectItem>
+                  <SelectItem value="gateway.codex.v2">{t("sessions.engineOptions.codex")}</SelectItem>
+                  <SelectItem value="gateway.claude.v2">{t("sessions.engineOptions.claude")}</SelectItem>
+                </SelectContent>
+              </Select>
               <div className="text-xs text-muted">{t("sessions.engineHint")}</div>
             </div>
           </div>
@@ -234,67 +229,74 @@ export default function SessionsPage() {
             <Textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={4} disabled={!canOperate} />
           </div>
 
-          <div className="grid gap-2">
-            <Label>{t("sessions.fields.system")}</Label>
-            <Textarea value={system} onChange={(e) => setSystem(e.target.value)} rows={3} disabled={!canOperate} />
-          </div>
-
-          <Separator />
-
-          <div className="grid gap-3 md:grid-cols-2">
+          <AdvancedSection
+            id="sessions-create-advanced"
+            title={t("advanced.title")}
+            description={t("advanced.description")}
+            labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+          >
             <div className="grid gap-2">
-              <Label>{t("sessions.fields.toolset")}</Label>
-              <Input
-                value={toolsetId}
-                onChange={(e) => setToolsetId(e.target.value)}
-                placeholder={t("sessions.toolsetPlaceholder")}
-                disabled={!canOperate}
-              />
-              <div className="text-xs text-muted">
-                {selectedToolset ? `${t("sessions.toolsetResolved")}: ${selectedToolset.name}` : t("sessions.toolsetHint")}
+              <Label>{t("sessions.fields.system")}</Label>
+              <Textarea value={system} onChange={(e) => setSystem(e.target.value)} rows={3} disabled={!canOperate} />
+            </div>
+
+            <Separator />
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>{t("sessions.fields.toolset")}</Label>
+                <Input
+                  value={toolsetId}
+                  onChange={(e) => setToolsetId(e.target.value)}
+                  placeholder={t("sessions.toolsetPlaceholder")}
+                  disabled={!canOperate}
+                />
+                <div className="text-xs text-muted">
+                  {selectedToolset ? `${t("sessions.toolsetResolved")}: ${selectedToolset.name}` : t("sessions.toolsetHint")}
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>{t("sessions.fields.selectorTag")}</Label>
+                <Input
+                  value={selectorTag}
+                  onChange={(e) => setSelectorTag(e.target.value)}
+                  placeholder={t("sessions.selectorTagPlaceholder")}
+                  disabled={!canOperate}
+                />
+                <div className="text-xs text-muted">{t("sessions.selectorHint")}</div>
               </div>
             </div>
 
             <div className="grid gap-2">
-              <Label>{t("sessions.fields.selectorTag")}</Label>
+              <Label>{t("sessions.fields.tools")}</Label>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  {...choiceButtonProps(allowConnectorAction)}
+                  onClick={() => setAllowConnectorAction((v) => !v)}
+                  disabled={!canOperate}
+                >
+                  connector.action
+                </Button>
+                <Button
+                  size="sm"
+                  {...choiceButtonProps(allowShellRun)}
+                  onClick={() => setAllowShellRun((v) => !v)}
+                  disabled={!canOperate}
+                >
+                  shell.run
+                </Button>
+              </div>
               <Input
-                value={selectorTag}
-                onChange={(e) => setSelectorTag(e.target.value)}
-                placeholder={t("sessions.selectorTagPlaceholder")}
+                value={extraToolsRaw}
+                onChange={(e) => setExtraToolsRaw(e.target.value)}
+                placeholder={t("sessions.extraToolsPlaceholder")}
                 disabled={!canOperate}
               />
-              <div className="text-xs text-muted">{t("sessions.selectorHint")}</div>
+              <div className="text-xs text-muted">{t("sessions.toolsHint", { count: toolAllow.length })}</div>
             </div>
-          </div>
-
-          <div className="grid gap-2">
-            <Label>{t("sessions.fields.tools")}</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                {...choiceButtonProps(allowConnectorAction)}
-                onClick={() => setAllowConnectorAction((v) => !v)}
-                disabled={!canOperate}
-              >
-                connector.action
-              </Button>
-              <Button
-                size="sm"
-                {...choiceButtonProps(allowShellRun)}
-                onClick={() => setAllowShellRun((v) => !v)}
-                disabled={!canOperate}
-              >
-                shell.run
-              </Button>
-            </div>
-            <Input
-              value={extraToolsRaw}
-              onChange={(e) => setExtraToolsRaw(e.target.value)}
-              placeholder={t("sessions.extraToolsPlaceholder")}
-              disabled={!canOperate}
-            />
-            <div className="text-xs text-muted">{t("sessions.toolsHint", { count: toolAllow.length })}</div>
-          </div>
+          </AdvancedSection>
 
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -364,7 +366,19 @@ export default function SessionsPage() {
           {sessionsQuery.isLoading ? (
             <EmptyState title={t("common.loading")} />
           ) : sessions.length === 0 ? (
-            <EmptyState title={t("sessions.list.empty")} />
+            <EmptyState
+              title={t("sessions.list.empty")}
+              action={
+                <Button
+                  variant="accent"
+                  onClick={() => {
+                    document.getElementById("session-create-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                >
+                  {t("sessions.create.button")}
+                </Button>
+              }
+            />
           ) : (
             <DataTable columns={columns as any} data={sessions as AgentSession[]} />
           )}

@@ -118,7 +118,7 @@
   },
   "org": {
     "requireActive": "请先选择当前组织。",
-    "subtitle": "组织范围 API 调用需要租户上下文。",
+    "subtitle": "使用应用前，请先设置当前组织。",
     "active": "当前组织",
     "noActive": "未选择组织",
     "shortLabel": "组织 {id}",
@@ -140,12 +140,12 @@
   },
   "auth": {
     "title": "登录",
-    "subtitle": "基于 Cookie 的刷新令牌会话, 面向多租户 SaaS 设计。",
+    "subtitle": "先登录，再完成首次配置流程。",
     "sessionTitle": "会话",
     "loggedInAs": "已登录: {email}",
     "goToApp": "进入应用",
     "passwordLoginTitle": "邮箱登录",
-    "passwordLoginDescription": "当前为引导版界面; 后续会替换为产品级登录体验。",
+    "passwordLoginDescription": "使用邮箱和密码登录。",
     "email": "邮箱",
     "password": "密码",
     "signup": "注册",
@@ -161,7 +161,7 @@
   },
   "workflows": {
     "title": "工作流",
-    "subtitle": "Fluent 风格 SaaS 壳 + 运行驾驶舱。从模板开始, 再逐步完善。",
+    "subtitle": "按步骤创建工作流，并安全运行。",
     "createTitle": "创建工作流",
     "defaultAgentModel": "默认智能体模型",
     "agentNodes": "智能体节点",
@@ -391,11 +391,16 @@
       "lastSeen": "最近在线",
       "created": "创建时间",
       "tags": "标签"
+    },
+    "pairingSteps": {
+      "step1": "1. 创建配对令牌",
+      "step2": "2. 使用该令牌运行 node-agent 命令",
+      "step3": "3. 刷新本页并确认代理在线"
     }
   },
   "sessions": {
     "title": "会话",
-    "subtitle": "交互式、运行在节点主机上的 Agent 会话（会固定到某个在线节点）。",
+    "subtitle": "几步即可创建并运行 AI 会话。",
     "untitled": "未命名会话",
     "table": {
       "title": "标题",
@@ -406,7 +411,7 @@
     },
     "create": {
       "title": "创建会话",
-      "subtitle": "会话在节点主机上运行。LLM 凭证需要在节点主机环境中配置（BYOK）。",
+      "subtitle": "先选引擎和模型，再写下你的目标。",
       "button": "创建",
       "created": "会话已创建。"
     },
@@ -426,15 +431,15 @@
       "selectorTag": "选择器 tag（可选）",
       "tools": "允许的工具"
     },
-    "engineHint": "会话支持 gateway.loop.v2、gateway.codex.v2、gateway.claude.v2。",
-    "codexProviderHint": "gateway.codex.v2 仅支持 OpenAI provider。",
-    "modelHint": "模型需与所选 provider 和 engine 策略匹配。",
+    "engineHint": "Balanced 适合大多数场景，Coding/Reasoning 是优化预设。",
+    "codexProviderHint": "编码引擎当前仅支持 OpenAI 模型。",
+    "modelHint": "先选 Provider，再选模型。",
     "saveAsOrgDefault": "保存为组织默认",
     "toolsetPlaceholder": "uuid（可选）",
     "toolsetResolved": "已解析",
-    "toolsetHint": "设置后，工具集 skills 会作为只读上下文注入到 gateway brain 执行路径。",
+    "toolsetHint": "可选：如果需要额外能力，可添加工具集。",
     "selectorTagPlaceholder": "例如 west",
-    "selectorHint": "路由使用 gateway 执行面的 executor selector tags。",
+    "selectorHint": "可选：指定会话优先运行位置。",
     "extraToolsPlaceholder": "用逗号分隔的 toolId（可选）",
     "toolsHint": "允许 {count} 个工具",
     "pinnedAgent": "已固定节点",
@@ -463,6 +468,11 @@
       "llm": "LLM",
       "toolset": "工具集",
       "selector": "选择器"
+    },
+    "engineOptions": {
+      "loop": "平衡模式 (gateway.loop.v2)",
+      "codex": "编码模式 (gateway.codex.v2)",
+      "claude": "推理模式 (gateway.claude.v2)"
     }
   },
   "toolsets": {
@@ -649,14 +659,14 @@
   "billing": {
     "credits": "Credits",
     "title": "计费",
-    "subtitle": "查看余额、账单明细并通过 Stripe 充值。",
+    "subtitle": "管理点数余额，并按需充值。",
     "status": {
       "success": "充值完成。Credits 将在稍后到账。",
       "cancel": "已取消支付。"
     },
     "balance": {
       "title": "Credits 余额",
-      "caption": "Credits 仅用于托管模型调用。BYOK 调用将由你的提供方计费。"
+      "caption": "托管点数在这里计费；使用你自己的密钥由对应提供商计费。"
     },
     "topup": {
       "title": "充值 Credits",
@@ -674,7 +684,8 @@
       "when": "时间",
       "reason": "原因",
       "delta": "变更"
-    }
+    },
+    "setupGuide": "查看配置说明"
   },
   "marketing": {
     "nav": {
@@ -1013,10 +1024,10 @@
   },
   "channels": {
     "title": "渠道",
-    "subtitle": "管理组织级渠道账号，并启用安全的会话与工作流路由。",
+    "subtitle": "连接并管理你的消息渠道。",
     "create": {
       "title": "创建渠道账号",
-      "subtitle": "每个账号均为组织作用域。入站租户上下文仅通过账号映射解析。",
+      "subtitle": "先创建一个渠道账号，即可开始收发消息。",
       "button": "创建账号",
       "created": "渠道账号已创建。",
       "dependencies": "依赖",
@@ -1107,6 +1118,60 @@
       "allowlistRequired": "白名单范围和主体不能为空。",
       "metadataRequired": "必填元数据字段缺失: {key}。",
       "testSendRequired": "会话 ID 和消息内容不能为空。"
+    },
+    "policy": {
+      "dm": {
+        "pairing": "先审核后允许私信",
+        "allowlist": "仅允许已知用户私信",
+        "open": "允许所有用户私信",
+        "disabled": "关闭私信"
+      },
+      "group": {
+        "allowlist": "仅允许已知群组",
+        "open": "允许所有群组",
+        "disabled": "关闭群组消息"
+      }
+    },
+    "scope": {
+      "sender": "发送者",
+      "dm": "私信",
+      "group": "群组",
+      "conversation": "会话"
     }
+  },
+  "advanced": {
+    "title": "高级设置",
+    "description": "面向进阶用户的可选配置。",
+    "show": "展开",
+    "hide": "收起"
+  },
+  "providerPicker": {
+    "title": "选择 Provider",
+    "filterConnected": "已连接",
+    "filterRecommended": "推荐",
+    "filterAll": "全部 Provider",
+    "searchProvider": "搜索 Provider...",
+    "noResults": "没有匹配的 Provider。",
+    "badgeConnected": "已连接",
+    "badgeRecommended": "推荐",
+    "badgeOauth": "OAuth",
+    "modelPlaceholder": "例如 gpt-4.1-mini",
+    "searchModel": "搜索模型"
+  },
+  "onboarding": {
+    "title": "开始使用",
+    "subtitle": "按下面步骤即可快速上手。",
+    "stepLogin": "1. 已登录",
+    "stepOrg": "2. 选择组织",
+    "stepSecretOptional": "3. 配置模型密钥（可选）",
+    "stepFirstResource": "4. 创建首个会话/工作流",
+    "goOrg": "去设置组织",
+    "goSession": "创建会话",
+    "goWorkflow": "创建工作流",
+    "goSecrets": "配置模型密钥"
+  },
+  "emptyState": {
+    "nextStep": "下一步",
+    "noData": "这里还没有内容"
   }
 }

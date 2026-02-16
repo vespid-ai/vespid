@@ -12,11 +12,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
 import { Separator } from "../../../../components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../components/ui/tabs";
 import { Textarea } from "../../../../components/ui/textarea";
 import { CodeBlock } from "../../../../components/ui/code-block";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
+import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { LlmConfigField } from "../../../../components/app/llm/llm-config-field";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
@@ -340,14 +342,15 @@ function ToolsetEditorDialog(props: {
             </div>
             <div className="grid gap-1.5">
               <Label>{t("toolsets.visibility")}</Label>
-              <select
-                className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                value={draft.visibility}
-                onChange={(e) => setDraft((p) => ({ ...p, visibility: e.target.value as any }))}
-              >
-                <option value="private">{t("toolsets.visibilityOptions.private")}</option>
-                <option value="org">{t("toolsets.visibilityOptions.org")}</option>
-              </select>
+              <Select value={draft.visibility} onValueChange={(value) => setDraft((p) => ({ ...p, visibility: value as any }))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="private">{t("toolsets.visibilityOptions.private")}</SelectItem>
+                  <SelectItem value="org">{t("toolsets.visibilityOptions.org")}</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div className="grid gap-1.5">
@@ -469,14 +472,15 @@ function ToolsetEditorDialog(props: {
               </div>
               <div className="grid gap-1.5">
                 <Label>{t("toolsets.mcpDialog.transportLabel")}</Label>
-                <select
-                  className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                  value={mcpDraft.transport}
-                  onChange={(e) => setMcpDraft((p) => ({ ...p, transport: e.target.value as any }))}
-                >
-                  <option value="stdio">stdio</option>
-                  <option value="http">http</option>
-                </select>
+                <Select value={mcpDraft.transport} onValueChange={(value) => setMcpDraft((p) => ({ ...p, transport: value as any }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="stdio">stdio</SelectItem>
+                    <SelectItem value="http">http</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               {mcpDraft.transport === "stdio" ? (
                 <>
@@ -601,20 +605,21 @@ function ToolsetEditorDialog(props: {
 	              <div className="grid gap-1.5">
 	                <Label>{t("toolsets.skillDialog.filesLabel")}</Label>
 	                <div className="flex flex-wrap items-center gap-2">
-	                  <select
-	                    className="h-10 flex-1 rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-	                    value={skillActivePath}
-	                    onChange={(e) => setSkillActivePath(e.target.value)}
-	                  >
-	                    {(skillDraft.files ?? [])
-	                      .map((f) => f.path)
-	                      .filter(Boolean)
-	                      .map((p) => (
-	                        <option key={p} value={p}>
-	                          {p}
-	                        </option>
-	                      ))}
-	                  </select>
+                    <Select value={skillActivePath} onValueChange={setSkillActivePath}>
+                      <SelectTrigger className="flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(skillDraft.files ?? [])
+                          .map((f) => f.path)
+                          .filter(Boolean)
+                          .map((p) => (
+                            <SelectItem key={p} value={p}>
+                              {p}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
 	                  <Button
 	                    size="sm"
 	                    variant="outline"
@@ -681,19 +686,23 @@ function ToolsetEditorDialog(props: {
 	                      </div>
 	                      <div className="grid gap-1.5">
 	                        <Label>{t("toolsets.skillDialog.fileEncodingLabel")}</Label>
-	                        <select
-	                          className="h-10 w-full rounded-md border border-border bg-panel/60 px-3 text-sm text-text shadow-sm outline-none focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-	                          value={activeEncoding}
-	                          onChange={(e) =>
-	                            setSkillDraft((p) => ({
-	                              ...p,
-	                              files: (p.files ?? []).map((f) => (f.path === active.path ? { ...f, encoding: e.target.value as any } : f)),
-	                            }))
-	                          }
-	                        >
-	                          <option value="utf8">utf8</option>
-	                          <option value="base64">base64</option>
-	                        </select>
+                          <Select
+                            value={activeEncoding}
+                            onValueChange={(value) =>
+                              setSkillDraft((p) => ({
+                                ...p,
+                                files: (p.files ?? []).map((f) => (f.path === active.path ? { ...f, encoding: value as any } : f)),
+                              }))
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="utf8">utf8</SelectItem>
+                              <SelectItem value="base64">base64</SelectItem>
+                            </SelectContent>
+                          </Select>
 	                      </div>
 	                    </div>
 	                    <div className="grid gap-1.5">
@@ -1145,10 +1154,6 @@ export default function ToolsetsPage() {
             if (aiStep === "start") {
               return (
                 <div className="mt-3 grid gap-4">
-                  <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">
-                    {t("toolsets.ai.guardrail")}
-                  </div>
-
                   <div className="grid gap-1.5">
                     <Label>{t("toolsets.ai.modelLabel")}</Label>
                     <LlmConfigField
@@ -1168,6 +1173,17 @@ export default function ToolsetsPage() {
                     <Label>{t("toolsets.ai.intentLabel")}</Label>
                     <Textarea value={aiIntent} onChange={(e) => setAiIntent(e.target.value)} className="min-h-[140px]" />
                   </div>
+
+                  <AdvancedSection
+                    id="toolsets-ai-start-advanced"
+                    title={t("advanced.title")}
+                    description={t("advanced.description")}
+                    labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+                  >
+                    <div className="rounded-md border border-borderSubtle bg-panel/40 p-3 text-sm text-muted">
+                      {t("toolsets.ai.guardrail")}
+                    </div>
+                  </AdvancedSection>
 
                   <div className="flex justify-end gap-2">
                     <Button variant="outline" onClick={() => setAiOpen(false)} disabled={loading}>

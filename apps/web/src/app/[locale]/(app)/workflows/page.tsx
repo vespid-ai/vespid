@@ -8,13 +8,15 @@ import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Badge } from "../../../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
-import { CodeBlock } from "../../../../components/ui/code-block";
 import { DataTable } from "../../../../components/ui/data-table";
+import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
 import { Textarea } from "../../../../components/ui/textarea";
 import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { type Workflow, useCreateWorkflow, useWorkflows } from "../../../../lib/hooks/use-workflows";
@@ -331,7 +333,6 @@ export default function WorkflowsPage() {
 
   const [recent, setRecent] = useState<string[]>([]);
   const [openWorkflowId, setOpenWorkflowId] = useState("");
-  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     setRecent(getRecentWorkflowIds());
@@ -615,144 +616,151 @@ export default function WorkflowsPage() {
                         ) : null}
                       </div>
 
-                      <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
-                        <div className="text-sm font-medium text-text">{t("workflows.tools")}</div>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={node.toolGithubIssueCreate}
-                            onChange={(e) =>
-                              setAgentNodes((prev) =>
-                                prev.map((n) =>
-                                  n.id === node.id ? { ...n, toolGithubIssueCreate: e.target.checked } : n
-                                )
-                              )
-                            }
-                          />
-                          {t("workflows.githubIssueCreate")}
-                        </label>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={node.toolShellRun}
-                            onChange={(e) =>
-                              setAgentNodes((prev) =>
-                                prev.map((n) =>
-                                  n.id === node.id ? { ...n, toolShellRun: e.target.checked } : n
-                                )
-                              )
-                            }
-                          />
-                          {t("workflows.shellRun")}
-                        </label>
-                        <label className="flex items-center gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            checked={node.runToolsOnNodeAgent}
-                            onChange={(e) =>
-                              setAgentNodes((prev) =>
-                                prev.map((n) => (n.id === node.id ? { ...n, runToolsOnNodeAgent: e.target.checked } : n))
-                              )
-                            }
-                          />
-                          {t("workflows.runToolsOnNodeAgent")}
-                        </label>
-                      </div>
-
-                      {node.toolGithubIssueCreate ? (
+                      <AdvancedSection
+                        id={`workflow-node-advanced-${node.id}`}
+                        title={t("advanced.title")}
+                        description={t("advanced.description")}
+                        labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+                      >
                         <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
-                          <div className="text-sm font-medium text-text">{t("workflows.githubDefaults")}</div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor={`github-secret-id-${node.id}`}>{t("workflows.githubSecretId")}</Label>
-                            <Input
-                              id={`github-secret-id-${node.id}`}
-                              value={node.githubSecretId}
+                          <div className="text-sm font-medium text-text">{t("workflows.tools")}</div>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={node.toolGithubIssueCreate}
                               onChange={(e) =>
                                 setAgentNodes((prev) =>
-                                  prev.map((n) => (n.id === node.id ? { ...n, githubSecretId: e.target.value } : n))
-                                )
-                              }
-                              placeholder={t("workflows.fields.githubSecretPlaceholder")}
-                            />
-                          </div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor={`github-repo-${node.id}`}>{t("workflows.repo")}</Label>
-                            <Input
-                              id={`github-repo-${node.id}`}
-                              value={node.githubRepo}
-                              onChange={(e) =>
-                                setAgentNodes((prev) =>
-                                  prev.map((n) => (n.id === node.id ? { ...n, githubRepo: e.target.value } : n))
+                                  prev.map((n) =>
+                                    n.id === node.id ? { ...n, toolGithubIssueCreate: e.target.checked } : n
+                                  )
                                 )
                               }
                             />
-                          </div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor={`github-title-${node.id}`}>{t("workflows.issueTitle")}</Label>
-                            <Input
-                              id={`github-title-${node.id}`}
-                              value={node.githubTitle}
+                            {t("workflows.githubIssueCreate")}
+                          </label>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={node.toolShellRun}
                               onChange={(e) =>
                                 setAgentNodes((prev) =>
-                                  prev.map((n) => (n.id === node.id ? { ...n, githubTitle: e.target.value } : n))
+                                  prev.map((n) =>
+                                    n.id === node.id ? { ...n, toolShellRun: e.target.checked } : n
+                                  )
                                 )
                               }
                             />
-                          </div>
-                          <div className="grid gap-1.5">
-                            <Label htmlFor={`github-body-${node.id}`}>{t("workflows.issueBody")}</Label>
-                            <Textarea
-                              id={`github-body-${node.id}`}
-                              value={node.githubBody}
+                            {t("workflows.shellRun")}
+                          </label>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={node.runToolsOnNodeAgent}
                               onChange={(e) =>
                                 setAgentNodes((prev) =>
-                                  prev.map((n) => (n.id === node.id ? { ...n, githubBody: e.target.value } : n))
+                                  prev.map((n) => (n.id === node.id ? { ...n, runToolsOnNodeAgent: e.target.checked } : n))
                                 )
                               }
-                              rows={3}
                             />
-                          </div>
+                            {t("workflows.runToolsOnNodeAgent")}
+                          </label>
                         </div>
-                      ) : null}
 
-                      <div className="grid gap-2 md:grid-cols-2">
-                        <div className="grid gap-1.5">
-                          <Label htmlFor={`agent-output-mode-${node.id}`}>{t("workflows.outputMode")}</Label>
-                          <select
-                            id={`agent-output-mode-${node.id}`}
-                            value={node.outputMode}
-                            onChange={(e) =>
-                              setAgentNodes((prev) =>
-                                prev.map((n) =>
-                                  n.id === node.id ? { ...n, outputMode: e.target.value === "json" ? "json" : "text" } : n
-                                )
-                              )
-                            }
-                            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:ring-2 focus:ring-ring"
-                          >
-                            <option value="text">text</option>
-                            <option value="json">json</option>
-                          </select>
-                        </div>
-                        {node.outputMode === "json" ? (
-                          <div className="grid gap-1.5">
-                            <Label htmlFor={`agent-json-schema-${node.id}`}>{t("workflows.jsonSchema")}</Label>
-                            <Textarea
-                              id={`agent-json-schema-${node.id}`}
-                              value={node.jsonSchema}
-                              onChange={(e) =>
-                                setAgentNodes((prev) =>
-                                  prev.map((n) => (n.id === node.id ? { ...n, jsonSchema: e.target.value } : n))
-                                )
-                              }
-                              rows={4}
-                              placeholder='{"type":"object","properties":{}}'
-                            />
+                        {node.toolGithubIssueCreate ? (
+                          <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                            <div className="text-sm font-medium text-text">{t("workflows.githubDefaults")}</div>
+                            <div className="grid gap-1.5">
+                              <Label htmlFor={`github-secret-id-${node.id}`}>{t("workflows.githubSecretId")}</Label>
+                              <Input
+                                id={`github-secret-id-${node.id}`}
+                                value={node.githubSecretId}
+                                onChange={(e) =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) => (n.id === node.id ? { ...n, githubSecretId: e.target.value } : n))
+                                  )
+                                }
+                                placeholder={t("workflows.fields.githubSecretPlaceholder")}
+                              />
+                            </div>
+                            <div className="grid gap-1.5">
+                              <Label htmlFor={`github-repo-${node.id}`}>{t("workflows.repo")}</Label>
+                              <Input
+                                id={`github-repo-${node.id}`}
+                                value={node.githubRepo}
+                                onChange={(e) =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) => (n.id === node.id ? { ...n, githubRepo: e.target.value } : n))
+                                  )
+                                }
+                              />
+                            </div>
+                            <div className="grid gap-1.5">
+                              <Label htmlFor={`github-title-${node.id}`}>{t("workflows.issueTitle")}</Label>
+                              <Input
+                                id={`github-title-${node.id}`}
+                                value={node.githubTitle}
+                                onChange={(e) =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) => (n.id === node.id ? { ...n, githubTitle: e.target.value } : n))
+                                  )
+                                }
+                              />
+                            </div>
+                            <div className="grid gap-1.5">
+                              <Label htmlFor={`github-body-${node.id}`}>{t("workflows.issueBody")}</Label>
+                              <Textarea
+                                id={`github-body-${node.id}`}
+                                value={node.githubBody}
+                                onChange={(e) =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) => (n.id === node.id ? { ...n, githubBody: e.target.value } : n))
+                                  )
+                                }
+                                rows={3}
+                              />
+                            </div>
                           </div>
                         ) : null}
-                      </div>
 
-                      <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="grid gap-1.5">
+                            <Label htmlFor={`agent-output-mode-${node.id}`}>{t("workflows.outputMode")}</Label>
+                            <Select
+                              value={node.outputMode}
+                              onValueChange={(value) =>
+                                setAgentNodes((prev) =>
+                                  prev.map((n) => (n.id === node.id ? { ...n, outputMode: value === "json" ? "json" : "text" } : n))
+                                )
+                              }
+                            >
+                              <SelectTrigger id={`agent-output-mode-${node.id}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="text">text</SelectItem>
+                                <SelectItem value="json">json</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {node.outputMode === "json" ? (
+                            <div className="grid gap-1.5">
+                              <Label htmlFor={`agent-json-schema-${node.id}`}>{t("workflows.jsonSchema")}</Label>
+                              <Textarea
+                                id={`agent-json-schema-${node.id}`}
+                                value={node.jsonSchema}
+                                onChange={(e) =>
+                                  setAgentNodes((prev) =>
+                                    prev.map((n) => (n.id === node.id ? { ...n, jsonSchema: e.target.value } : n))
+                                  )
+                                }
+                                rows={4}
+                                placeholder='{"type":"object","properties":{}}'
+                              />
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="text-sm font-medium text-text">{t("workflows.teamTitle")}</div>
                           <label className="ml-auto flex items-center gap-2 text-sm">
@@ -1062,28 +1070,31 @@ export default function WorkflowsPage() {
                                       </div>
                                       <div className="grid gap-1.5">
                                         <Label htmlFor={`teammate-output-${node.id}-${tmIdx}`}>{t("workflows.outputMode")}</Label>
-                                        <select
-                                          id={`teammate-output-${node.id}-${tmIdx}`}
+                                        <Select
                                           value={tm.outputMode}
-                                          onChange={(e) =>
+                                          onValueChange={(value) =>
                                             setAgentNodes((prev) =>
                                               prev.map((n) =>
                                                 n.id === node.id
                                                   ? {
                                                       ...n,
                                                       teammates: n.teammates.map((x) =>
-                                                        x.id === tm.id ? { ...x, outputMode: e.target.value === "json" ? "json" : "text" } : x
+                                                        x.id === tm.id ? { ...x, outputMode: value === "json" ? "json" : "text" } : x
                                                       ),
                                                     }
                                                   : n
                                               )
                                             )
                                           }
-                                          className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-text outline-none focus:ring-2 focus:ring-ring"
                                         >
-                                          <option value="text">text</option>
-                                          <option value="json">json</option>
-                                        </select>
+                                          <SelectTrigger id={`teammate-output-${node.id}-${tmIdx}`}>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="text">text</SelectItem>
+                                            <SelectItem value="json">json</SelectItem>
+                                          </SelectContent>
+                                        </Select>
                                       </div>
                                     </div>
 
@@ -1155,7 +1166,8 @@ export default function WorkflowsPage() {
                             </div>
                           </div>
                         ) : null}
-                      </div>
+                        </div>
+                      </AdvancedSection>
                     </div>
                   );
                 })}
@@ -1176,12 +1188,7 @@ export default function WorkflowsPage() {
               <Button variant="accent" onClick={submitCreate} disabled={!canCreate || createWorkflow.isPending}>
                 {createWorkflow.isPending ? t("common.loading") : t("common.create")}
               </Button>
-              <Button variant="outline" onClick={() => setShowDebug((v) => !v)}>
-                {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
-              </Button>
             </div>
-
-            {showDebug ? <CodeBlock value={dslPreview} /> : null}
           </CardContent>
         </Card>
 
@@ -1224,11 +1231,23 @@ export default function WorkflowsPage() {
           </CardHeader>
           <CardContent>
             {!orgId ? (
-              <div className="text-sm text-muted">{t("workflows.errors.orgRequired")}</div>
+              <EmptyState title={t("workflows.errors.orgRequired")} />
             ) : workflowsQuery.isLoading ? (
-              <div className="text-sm text-muted">{t("common.loading")}</div>
+              <EmptyState title={t("common.loading")} />
             ) : workflowsLatestByFamily.length === 0 ? (
-              <div className="text-sm text-muted">{t("workflows.list.empty")}</div>
+              <EmptyState
+                title={t("workflows.list.empty")}
+                action={
+                  <Button
+                    variant="accent"
+                    onClick={() => {
+                      document.getElementById("workflow-name")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }}
+                  >
+                    {t("common.create")}
+                  </Button>
+                }
+              />
             ) : (
               <DataTable<any> data={workflowsLatestByFamily} columns={workflowTableColumns as any} />
             )}
