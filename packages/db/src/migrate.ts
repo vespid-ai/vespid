@@ -19,7 +19,7 @@ export async function migrateUp(databaseUrl = process.env.DATABASE_URL): Promise
     `);
 
     const files = (await fs.readdir(migrationsDir))
-      .filter((file) => file.endsWith(".sql"))
+      .filter((file) => file.endsWith(".sql") && !file.endsWith(".down.sql"))
       .sort((a, b) => a.localeCompare(b));
 
     for (const file of files) {

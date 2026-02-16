@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 async function main(): Promise<void> {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const migrationsDir = path.resolve(__dirname, "../migrations");
-  const files = (await fs.readdir(migrationsDir)).filter((file) => file.endsWith(".sql"));
+  const files = (await fs.readdir(migrationsDir)).filter(
+    (file) => file.endsWith(".sql") && !file.endsWith(".down.sql")
+  );
 
   if (files.length === 0) {
     throw new Error("No migration files found in packages/db/migrations");

@@ -80,6 +80,9 @@ jobs:
       - name: Migration contract check
         run: pnpm migrate:check
 
+      - name: Migration rollback pairing gate
+        run: pnpm check:migrations
+
       - name: Apply migrations
         run: pnpm migrate
 

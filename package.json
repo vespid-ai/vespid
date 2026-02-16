@@ -13,10 +13,12 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "migrate": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db migrate",
     "migrate:check": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db migrate:check",
+    "db:rollback": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db rollback",
     "sync:openclaw-model-catalog": "pnpm exec tsx scripts/sync-openclaw-model-catalog.ts",
     "check:boundary": "bash scripts/check-no-enterprise-imports.sh",
     "check:licenses": "node scripts/check-license-spdx.mjs",
     "check:mirror": "node scripts/check-oss-mirror-dry-run.mjs",
+    "check:migrations": "node scripts/check-migration-rollbacks.mjs",
     "check:secrets": "bash scripts/check-secrets.sh",
     "mirror:prepare": "node scripts/prepare-community-mirror.mjs --out .community-mirror",
     "sbom:generate": "node scripts/create-sbom.mjs"
