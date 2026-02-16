@@ -8,7 +8,7 @@
   },
   "nav": {
     "workflows": "工作流",
-    "sessions": "会话",
+    "sessions": "对话",
     "secrets": "密钥",
     "billing": "计费",
     "agents": "代理",
@@ -86,7 +86,7 @@
     "recommended": "推荐",
     "visible": "显示",
     "useCustom": "使用",
-    "inputPlaceholder": "例如 gpt-4.1-mini",
+    "inputPlaceholder": "例如 gpt-5.3-codex",
     "otherProviders": "其他",
     "catalogUnavailable": "模型目录暂不可用。你仍可手动输入模型 ID。",
     "poweredBy": "目录来源",
@@ -145,12 +145,12 @@
   },
   "auth": {
     "title": "登录",
-    "subtitle": "先登录，再完成首次配置流程。",
+    "subtitle": "登录后即可进入对话。",
     "sessionTitle": "会话",
     "loggedInAs": "已登录: {email}",
     "goToApp": "进入应用",
-    "passwordLoginTitle": "邮箱登录",
-    "passwordLoginDescription": "使用邮箱和密码登录。",
+    "passwordLoginTitle": "邮箱和密码",
+    "passwordLoginDescription": "使用邮箱和密码登录，或直接创建账号。",
     "email": "邮箱",
     "password": "密码",
     "signup": "注册",
@@ -158,7 +158,7 @@
     "refresh": "刷新会话",
     "logout": "退出",
     "oauth": "OAuth",
-    "oauthDescription": "基于重定向的 OAuth 流程。",
+    "oauthDescription": "或使用以下方式继续",
     "oauthSuccess": "OAuth 登录成功（{provider}）。",
     "oauthError": "OAuth 登录失败: {code}",
     "google": "使用 Google 继续",
@@ -166,7 +166,7 @@
   },
   "workflows": {
     "title": "工作流",
-    "subtitle": "按步骤创建工作流，并安全运行。",
+    "subtitle": "在对话之后，将自动化流程安全上线。",
     "createTitle": "创建工作流",
     "defaultAgentModel": "默认智能体模型",
     "agentNodes": "智能体节点",
@@ -404,9 +404,9 @@
     }
   },
   "sessions": {
-    "title": "会话",
-    "subtitle": "几步即可创建并运行 AI 会话。",
-    "untitled": "未命名会话",
+    "title": "对话",
+    "subtitle": "几秒内开始一段对话。",
+    "untitled": "未命名对话",
     "table": {
       "title": "标题",
       "engine": "引擎",
@@ -415,15 +415,15 @@
       "open": "打开"
     },
     "create": {
-      "title": "创建会话",
-      "subtitle": "先选引擎和模型，再写下你的目标。",
+      "title": "新建对话",
+      "subtitle": "先选模型，再输入消息并发送。",
       "button": "创建",
-      "created": "会话已创建。"
+      "created": "对话已创建。"
     },
     "list": {
-      "title": "最近会话",
+      "title": "最近对话",
       "subtitle": "按最近活动排序。",
-      "empty": "暂无会话。"
+      "empty": "暂无对话。"
     },
     "fields": {
       "title": "标题",
@@ -442,9 +442,9 @@
     "saveAsOrgDefault": "保存为组织默认",
     "toolsetPlaceholder": "uuid（可选）",
     "toolsetResolved": "已解析",
-    "toolsetHint": "可选：如果需要额外能力，可添加工具集。",
+    "toolsetHint": "可选：如果该对话需要额外能力，可添加工具集。",
     "selectorTagPlaceholder": "例如 west",
-    "selectorHint": "可选：指定会话优先运行位置。",
+    "selectorHint": "可选：指定对话优先运行位置。",
     "extraToolsPlaceholder": "用逗号分隔的 toolId（可选）",
     "toolsHint": "允许 {count} 个工具",
     "pinnedAgent": "已固定节点",
@@ -459,15 +459,15 @@
     },
     "chat": {
       "title": "对话",
-      "subtitle": "消息会以 session events 的形式持久化。按 Cmd/Ctrl+Enter 发送。",
+      "subtitle": "消息会保存为事件。按 Enter 发送，Shift+Enter 换行。",
       "empty": "暂无事件，发送一条消息开始。",
       "message": "消息",
-      "placeholder": "让 agent 做点什么...",
+      "placeholder": "告诉智能体你想完成什么...",
       "send": "发送",
-      "sendHint": "Cmd/Ctrl+Enter 发送。"
+      "sendHint": "Enter 发送，Shift+Enter 换行。"
     },
     "details": {
-      "title": "会话详情",
+      "title": "对话详情",
       "subtitle": "只读配置快照。",
       "engine": "引擎",
       "llm": "LLM",
@@ -1160,7 +1160,7 @@
     "badgeConnected": "已连接",
     "badgeRecommended": "推荐",
     "badgeOauth": "OAuth",
-    "modelPlaceholder": "例如 gpt-4.1-mini",
+    "modelPlaceholder": "例如 gpt-5.3-codex",
     "searchModel": "搜索模型"
   },
   "onboarding": {
@@ -1169,9 +1169,9 @@
     "stepLogin": "1. 已登录",
     "stepOrg": "2. 选择组织",
     "stepSecretOptional": "3. 配置模型密钥（可选）",
-    "stepFirstResource": "4. 创建首个会话/工作流",
+    "stepFirstResource": "4. 开始首个对话/工作流",
     "goOrg": "去设置组织",
-    "goSession": "创建会话",
+    "goSession": "打开对话",
     "goWorkflow": "创建工作流",
     "goSecrets": "配置模型密钥"
   },

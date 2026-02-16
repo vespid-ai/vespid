@@ -8,12 +8,12 @@
   },
   "nav": {
     "workflows": "Workflows",
-    "sessions": "Sessions",
+    "sessions": "Chat",
     "secrets": "Secrets",
     "billing": "Billing",
     "agents": "Agents",
     "toolsets": "Toolsets",
-    "auth": "Auth",
+    "auth": "Sign in",
     "org": "Organization",
     "openById": "Open by ID",
     "channels": "Channels"
@@ -68,9 +68,9 @@
     "hide": "Hide"
   },
   "sessions": {
-    "title": "Sessions",
-    "subtitle": "Create and run AI sessions in a few steps.",
-    "untitled": "Untitled session",
+    "title": "Chat",
+    "subtitle": "Start a conversation in seconds.",
+    "untitled": "Untitled chat",
     "table": {
       "title": "Title",
       "engine": "Engine",
@@ -79,15 +79,15 @@
       "open": "Open"
     },
     "create": {
-      "title": "Create session",
-      "subtitle": "Pick an engine, model, and instructions to start.",
+      "title": "New chat",
+      "subtitle": "Pick a model, type your message, and send to begin.",
       "button": "Create",
-      "created": "Session created."
+      "created": "Chat created."
     },
     "list": {
-      "title": "Recent sessions",
+      "title": "Recent chats",
       "subtitle": "Latest activity first.",
-      "empty": "No sessions yet."
+      "empty": "No chats yet."
     },
     "fields": {
       "title": "Title",
@@ -106,7 +106,7 @@
     "saveAsOrgDefault": "Save as org default",
     "toolsetPlaceholder": "uuid (optional)",
     "toolsetResolved": "Resolved",
-    "toolsetHint": "Optional: add a toolset if this session needs extra capabilities.",
+    "toolsetHint": "Optional: add a toolset if this chat needs extra capabilities.",
     "selectorTagPlaceholder": "e.g. west",
     "selectorHint": "Optional: choose where this session should run.",
     "extraToolsPlaceholder": "Comma-separated tool IDs (optional)",
@@ -123,15 +123,15 @@
     },
     "chat": {
       "title": "Chat",
-      "subtitle": "Messages are persisted as session events. Press Cmd/Ctrl+Enter to send.",
+      "subtitle": "Messages are persisted as events. Press Enter to send, Shift+Enter for newline.",
       "empty": "No events yet. Send a message to begin.",
       "message": "Message",
       "placeholder": "Ask the agent to do something...",
       "send": "Send",
-      "sendHint": "Cmd/Ctrl+Enter sends."
+      "sendHint": "Enter sends. Shift+Enter inserts a new line."
     },
     "details": {
-      "title": "Session details",
+      "title": "Conversation details",
       "subtitle": "Read-only config snapshot.",
       "engine": "Engine",
       "llm": "LLM",
@@ -163,7 +163,7 @@
     "recommended": "Recommended",
     "visible": "Visible",
     "useCustom": "Use",
-    "inputPlaceholder": "e.g. gpt-4.1-mini",
+    "inputPlaceholder": "e.g. gpt-5.3-codex",
     "otherProviders": "Other",
     "catalogUnavailable": "Model catalog unavailable. You can still type a model ID manually.",
     "poweredBy": "Catalog",
@@ -221,13 +221,13 @@
     "noRecent": "No recent orgs."
   },
   "auth": {
-    "title": "Auth",
-    "subtitle": "Sign in to continue and start your first setup flow.",
+    "title": "Sign in",
+    "subtitle": "Sign in to continue to Chat.",
     "sessionTitle": "Session",
     "loggedInAs": "Logged in as {email}",
     "goToApp": "Go to App",
-    "passwordLoginTitle": "Password login",
-    "passwordLoginDescription": "Use your email and password to sign in.",
+    "passwordLoginTitle": "Email and password",
+    "passwordLoginDescription": "Use your email and password to sign in or create an account.",
     "email": "Email",
     "password": "Password",
     "signup": "Sign up",
@@ -235,7 +235,7 @@
     "refresh": "Refresh session",
     "logout": "Logout",
     "oauth": "OAuth",
-    "oauthDescription": "Redirect-based OAuth flow.",
+    "oauthDescription": "Or continue with",
     "oauthSuccess": "OAuth login succeeded ({provider}).",
     "oauthError": "OAuth login failed: {code}",
     "google": "Continue with Google",
@@ -243,7 +243,7 @@
   },
   "workflows": {
     "title": "Workflows",
-    "subtitle": "Build workflows step by step and run them safely.",
+    "subtitle": "Build and run automations after your chat flow is ready.",
     "createTitle": "Create workflow",
     "defaultAgentModel": "Default agent model",
     "agentNodes": "Agent nodes",
@@ -1160,7 +1160,7 @@
     "badgeConnected": "Connected",
     "badgeRecommended": "Recommended",
     "badgeOauth": "OAuth",
-    "modelPlaceholder": "e.g. gpt-4.1-mini",
+    "modelPlaceholder": "e.g. gpt-5.3-codex",
     "searchModel": "Search model"
   },
   "onboarding": {
@@ -1169,9 +1169,9 @@
     "stepLogin": "1. Signed in",
     "stepOrg": "2. Choose organization",
     "stepSecretOptional": "3. Connect model key (optional)",
-    "stepFirstResource": "4. Create first session/workflow",
+    "stepFirstResource": "4. Start first chat/workflow",
     "goOrg": "Go to organization",
-    "goSession": "Create session",
+    "goSession": "Open chat",
     "goWorkflow": "Create workflow",
     "goSecrets": "Configure model key"
   },

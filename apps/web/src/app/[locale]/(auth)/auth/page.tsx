@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useEffect, useMemo, useState } from "react";
-import { apiFetch, getApiBase } from "../../../../lib/api";
+import { apiFetch, apiFetchJson, getApiBase } from "../../../../lib/api";
+import { setActiveOrgId } from "../../../../lib/org-context";
 import { useSession } from "../../../../lib/hooks/use-session";
 import { Badge } from "../../../../components/ui/badge";
 import { Button } from "../../../../components/ui/button";
@@ -16,8 +16,19 @@ function oauthStartUrl(provider: "google" | "github"): string {
   return `${getApiBase()}/v1/auth/oauth/${provider}/start`;
 }
 
+type MeResponse = {
+  user: { id: string; email: string };
+  orgs: Array<{ id: string; name: string; roleKey: string }>;
+  defaultOrgId: string | null;
+};
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default function AuthPage() {
   const t = useTranslations();
+  const router = useRouter();
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] : params?.locale ?? "en";
   const session = useSession();
@@ -26,13 +37,16 @@ export default function AuthPage() {
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
   const [oauthCode, setOauthCode] = useState<string | null>(null);
 
-  const [email, setEmail] = useState("owner@example.com");
-  const [password, setPassword] = useState("Password123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [errorText, setErrorText] = useState<string>("");
+
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setOauthStatus(params.get("oauth"));
-    setOauthProvider(params.get("provider"));
-    setOauthCode(params.get("code"));
+    const query = new URLSearchParams(window.location.search);
+    setOauthStatus(query.get("oauth"));
+    setOauthProvider(query.get("provider"));
+    setOauthCode(query.get("code"));
   }, []);
 
   const oauthBanner = useMemo(() => {
@@ -51,38 +65,58 @@ export default function AuthPage() {
     return null;
   }, [oauthCode, oauthProvider, oauthStatus, t]);
 
-  async function signup() {
-    const response = await apiFetch("/v1/auth/signup", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    });
-    await response.json();
-    session.refetch();
-  }
+  const enterChat = useCallback(async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const me = await apiFetchJson<MeResponse>("/v1/me", { method: "GET" });
+        const fallbackOrgId = Array.isArray(me.orgs) && me.orgs.length > 0 ? me.orgs[0]?.id ?? null : null;
+        const activeOrgId = me.defaultOrgId ?? fallbackOrgId;
+        if (activeOrgId) {
+          setActiveOrgId(activeOrgId);
+        }
+        if (activeOrgId || attempt === 1) {
+          router.replace(`/${locale}/conversations`);
+          return;
+        }
+      } catch {
+        // Retry once because OAuth/session cookies can settle asynchronously.
+      }
+      await wait(250);
+    }
+    router.replace(`/${locale}/conversations`);
+  }, [locale, router]);
 
-  async function login() {
-    const response = await apiFetch("/v1/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    });
-    await response.json();
-    session.refetch();
-  }
+  useEffect(() => {
+    if (session.isLoading || !session.data?.session) {
+      return;
+    }
+    void enterChat();
+  }, [enterChat, session.data?.session, session.isLoading]);
 
-  async function refreshSession() {
-    const response = await apiFetch("/v1/auth/refresh", { method: "POST" });
-    await response.json();
-    session.refetch();
-  }
-
-  async function logout() {
-    const response = await apiFetch("/v1/auth/logout", { method: "POST" });
-    await response.json();
-    session.refetch();
+  async function runAuth(path: "/v1/auth/signup" | "/v1/auth/login") {
+    setPending(true);
+    setErrorText("");
+    try {
+      const response = await apiFetch(path, {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = payload && typeof payload.message === "string" ? payload.message : t("common.unknownError");
+        throw new Error(message);
+      }
+      await session.refetch();
+      await enterChat();
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : t("common.unknownError"));
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="mx-auto grid w-full max-w-xl gap-4">
       <div>
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("auth.title")}</div>
         <div className="mt-1 text-sm text-muted">{t("auth.subtitle")}</div>
@@ -104,37 +138,13 @@ export default function AuthPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t("auth.sessionTitle")}</CardTitle>
-          <CardDescription>
-            {session.isLoading
-              ? t("common.loading")
-              : session.data?.user?.email
-                ? t("auth.loggedInAs", { email: session.data.user.email })
-                : t("common.notLoggedIn")}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => session.refetch()}>
-            {t("auth.refresh")}
-          </Button>
-          <Button variant="danger" onClick={logout}>
-            {t("auth.logout")}
-          </Button>
-          <Button asChild variant="ghost">
-            <Link href={`/${locale}/workflows`}>{t("auth.goToApp")}</Link>
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
           <CardTitle>{t("auth.passwordLoginTitle")}</CardTitle>
           <CardDescription>{t("auth.passwordLoginDescription")}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <div className="grid gap-1.5">
             <Label htmlFor="email">{t("auth.email")}</Label>
-            <Input id="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <Input id="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" />
           </div>
 
           <div className="grid gap-1.5">
@@ -144,18 +154,18 @@ export default function AuthPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               type="password"
+              autoComplete="current-password"
             />
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Button variant="accent" onClick={signup}>
-              {t("auth.signup")}
+          {errorText ? <div className="text-sm text-red-700">{errorText}</div> : null}
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button variant="accent" onClick={() => void runAuth("/v1/auth/login")} disabled={pending}>
+              {pending ? t("common.loading") : t("auth.login")}
             </Button>
-            <Button variant="outline" onClick={login}>
-              {t("auth.login")}
-            </Button>
-            <Button variant="outline" onClick={refreshSession}>
-              {t("auth.refresh")}
+            <Button variant="outline" onClick={() => void runAuth("/v1/auth/signup")} disabled={pending}>
+              {pending ? t("common.loading") : t("auth.signup")}
             </Button>
           </div>
         </CardContent>
@@ -166,7 +176,7 @@ export default function AuthPage() {
           <CardTitle>{t("auth.oauth")}</CardTitle>
           <CardDescription>{t("auth.oauthDescription")}</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
+        <CardContent className="grid gap-2 sm:grid-cols-2">
           <Button asChild variant="outline">
             <a href={oauthStartUrl("google")}>{t("auth.google")}</a>
           </Button>
@@ -175,7 +185,6 @@ export default function AuthPage() {
           </Button>
         </CardContent>
       </Card>
-
     </div>
   );
 }

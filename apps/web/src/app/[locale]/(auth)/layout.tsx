@@ -17,7 +17,7 @@ export default async function AuthLayout({
           Vespid
         </Link>
         <nav className="flex items-center gap-3 text-sm">
-          <Link href={`/${locale}/workflows`} className="text-muted hover:text-text">
+          <Link href={`/${locale}/conversations`} className="text-muted hover:text-text">
             App
           </Link>
         </nav>

@@ -1,15 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
 import { EmptyState } from "../../../../../components/ui/empty-state";
-import { Input } from "../../../../../components/ui/input";
-import { Label } from "../../../../../components/ui/label";
-import { Separator } from "../../../../../components/ui/separator";
+import { Textarea } from "../../../../../components/ui/textarea";
 import { AdvancedSection } from "../../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { cn } from "../../../../../lib/cn";
@@ -41,6 +39,16 @@ type GatewayServerMessage =
       message: string;
     };
 
+type ChatRole = "user" | "assistant" | "system";
+
+type ChatMessage = {
+  id: string;
+  role: ChatRole;
+  text: string;
+  createdAt: string;
+  seq: number;
+};
+
 function gatewayWsBase(): string {
   return process.env.NEXT_PUBLIC_GATEWAY_WS_BASE ?? "ws://localhost:3002";
 }
@@ -57,7 +65,7 @@ function formatTime(value: string | null | undefined): string {
   if (!value) return "";
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) return value;
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function mergeBySeq(existing: AgentSessionEvent[], incoming: AgentSessionEvent[]): AgentSessionEvent[] {
@@ -67,19 +75,122 @@ function mergeBySeq(existing: AgentSessionEvent[], incoming: AgentSessionEvent[]
   return [...map.values()].sort((a, b) => a.seq - b.seq);
 }
 
-export default function SessionDetailPage() {
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function contentToText(content: unknown): string | null {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "string") {
+      parts.push(item);
+      continue;
+    }
+    const rec = asRecord(item);
+    if (!rec) {
+      continue;
+    }
+    if (typeof rec.text === "string") {
+      parts.push(rec.text);
+    }
+  }
+  const text = parts.join("\n").trim();
+  return text.length > 0 ? text : null;
+}
+
+function extractEventText(event: AgentSessionEvent): string {
+  const payload = event.payload;
+  if (typeof payload === "string") {
+    return payload;
+  }
+
+  const record = asRecord(payload);
+  if (record) {
+    const directKeys = ["message", "text", "outputText", "content", "delta", "summary", "reasoning"] as const;
+    for (const key of directKeys) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+      }
+      const contentText = contentToText(value);
+      if (contentText) {
+        return contentText;
+      }
+    }
+
+    if (Array.isArray(record.messages) && record.messages.length > 0) {
+      const lines: string[] = [];
+      for (const item of record.messages) {
+        if (typeof item === "string") {
+          lines.push(item);
+          continue;
+        }
+        const msg = asRecord(item);
+        if (!msg) {
+          continue;
+        }
+        if (typeof msg.text === "string") {
+          lines.push(msg.text);
+          continue;
+        }
+        const text = contentToText(msg.content);
+        if (text) {
+          lines.push(text);
+        }
+      }
+      const joined = lines.join("\n").trim();
+      if (joined.length > 0) {
+        return joined;
+      }
+    }
+  }
+
+  if (payload === null || payload === undefined) {
+    return event.eventType;
+  }
+
+  const fallback = JSON.stringify(payload);
+  if (typeof fallback === "string" && fallback.length > 0) {
+    return fallback.length > 280 ? `${fallback.slice(0, 280)}...` : fallback;
+  }
+
+  return event.eventType;
+}
+
+function inferRole(event: AgentSessionEvent): ChatRole {
+  const eventType = event.eventType.toLowerCase();
+  if (eventType.includes("user") || eventType.includes("client") || eventType.includes("input")) {
+    return "user";
+  }
+  if (eventType.includes("assistant") || eventType.includes("agent") || eventType.includes("model") || eventType.includes("output")) {
+    return "assistant";
+  }
+  return "system";
+}
+
+export default function ConversationDetailPage() {
   const t = useTranslations();
   const router = useRouter();
-  const params = useParams<{ locale?: string | string[]; sessionId?: string | string[] }>();
+  const searchParams = useSearchParams();
+  const params = useParams<{ locale?: string | string[]; conversationId?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? (params.locale[0] ?? "en") : params?.locale ?? "en";
-  const sessionId = Array.isArray(params?.sessionId) ? (params.sessionId[0] ?? "") : params?.sessionId ?? "";
+  const conversationId = Array.isArray(params?.conversationId) ? (params.conversationId[0] ?? "") : params?.conversationId ?? "";
 
   const orgId = useActiveOrgId();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
 
-  const sessionQuery = useSession(scopedOrgId, sessionId || null);
-  const eventsQuery = useSessionEvents(scopedOrgId, sessionId || null);
+  const sessionQuery = useSession(scopedOrgId, conversationId || null);
+  const eventsQuery = useSessionEvents(scopedOrgId, conversationId || null);
 
   const [events, setEvents] = useState<AgentSessionEvent[]>([]);
   const [connected, setConnected] = useState(false);
@@ -88,6 +199,18 @@ export default function SessionDetailPage() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const draftMessage = searchParams.get("draft") ?? "";
+  const autoSendDraftRef = useRef<string>(draftMessage);
+  const autoSendDoneRef = useRef(false);
+
+  useEffect(() => {
+    setEvents([]);
+  }, [conversationId]);
+
+  useEffect(() => {
+    autoSendDraftRef.current = draftMessage;
+    autoSendDoneRef.current = false;
+  }, [conversationId, draftMessage]);
 
   useEffect(() => {
     const initial = eventsQuery.data?.events ?? [];
@@ -97,14 +220,24 @@ export default function SessionDetailPage() {
     setEvents((prev) => mergeBySeq(prev, initial));
   }, [eventsQuery.data?.events]);
 
-  const canConnect = Boolean(scopedOrgId && sessionId);
+  const canConnect = Boolean(scopedOrgId && conversationId);
   const wsUrl = useMemo(() => {
     if (!scopedOrgId) return null;
     const base = gatewayWsBase().replace(/\/+$/, "");
     return `${base}/ws/client?orgId=${encodeURIComponent(scopedOrgId)}`;
   }, [scopedOrgId]);
 
-  const connectWs = () => {
+  const chatMessages = useMemo<ChatMessage[]>(() => {
+    return events.map((event) => ({
+      id: `${event.id}:${event.seq}`,
+      seq: event.seq,
+      role: inferRole(event),
+      text: extractEventText(event),
+      createdAt: event.createdAt,
+    }));
+  }, [events]);
+
+  function connectWs() {
     if (!wsUrl || !canConnect) return;
     if (!authSession.data?.session) {
       toast.error(t("sessions.ws.requiresLogin"));
@@ -120,7 +253,7 @@ export default function SessionDetailPage() {
         setConnected(true);
         const hello: GatewayClientMessage = { type: "client_hello", clientVersion: "web" };
         ws.send(JSON.stringify(hello));
-        const join: GatewayClientMessage = { type: "session_join", sessionId };
+        const join: GatewayClientMessage = { type: "session_join", sessionId: conversationId };
         ws.send(JSON.stringify(join));
       };
 
@@ -141,7 +274,7 @@ export default function SessionDetailPage() {
           return;
         }
         if (msg.type !== "session_event_v2") return;
-        if (msg.sessionId !== sessionId) return;
+        if (msg.sessionId !== conversationId) return;
         const e: AgentSessionEvent = {
           id: `${msg.sessionId}:${msg.seq}`,
           organizationId: scopedOrgId ?? "",
@@ -157,7 +290,7 @@ export default function SessionDetailPage() {
     } catch (err) {
       setWsError(err instanceof Error ? err.message : String(err));
     }
-  };
+  }
 
   useEffect(() => {
     if (!canConnect) return;
@@ -171,16 +304,64 @@ export default function SessionDetailPage() {
       wsRef.current = null;
       setConnected(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsUrl, canConnect]);
+  }, [conversationId, wsUrl, canConnect]);
 
   useEffect(() => {
     if (!bottomRef.current) return;
     bottomRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [events.length]);
+  }, [chatMessages.length]);
+
+  function sendText(text: string) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error(t("sessions.ws.notConnected"));
+      return;
+    }
+    const payload: GatewayClientMessage = {
+      type: "session_send",
+      sessionId: conversationId,
+      message: text,
+      idempotencyKey: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    };
+    ws.send(JSON.stringify(payload));
+  }
+
+  useEffect(() => {
+    if (!connected || autoSendDoneRef.current) {
+      return;
+    }
+    const initial = autoSendDraftRef.current.trim();
+    if (!initial) {
+      return;
+    }
+
+    sendText(initial);
+    autoSendDoneRef.current = true;
+    router.replace(`/${locale}/conversations/${conversationId}`);
+  }, [connected, conversationId, locale, router]);
+
+  function send() {
+    const trimmed = message.trim();
+    if (!trimmed) {
+      return;
+    }
+    setMessage("");
+    sendText(trimmed);
+  }
+
+  function resetPin() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error(t("sessions.ws.notConnected"));
+      return;
+    }
+    const payload: GatewayClientMessage = { type: "session_reset_agent", sessionId: conversationId };
+    ws.send(JSON.stringify(payload));
+  }
 
   const session = sessionQuery.data?.session ?? null;
   const pinnedAgentId = session?.pinnedAgentId ?? null;
+  const headerTitle = session?.title?.trim().length ? session.title : t("sessions.untitled");
 
   if (!authSession.isLoading && !authSession.data?.session) {
     return (
@@ -190,7 +371,7 @@ export default function SessionDetailPage() {
             <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
             <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/conversations`)}>
             {t("common.back")}
           </Button>
         </div>
@@ -213,7 +394,7 @@ export default function SessionDetailPage() {
             <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
             <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/conversations`)}>
             {t("common.back")}
           </Button>
         </div>
@@ -242,7 +423,7 @@ export default function SessionDetailPage() {
             <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
             <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/conversations`)}>
             {t("common.back")}
           </Button>
         </div>
@@ -265,7 +446,7 @@ export default function SessionDetailPage() {
             <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
             <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/conversations`)}>
             {t("common.back")}
           </Button>
         </div>
@@ -282,7 +463,7 @@ export default function SessionDetailPage() {
             <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
             <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/conversations`)}>
             {t("common.back")}
           </Button>
         </div>
@@ -291,70 +472,22 @@ export default function SessionDetailPage() {
     );
   }
 
-  async function send() {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.error(t("sessions.ws.notConnected"));
-      return;
-    }
-    const trimmed = message.trim();
-    if (!trimmed) {
-      return;
-    }
-    setMessage("");
-    const payload: GatewayClientMessage = {
-      type: "session_send",
-      sessionId,
-      message: trimmed,
-      idempotencyKey: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    };
-    ws.send(JSON.stringify(payload));
-  }
-
-  function resetPin() {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.error(t("sessions.ws.notConnected"));
-      return;
-    }
-    const payload: GatewayClientMessage = { type: "session_reset_agent", sessionId };
-    ws.send(JSON.stringify(payload));
-  }
-
-  const headerTitle = session?.title?.trim().length ? session.title : t("sessions.untitled");
-
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{headerTitle}</div>
           <div className="mt-1 text-xs text-muted">
-            <span className="font-mono">{sessionId}</span>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span className={cn("inline-flex items-center gap-2", connected ? "text-emerald-700" : "text-muted")}>
-              <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-muted")} />
-              {connected ? t("sessions.ws.connected") : t("sessions.ws.disconnected")}
-            </span>
-            {wsError ? <span className="text-red-700">{wsError}</span> : null}
-            {pinnedAgentId ? (
-              <span className="inline-flex items-center gap-2">
-                <span>{t("sessions.pinnedAgent")}</span>
-                <span className="font-mono">{pinnedAgentId.slice(0, 8)}…</span>
-              </span>
-            ) : null}
+            <span className="font-mono">{conversationId}</span>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/sessions`)}>
+          <Button size="sm" variant="outline" onClick={() => router.push(`/${locale}/conversations`)}>
             {t("common.back")}
           </Button>
           <Button size="sm" variant="outline" onClick={() => connectWs()} disabled={!canConnect || connected}>
             {t("sessions.ws.reconnect")}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => resetPin()} disabled={!canConnect || !connected}>
-            {t("sessions.resetAgent")}
           </Button>
         </div>
       </div>
@@ -365,70 +498,64 @@ export default function SessionDetailPage() {
           <CardDescription>{t("sessions.chat.subtitle")}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          <div className="rounded-2xl border border-borderSubtle bg-panel/40 p-3 shadow-elev1">
-            <div className="grid gap-2">
-              {events.length === 0 ? (
-                <EmptyState
-                  title={t("sessions.chat.empty")}
-                  action={
-                    <Button size="sm" variant="outline" onClick={() => connectWs()} disabled={!canConnect || connected}>
-                      {t("sessions.ws.reconnect")}
-                    </Button>
-                  }
-                />
-              ) : (
-                events.map((e) => (
-                  <div key={e.seq} className="grid gap-1">
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-muted">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono">#{e.seq}</span>
-                        <span className="rounded-full border border-borderSubtle px-2 py-0.5 font-mono">{e.eventType}</span>
-                        <span className={cn("font-mono", e.level === "error" ? "text-red-700" : e.level === "warn" ? "text-amber-700" : "text-muted")}>
-                          {e.level}
-                        </span>
-                      </div>
-                      <span className="font-mono">{formatTime(e.createdAt)}</span>
+          <div className="rounded-2xl border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
+            {chatMessages.length === 0 ? (
+              <EmptyState
+                title={t("sessions.chat.empty")}
+                action={
+                  <Button size="sm" variant="outline" onClick={() => connectWs()} disabled={!canConnect || connected}>
+                    {t("sessions.ws.reconnect")}
+                  </Button>
+                }
+              />
+            ) : (
+              <div className="grid gap-3">
+                {chatMessages.map((item) => (
+                  <div
+                    key={item.id}
+                    className={cn(
+                      "flex w-full",
+                      item.role === "user" ? "justify-end" : item.role === "assistant" ? "justify-start" : "justify-center"
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "max-w-[85%] rounded-2xl px-3 py-2 text-sm shadow-elev1",
+                        item.role === "user" && "bg-accent text-white",
+                        item.role === "assistant" && "border border-borderSubtle bg-panelElev/70 text-text",
+                        item.role === "system" && "border border-borderSubtle bg-panel/45 text-muted"
+                      )}
+                    >
+                      <div className="whitespace-pre-wrap break-words">{item.text}</div>
+                      <div className={cn("mt-1 text-[11px]", item.role === "user" ? "text-white/80" : "text-muted")}>#{item.seq} {formatTime(item.createdAt)}</div>
                     </div>
-                    {e.payload !== null && e.payload !== undefined ? (
-                      <AdvancedSection
-                        id={`session-event-payload-${e.seq}`}
-                        title={t("advanced.title")}
-                        labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
-                      >
-                        <pre className="max-h-56 overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-3 text-xs text-text">
-                          {JSON.stringify(e.payload, null, 2)}
-                        </pre>
-                      </AdvancedSection>
-                    ) : null}
                   </div>
-                ))
-              )}
-              <div ref={bottomRef} />
-            </div>
+                ))}
+                <div ref={bottomRef} />
+              </div>
+            )}
           </div>
 
-          <Separator />
-
           <div className="grid gap-2">
-            <Label>{t("sessions.chat.message")}</Label>
-            <div className="flex gap-2">
-              <Input
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder={t("sessions.chat.placeholder")}
-                disabled={!canConnect}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-              />
-              <Button variant="accent" disabled={!canConnect || !connected || message.trim().length === 0} onClick={() => void send()}>
+            <Textarea
+              rows={3}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder={t("sessions.chat.placeholder")}
+              disabled={!canConnect}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+            />
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-muted">{t("sessions.chat.sendHint")}</div>
+              <Button variant="accent" disabled={!canConnect || !connected || message.trim().length === 0} onClick={send}>
                 {t("sessions.chat.send")}
               </Button>
             </div>
-            <div className="text-xs text-muted">{t("sessions.chat.sendHint")}</div>
           </div>
         </CardContent>
       </Card>
@@ -439,8 +566,25 @@ export default function SessionDetailPage() {
           <CardDescription>{t("sessions.details.subtitle")}</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+            <span className={cn("inline-flex items-center gap-2 rounded-full border px-2 py-0.5", connected ? "border-emerald-400/60 text-emerald-700" : "border-borderSubtle") }>
+              <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-muted")} />
+              {connected ? t("sessions.ws.connected") : t("sessions.ws.disconnected")}
+            </span>
+            {wsError ? <span className="text-red-700">{wsError}</span> : null}
+            {pinnedAgentId ? (
+              <span className="inline-flex items-center gap-2">
+                <span>{t("sessions.pinnedAgent")}</span>
+                <span className="font-mono">{pinnedAgentId.slice(0, 8)}...</span>
+              </span>
+            ) : null}
+            <Button size="sm" variant="outline" onClick={resetPin} disabled={!canConnect || !connected}>
+              {t("sessions.resetAgent")}
+            </Button>
+          </div>
+
           <AdvancedSection
-            id="session-detail-advanced"
+            id="conversation-detail-advanced"
             title={t("advanced.title")}
             description={t("advanced.description")}
             labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
@@ -448,27 +592,34 @@ export default function SessionDetailPage() {
             <div className="grid gap-2 text-sm">
               <div className="grid gap-1 md:grid-cols-2">
                 <div className="text-muted">{t("sessions.details.engine")}</div>
-                <div className="font-mono">{session?.engineId ?? "-"}</div>
+                <div className="font-mono">{session.engineId}</div>
               </div>
               <div className="grid gap-1 md:grid-cols-2">
                 <div className="text-muted">{t("sessions.details.llm")}</div>
-                <div className="font-mono">{session ? `${session.llmProvider}:${session.llmModel}` : "-"}</div>
+                <div className="font-mono">{`${session.llmProvider}:${session.llmModel}`}</div>
               </div>
               <div className="grid gap-1 md:grid-cols-2">
                 <div className="text-muted">{t("sessions.details.toolset")}</div>
-                <div className="font-mono">{session?.toolsetId ?? "-"}</div>
+                <div className="font-mono">{session.toolsetId ?? "-"}</div>
               </div>
               <div className="grid gap-1 md:grid-cols-2">
                 <div className="text-muted">{t("sessions.details.selector")}</div>
                 <div className="font-mono">
-                  {session?.executorSelector?.executorId ??
-                    session?.executorSelector?.tag ??
-                    session?.executorSelector?.group ??
-                    (Array.isArray(session?.executorSelector?.labels) && session?.executorSelector?.labels.length > 0
-                      ? session?.executorSelector?.labels.join(",")
+                  {session.executorSelector?.executorId ??
+                    session.executorSelector?.tag ??
+                    session.executorSelector?.group ??
+                    (Array.isArray(session.executorSelector?.labels) && session.executorSelector.labels.length > 0
+                      ? session.executorSelector.labels.join(",")
                       : "-")}
                 </div>
               </div>
+            </div>
+
+            <div className="mt-3 grid gap-2">
+              <div className="text-sm font-medium text-text">Raw events</div>
+              <pre className="max-h-[340px] overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-3 text-xs text-text">
+                {JSON.stringify(events, null, 2)}
+              </pre>
             </div>
           </AdvancedSection>
         </CardContent>

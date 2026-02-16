@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   LogOut,
   Menu,
+  MessageCircle,
   MessageSquare,
   Monitor,
   Moon,
@@ -225,8 +226,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const nav: NavItem[] = useMemo(
     () => [
+      { href: (l) => `/${l}/conversations`, labelKey: "nav.sessions", icon: <MessageCircle className="h-4 w-4" /> },
       { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
-      { href: (l) => `/${l}/sessions`, labelKey: "nav.sessions", icon: <Monitor className="h-4 w-4" /> },
       { href: (l) => `/${l}/channels`, labelKey: "nav.channels", icon: <MessageSquare className="h-4 w-4" /> },
       { href: (l) => `/${l}/secrets`, labelKey: "nav.secrets", icon: <KeyRound className="h-4 w-4" /> },
       { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
@@ -288,7 +289,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const themeLabel = mounted ? (theme ?? "system") : "system";
   const hasStarterRoute = useMemo(() => {
     const p = pathname ?? "";
-    return /^\/[^/]+\/(sessions|workflows)\/[^/]+/.test(p);
+    return /^\/[^/]+\/(conversations|workflows)\/[^/]+/.test(p);
   }, [pathname]);
   const onboardingVisible = mounted && hasSession && (!activeOrgId || !(hasStarterResource || hasStarterRoute));
   const authRequiredBannerVisible = mounted && !session.isLoading && !hasSession;
@@ -392,10 +393,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         items={[
+          { title: t("nav.sessions"), href: `/${locale}/conversations`, icon: MessageCircle },
           { title: t("nav.workflows"), href: `/${locale}/workflows`, icon: LayoutGrid },
           { title: t("nav.channels"), href: `/${locale}/channels`, icon: MessageSquare },
           { title: t("nav.secrets"), href: `/${locale}/secrets`, icon: KeyRound },
+          { title: t("nav.billing"), href: `/${locale}/billing`, icon: CreditCard },
           { title: t("nav.agents"), href: `/${locale}/agents`, icon: Rocket },
+          { title: t("nav.toolsets"), href: `/${locale}/toolsets`, icon: Braces },
           { title: t("nav.auth"), href: `/${locale}/auth`, icon: ShieldCheck },
           { title: t("nav.org"), href: `/${locale}/org`, icon: Users },
         ]}
@@ -774,7 +778,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       {activeOrgId && !hasStarterResource ? (
                         <>
                           <Button size="sm" variant="accent" asChild>
-                            <Link href={`/${locale}/sessions`}>{t("onboarding.goSession")}</Link>
+                            <Link href={`/${locale}/conversations`}>{t("onboarding.goSession")}</Link>
                           </Button>
                           <Button size="sm" variant="outline" asChild>
                             <Link href={`/${locale}/workflows`}>{t("onboarding.goWorkflow")}</Link>

@@ -40,7 +40,7 @@ export default function LocaleHomePage() {
     }
 
     if (session.data?.session) {
-      router.replace(`/${locale}/workflows`);
+      router.replace(`/${locale}/conversations`);
     }
   }, [locale, router, session.data, session.isLoading]);
 
