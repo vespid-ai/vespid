@@ -2135,9 +2135,14 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               <Link href={`/${locale}/workflows/${workflowId}/graph`}>Open full screen</Link>
             </Button>
           ) : (
-            <Button asChild variant="outline">
-              <Link href={`/${locale}/workflows/${workflowId}`}>Back</Link>
-            </Button>
+            <>
+              <Button asChild variant="outline">
+                <Link href={`/${locale}/workflows`}>All workflows</Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link href={`/${locale}/workflows/${workflowId}`}>Back</Link>
+              </Button>
+            </>
           )}
           <Button
             variant="outline"

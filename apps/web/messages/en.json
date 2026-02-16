@@ -253,6 +253,9 @@
   "workflows": {
     "title": "Workflows",
     "subtitle": "Build and run automations after your chat flow is ready.",
+    "builderTitle": "Workflow Builder",
+    "builderHint": "Create and define your workflow first. Advanced access is available from More actions.",
+    "createWillOpenEditor": "After creation, you will go directly to the visual editor.",
     "createTitle": "Create workflow",
     "createQuickHint": "Start with a name, model, and primary instruction. Configure structure later.",
     "nodesConfigured": "{count} node(s) configured",
@@ -297,6 +300,15 @@
     "workflowId": "Workflow ID",
     "recent": "Recent workflows",
     "open": "Open workflow",
+    "actions": {
+      "more": "More actions",
+      "openById": "Open by ID",
+      "openRecent": "Open recent",
+      "pasteWorkflowId": "Paste workflow ID"
+    },
+    "empty": {
+      "createActionLabel": "Start creating workflow"
+    },
     "runs": "Runs",
     "createWizardTitle": "Create workflow",
     "createWizardHint": "Set an active org to create workflows.",
@@ -330,11 +342,15 @@
       "hint": "Latest revision per workflow family (org-scoped).",
       "empty": "No workflows yet.",
       "open": "Open",
+      "openEditor": "Open editor",
+      "menu": {
+        "openDetails": "Open details"
+      },
       "columns": {
         "name": "Name",
         "status": "Status",
         "revision": "Revision",
-        "open": "Open"
+        "open": "Actions"
       }
     },
     "tips": {
@@ -348,21 +364,32 @@
       "vertexSecretRequired": "Vertex requires a secretId (Vertex OAuth).",
       "workflowIdRequired": "Workflow ID required"
     },
+    "createDisabledReasons": {
+      "orgRequired": "Select an active organization first.",
+      "workflowName": "Workflow name is required.",
+      "githubSecret": "A GitHub secret is required when GitHub tools are enabled.",
+      "providerSecret": "Selected provider requires secretId."
+    },
     "toast": {
       "created": "Workflow created"
     },
     "templates": {
+      "title": "Templates",
+      "description": "Apply a template to prefill the builder, then adjust and create.",
+      "useTemplate": "Use template",
+      "applied": "Template applied to builder",
+      "appliedTag": "Template applied",
       "github-issue-triage": {
         "name": "GitHub issue triage",
-        "description": "Create an issue, then run an agent step."
+        "description": "Triage incoming issues, then draft and execute the next action."
       },
       "http-to-agent": {
-        "name": "HTTP + agent.execute",
-        "description": "Start with an HTTP request node, then execute an agent task."
+        "name": "Intake normalization",
+        "description": "Normalize inbound payloads and prepare a clear automation handoff."
       },
       "agent-shell": {
         "name": "Agent shell runner",
-        "description": "A minimal workflow that runs a shell script."
+        "description": "Run shell diagnostics through the agent and summarize outcomes."
       }
     },
     "detail": {

@@ -170,6 +170,9 @@
   "workflows": {
     "title": "工作流",
     "subtitle": "在对话之后，将自动化流程安全上线。",
+    "builderTitle": "工作流构建器",
+    "builderHint": "优先完成创建和定义流程；高级入口收敛在“更多操作”中。",
+    "createWillOpenEditor": "创建后将直接进入可视化编辑器。",
     "createTitle": "创建工作流",
     "createQuickHint": "先配置名称、模型和主指令，再按需打开高级配置。",
     "nodesConfigured": "已配置 {count} 个节点",
@@ -214,6 +217,15 @@
     "workflowId": "工作流 ID",
     "recent": "最近工作流",
     "open": "打开工作流",
+    "actions": {
+      "more": "更多操作",
+      "openById": "按 ID 打开",
+      "openRecent": "打开最近工作流",
+      "pasteWorkflowId": "粘贴工作流 ID"
+    },
+    "empty": {
+      "createActionLabel": "开始创建工作流"
+    },
     "runs": "运行",
     "createWizardTitle": "创建工作流",
     "createWizardHint": "创建前请先选择当前组织。",
@@ -247,11 +259,15 @@
       "hint": "按 workflow family 展示最新 revision (组织范围)。",
       "empty": "暂无工作流。",
       "open": "打开",
+      "openEditor": "打开编辑器",
+      "menu": {
+        "openDetails": "打开详情"
+      },
       "columns": {
         "name": "名称",
         "status": "状态",
         "revision": "版本",
-        "open": "打开"
+        "open": "操作"
       }
     },
     "tips": {
@@ -265,21 +281,32 @@
       "vertexSecretRequired": "Vertex 需要配置 secretId（Vertex OAuth）。",
       "workflowIdRequired": "需要填写工作流 ID"
     },
+    "createDisabledReasons": {
+      "orgRequired": "请先选择当前组织。",
+      "workflowName": "请填写工作流名称。",
+      "githubSecret": "启用 GitHub 工具时必须配置 GitHub secret。",
+      "providerSecret": "所选模型提供方需要 secretId。"
+    },
     "toast": {
       "created": "已创建工作流"
     },
     "templates": {
+      "title": "模板",
+      "description": "点击模板先预填构建器，再按需修改并创建。",
+      "useTemplate": "使用模板",
+      "applied": "模板已应用到构建器",
+      "appliedTag": "已应用模板",
       "github-issue-triage": {
         "name": "GitHub Issue 分诊",
-        "description": "创建一个 Issue, 然后执行一个 agent 步骤。"
+        "description": "对输入 Issue 做分诊，并生成下一步处理动作。"
       },
       "http-to-agent": {
-        "name": "HTTP + agent.execute",
-        "description": "先发起 HTTP 请求, 再执行一个 agent 任务。"
+        "name": "入口规范化",
+        "description": "先整理输入，再产出结构化的自动化执行指令。"
       },
       "agent-shell": {
-        "name": "Agent shell runner",
-        "description": "一个执行 shell 脚本的最小工作流。"
+        "name": "Agent Shell 执行",
+        "description": "通过 agent 执行 shell 诊断并总结结果。"
       }
     },
     "detail": {
