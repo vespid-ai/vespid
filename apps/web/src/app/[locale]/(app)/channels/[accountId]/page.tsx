@@ -8,8 +8,10 @@ import { Button } from "../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
 import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../../components/ui/select";
 import { Separator } from "../../../../../components/ui/separator";
 import { Textarea } from "../../../../../components/ui/textarea";
+import { AdvancedSection } from "../../../../../components/app/advanced-section";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import {
   useApprovePairingRequest,
@@ -280,63 +282,72 @@ export default function ChannelAccountDetailPage() {
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="grid gap-2">
-              <Label>{t("channels.fields.dmPolicy")}</Label>
-              <select
-                value={dmPolicy}
-                onChange={(e) => setDmPolicy(e.target.value as "pairing" | "allowlist" | "open" | "disabled")}
-                className="h-10 rounded-xl border border-borderSubtle bg-panel/45 px-3 text-sm"
-              >
-                <option value="pairing">pairing</option>
-                <option value="allowlist">allowlist</option>
-                <option value="open">open</option>
-                <option value="disabled">disabled</option>
-              </select>
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("channels.fields.groupPolicy")}</Label>
-              <select
-                value={groupPolicy}
-                onChange={(e) => setGroupPolicy(e.target.value as "allowlist" | "open" | "disabled")}
-                className="h-10 rounded-xl border border-borderSubtle bg-panel/45 px-3 text-sm"
-              >
-                <option value="allowlist">allowlist</option>
-                <option value="open">open</option>
-                <option value="disabled">disabled</option>
-              </select>
-            </div>
-            <div className="grid gap-2">
-              <Label>{t("channels.fields.enabled")}</Label>
-              <div className="flex h-10 items-center gap-3 rounded-xl border border-borderSubtle bg-panel/45 px-3">
-                <input
-                  type="checkbox"
-                  checked={enabled}
-                  onChange={(e) => setEnabled(e.target.checked)}
-                  className="h-4 w-4 rounded border-borderSubtle"
-                />
-                <span className="text-sm text-muted">{enabled ? t("channels.status.enabled") : t("channels.status.disabled")}</span>
+          <AdvancedSection
+            id="channels-detail-advanced"
+            title={t("advanced.title")}
+            description={t("advanced.description")}
+            labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+          >
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-2">
+                <Label>{t("channels.fields.dmPolicy")}</Label>
+                <Select value={dmPolicy} onValueChange={(value) => setDmPolicy(value as "pairing" | "allowlist" | "open" | "disabled")}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pairing">{t("channels.policy.dm.pairing")}</SelectItem>
+                    <SelectItem value="allowlist">{t("channels.policy.dm.allowlist")}</SelectItem>
+                    <SelectItem value="open">{t("channels.policy.dm.open")}</SelectItem>
+                    <SelectItem value="disabled">{t("channels.policy.dm.disabled")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("channels.fields.groupPolicy")}</Label>
+                <Select value={groupPolicy} onValueChange={(value) => setGroupPolicy(value as "allowlist" | "open" | "disabled")}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="allowlist">{t("channels.policy.group.allowlist")}</SelectItem>
+                    <SelectItem value="open">{t("channels.policy.group.open")}</SelectItem>
+                    <SelectItem value="disabled">{t("channels.policy.group.disabled")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("channels.fields.enabled")}</Label>
+                <div className="flex h-10 items-center gap-3 rounded-xl border border-borderSubtle bg-panel/45 px-3">
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={(e) => setEnabled(e.target.checked)}
+                    className="h-4 w-4 rounded border-borderSubtle"
+                  />
+                  <span className="text-sm text-muted">{enabled ? t("channels.status.enabled") : t("channels.status.disabled")}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-3 rounded-xl border border-borderSubtle bg-panel/45 px-3 py-2">
-            <input
-              type="checkbox"
-              checked={requireMentionInGroup}
-              onChange={(e) => setRequireMentionInGroup(e.target.checked)}
-              className="h-4 w-4 rounded border-borderSubtle"
-            />
-            <div>
-              <div className="text-sm font-medium text-text">{t("channels.fields.requireMentionInGroup")}</div>
-              <div className="text-xs text-muted">{t("channels.security.groupMentionHint")}</div>
+            <div className="flex items-center gap-3 rounded-xl border border-borderSubtle bg-panel/45 px-3 py-2">
+              <input
+                type="checkbox"
+                checked={requireMentionInGroup}
+                onChange={(e) => setRequireMentionInGroup(e.target.checked)}
+                className="h-4 w-4 rounded border-borderSubtle"
+              />
+              <div>
+                <div className="text-sm font-medium text-text">{t("channels.fields.requireMentionInGroup")}</div>
+                <div className="text-xs text-muted">{t("channels.security.groupMentionHint")}</div>
+              </div>
             </div>
-          </div>
 
-          <div className="grid gap-2">
-            <Label>{t("channels.fields.metadata")}</Label>
-            <Textarea value={metadataRaw} onChange={(e) => setMetadataRaw(e.target.value)} rows={6} className="font-mono text-xs" />
-          </div>
+            <div className="grid gap-2">
+              <Label>{t("channels.fields.metadata")}</Label>
+              <Textarea value={metadataRaw} onChange={(e) => setMetadataRaw(e.target.value)} rows={6} className="font-mono text-xs" />
+            </div>
+          </AdvancedSection>
 
           <div className="flex justify-end">
             <Button variant="accent" onClick={() => void onSave()} disabled={updateAccount.isPending}>
@@ -414,13 +425,20 @@ export default function ChannelAccountDetailPage() {
 
           <Separator />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void onRunAction("start")}>start</Button>
-            <Button size="sm" variant="outline" onClick={() => void onRunAction("stop")}>stop</Button>
-            <Button size="sm" variant="outline" onClick={() => void onRunAction("reconnect")}>reconnect</Button>
-            <Button size="sm" variant="outline" onClick={() => void onRunAction("login")}>login</Button>
-            <Button size="sm" variant="outline" onClick={() => void onRunAction("logout")}>logout</Button>
-          </div>
+          <AdvancedSection
+            id="channel-runtime-advanced-actions"
+            title={t("advanced.title")}
+            description={t("advanced.description")}
+            labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => void onRunAction("start")}>start</Button>
+              <Button size="sm" variant="outline" onClick={() => void onRunAction("stop")}>stop</Button>
+              <Button size="sm" variant="outline" onClick={() => void onRunAction("reconnect")}>reconnect</Button>
+              <Button size="sm" variant="outline" onClick={() => void onRunAction("login")}>login</Button>
+              <Button size="sm" variant="outline" onClick={() => void onRunAction("logout")}>logout</Button>
+            </div>
+          </AdvancedSection>
         </CardContent>
       </Card>
 
@@ -481,16 +499,17 @@ export default function ChannelAccountDetailPage() {
           <div className="grid gap-3 md:grid-cols-[180px_1fr_auto] md:items-end">
             <div className="grid gap-2">
               <Label>{t("channels.detail.allowlistScope")}</Label>
-              <select
-                value={allowlistScope}
-                onChange={(e) => setAllowlistScope(e.target.value)}
-                className="h-10 rounded-xl border border-borderSubtle bg-panel/45 px-3 text-sm"
-              >
-                <option value="sender">sender</option>
-                <option value="dm">dm</option>
-                <option value="group">group</option>
-                <option value="conversation">conversation</option>
-              </select>
+              <Select value={allowlistScope} onValueChange={setAllowlistScope}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sender">{t("channels.scope.sender")}</SelectItem>
+                  <SelectItem value="dm">{t("channels.scope.dm")}</SelectItem>
+                  <SelectItem value="group">{t("channels.scope.group")}</SelectItem>
+                  <SelectItem value="conversation">{t("channels.scope.conversation")}</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid gap-2">
               <Label>{t("channels.detail.allowlistSubject")}</Label>
@@ -573,9 +592,15 @@ export default function ChannelAccountDetailPage() {
                   </div>
                   {event.message ? <div className="mt-2 text-sm">{event.message}</div> : null}
                   {event.payload !== null && event.payload !== undefined ? (
-                    <pre className="mt-2 max-h-44 overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-2 text-xs">
-                      {JSON.stringify(event.payload, null, 2)}
-                    </pre>
+                    <AdvancedSection
+                      id={`channel-event-payload-${event.id}`}
+                      title={t("advanced.title")}
+                      labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+                    >
+                      <pre className="max-h-44 overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-2 text-xs">
+                        {JSON.stringify(event.payload, null, 2)}
+                      </pre>
+                    </AdvancedSection>
                   ) : null}
                 </div>
               ))}

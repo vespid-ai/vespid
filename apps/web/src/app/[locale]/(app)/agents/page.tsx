@@ -36,7 +36,6 @@ export default function AgentsPage() {
 
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
   const [tagsDraftByAgentId, setTagsDraftByAgentId] = useState<Record<string, string>>({});
 
   const canOperate = Boolean(orgId);
@@ -155,6 +154,29 @@ export default function AgentsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>{t("agents.pairing")}</CardTitle>
+          <CardDescription>{t("agents.pairingHint")}</CardDescription>
+        </CardHeader>
+          <CardContent className="grid gap-3">
+          <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
+            <div className="text-sm font-medium text-text">{t("agents.pairingSteps.step1")}</div>
+            <div className="text-xs text-muted">{t("agents.pairingSteps.step2")}</div>
+            <div className="text-xs text-muted">{t("agents.pairingSteps.step3")}</div>
+          </div>
+          <Button variant="accent" onClick={createPairingToken} disabled={!canOperate || pairing.isPending}>
+            {t("agents.createPairingToken")}
+          </Button>
+          {pairingToken ? (
+            <>
+              <Separator />
+              <CodeBlock value={{ token: pairingToken, expiresAt: pairingExpiresAt }} />
+            </>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>{t("common.list")}</CardTitle>
           <CardDescription>{orgId ? `Org: ${orgId}` : t("org.requireActive")}</CardDescription>
         </CardHeader>
@@ -170,7 +192,15 @@ export default function AgentsPage() {
             {agentsQuery.isLoading ? (
               <EmptyState title={t("common.loading")} />
             ) : agents.length === 0 ? (
-              <EmptyState title={t("agents.noAgentsTitle")} description={t("agents.noAgentsDescription")} />
+              <EmptyState
+                title={t("agents.noAgentsTitle")}
+                description={t("agents.noAgentsDescription")}
+                action={
+                  <Button variant="accent" onClick={createPairingToken} disabled={!canOperate || pairing.isPending}>
+                    {t("agents.createPairingToken")}
+                  </Button>
+                }
+              />
             ) : (
               <DataTable data={agents} columns={columns as any} />
             )}
@@ -184,35 +214,6 @@ export default function AgentsPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("agents.pairing")}</CardTitle>
-          <CardDescription>{t("agents.pairingHint")}</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <Button variant="accent" onClick={createPairingToken} disabled={!canOperate || pairing.isPending}>
-            {t("agents.createPairingToken")}
-          </Button>
-
-          {pairingToken ? (
-            <>
-              <Separator />
-              <CodeBlock value={{ token: pairingToken, expiresAt: pairingExpiresAt }} />
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <div>
-        <Button variant="ghost" onClick={() => setShowDebug((v) => !v)}>
-          {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
-        </Button>
-        {showDebug ? (
-          <div className="mt-2 grid gap-2">
-            <CodeBlock value={{ orgId, agentsQuery: agentsQuery.data }} />
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }

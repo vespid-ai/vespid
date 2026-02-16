@@ -24,6 +24,7 @@ import { Input } from "../../../../../../../components/ui/input";
 import { JsonExplorer } from "../../../../../../../components/ui/json-explorer";
 import { ScrollArea } from "../../../../../../../components/ui/scroll-area";
 import { Separator } from "../../../../../../../components/ui/separator";
+import { AdvancedSection } from "../../../../../../../components/app/advanced-section";
 import { useActiveOrgId } from "../../../../../../../lib/hooks/use-active-org-id";
 import { useRun, useRunEvents, type WorkflowRunEvent } from "../../../../../../../lib/hooks/use-workflows";
 import { addRecentRunId } from "../../../../../../../lib/recents";
@@ -564,40 +565,45 @@ export default function RunReplayPage() {
 
                   <Separator className="my-4" />
 
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>{t("runs.runTitle")}</CardTitle>
-                      <CardDescription>{t("runs.runHint")}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      {run ? (
-                        <JsonExplorer value={run} pinnedPaths={pinnedPaths} onPinPath={addPinPath} onUnpinPath={removePin} />
-                      ) : (
-                        <div className="text-sm text-muted">{t("runs.noRun")}</div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  <AdvancedSection
+                    id="run-replay-advanced-json"
+                    title={t("advanced.title")}
+                    description={t("advanced.description")}
+                    labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+                  >
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{t("runs.runTitle")}</CardTitle>
+                        <CardDescription>{t("runs.runHint")}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        {run ? (
+                          <JsonExplorer value={run} pinnedPaths={pinnedPaths} onPinPath={addPinPath} onUnpinPath={removePin} />
+                        ) : (
+                          <div className="text-sm text-muted">{t("runs.noRun")}</div>
+                        )}
+                      </CardContent>
+                    </Card>
 
-                  <Separator className="my-4" />
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>{t("runs.eventTitle")}</CardTitle>
-                      <CardDescription>{selectedEvent ? eventKind(selectedEvent as any) : t("runs.selectEvent")}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      {selectedEvent ? (
-                        <JsonExplorer
-                          value={selectedEvent}
-                          pinnedPaths={pinnedPaths}
-                          onPinPath={addPinPath}
-                          onUnpinPath={removePin}
-                        />
-                      ) : (
-                        <div className="text-sm text-muted">{t("runs.noEvent")}</div>
-                      )}
-                    </CardContent>
-                  </Card>
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>{t("runs.eventTitle")}</CardTitle>
+                        <CardDescription>{selectedEvent ? eventKind(selectedEvent as any) : t("runs.selectEvent")}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        {selectedEvent ? (
+                          <JsonExplorer
+                            value={selectedEvent}
+                            pinnedPaths={pinnedPaths}
+                            onPinPath={addPinPath}
+                            onUnpinPath={removePin}
+                          />
+                        ) : (
+                          <div className="text-sm text-muted">{t("runs.noEvent")}</div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </AdvancedSection>
                 </div>
               </ScrollArea>
             </div>

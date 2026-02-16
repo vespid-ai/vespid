@@ -11,14 +11,6 @@ import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
-import { CodeBlock } from "../../../../components/ui/code-block";
-
-type AuthPayload = {
-  session?: { token: string; expiresAt: number };
-  user?: { id: string; email: string };
-  code?: string;
-  message?: string;
-};
 
 function oauthStartUrl(provider: "google" | "github"): string {
   return `${getApiBase()}/v1/auth/oauth/${provider}/start`;
@@ -36,9 +28,6 @@ export default function AuthPage() {
 
   const [email, setEmail] = useState("owner@example.com");
   const [password, setPassword] = useState("Password123");
-  const [result, setResult] = useState<AuthPayload | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
-
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setOauthStatus(params.get("oauth"));
@@ -67,7 +56,7 @@ export default function AuthPage() {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    setResult(await response.json());
+    await response.json();
     session.refetch();
   }
 
@@ -76,19 +65,19 @@ export default function AuthPage() {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
-    setResult(await response.json());
+    await response.json();
     session.refetch();
   }
 
   async function refreshSession() {
     const response = await apiFetch("/v1/auth/refresh", { method: "POST" });
-    setResult(await response.json());
+    await response.json();
     session.refetch();
   }
 
   async function logout() {
     const response = await apiFetch("/v1/auth/logout", { method: "POST" });
-    setResult(await response.json());
+    await response.json();
     session.refetch();
   }
 
@@ -187,16 +176,6 @@ export default function AuthPage() {
         </CardContent>
       </Card>
 
-      <div>
-        <Button variant="ghost" onClick={() => setShowDebug((v) => !v)}>
-          {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
-        </Button>
-        {showDebug && result ? (
-          <div className="mt-2">
-            <CodeBlock value={result} />
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }

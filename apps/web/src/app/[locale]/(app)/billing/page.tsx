@@ -61,6 +61,25 @@ function BillingPageContent() {
         </div>
       ) : null}
 
+      {!packsEnabled ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("billing.topup.disabledTitle")}</CardTitle>
+            <CardDescription>{t("billing.topup.disabledDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <a href="https://docs.openclaw.ai" target="_blank" rel="noreferrer">
+                {t("billing.setupGuide")}
+              </a>
+            </Button>
+            <Button variant="outline" onClick={() => packsQuery.refetch()}>
+              {t("common.refresh")}
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <CardHeader>
@@ -143,7 +162,14 @@ function BillingPageContent() {
           ) : ledgerQuery.isLoading ? (
             <EmptyState title={t("common.loading")} />
           ) : entries.length === 0 ? (
-            <EmptyState title={t("billing.ledger.emptyTitle")} />
+            <EmptyState
+              title={t("billing.ledger.emptyTitle")}
+              action={
+                <Button onClick={() => ledgerQuery.refetch()} disabled={!orgId}>
+                  {t("common.refresh")}
+                </Button>
+              }
+            />
           ) : (
             <div className="overflow-x-auto rounded-lg border border-borderSubtle">
               <table className="min-w-full border-collapse text-sm">

@@ -7,7 +7,6 @@ import { apiFetch } from "../../../../lib/api";
 import { getActiveOrgId, getKnownOrgIds, setActiveOrgId, subscribeActiveOrg } from "../../../../lib/org-context";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
-import { CodeBlock } from "../../../../components/ui/code-block";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 
@@ -38,8 +37,6 @@ export default function OrganizationPage() {
   const [orgSlug, setOrgSlug] = useState("acme");
   const [orgId, setOrgId] = useState("");
   const [inviteEmail, setInviteEmail] = useState("member@example.com");
-  const [result, setResult] = useState<unknown>(null);
-  const [showDebug, setShowDebug] = useState(false);
 
   // Avoid reading localStorage during the server render / initial hydration pass.
   const [recentOrgs, setRecentOrgs] = useState<string[]>([]);
@@ -70,7 +67,6 @@ export default function OrganizationPage() {
       body: JSON.stringify({ name: orgName, slug: orgSlug }),
     });
     const payload = (await response.json()) as CreateOrgResponse;
-    setResult(payload);
 
     if (!response.ok) {
       toast.error(formatApiError(payload, response.status));
@@ -87,7 +83,6 @@ export default function OrganizationPage() {
 
   async function inviteMember() {
     if (!orgId) {
-      setResult({ code: "ORG_CONTEXT_REQUIRED", message: t("org.requireActive") });
       toast.error(t("org.requireActive"));
       return;
     }
@@ -101,7 +96,6 @@ export default function OrganizationPage() {
       { orgScoped: true }
     );
     const payload = await response.json();
-    setResult(payload);
 
     if (!response.ok) {
       toast.error(formatApiError(payload, response.status));
@@ -181,17 +175,6 @@ export default function OrganizationPage() {
           ))}
         </CardContent>
       </Card>
-
-      <div>
-        <Button variant="ghost" onClick={() => setShowDebug((v) => !v)}>
-          {t("common.debug")}: {showDebug ? t("common.hide") : t("common.show")}
-        </Button>
-        {showDebug && result ? (
-          <div className="mt-2">
-            <CodeBlock value={result} />
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }

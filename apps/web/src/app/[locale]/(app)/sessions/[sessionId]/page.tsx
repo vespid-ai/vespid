@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Input } from "../../../../../components/ui/input";
 import { Label } from "../../../../../components/ui/label";
 import { Separator } from "../../../../../components/ui/separator";
+import { AdvancedSection } from "../../../../../components/app/advanced-section";
 import { cn } from "../../../../../lib/cn";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
@@ -269,9 +270,15 @@ export default function SessionDetailPage() {
                       <span className="font-mono">{formatTime(e.createdAt)}</span>
                     </div>
                     {e.payload !== null && e.payload !== undefined ? (
-                      <pre className="max-h-56 overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-3 text-xs text-text">
-                        {JSON.stringify(e.payload, null, 2)}
-                      </pre>
+                      <AdvancedSection
+                        id={`session-event-payload-${e.seq}`}
+                        title={t("advanced.title")}
+                        labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+                      >
+                        <pre className="max-h-56 overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-3 text-xs text-text">
+                          {JSON.stringify(e.payload, null, 2)}
+                        </pre>
+                      </AdvancedSection>
                     ) : null}
                   </div>
                 ))
@@ -311,30 +318,39 @@ export default function SessionDetailPage() {
           <CardTitle>{t("sessions.details.title")}</CardTitle>
           <CardDescription>{t("sessions.details.subtitle")}</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-2 text-sm">
-          <div className="grid gap-1 md:grid-cols-2">
-            <div className="text-muted">{t("sessions.details.engine")}</div>
-            <div className="font-mono">{session?.engineId ?? "-"}</div>
-          </div>
-          <div className="grid gap-1 md:grid-cols-2">
-            <div className="text-muted">{t("sessions.details.llm")}</div>
-            <div className="font-mono">{session ? `${session.llmProvider}:${session.llmModel}` : "-"}</div>
-          </div>
-          <div className="grid gap-1 md:grid-cols-2">
-            <div className="text-muted">{t("sessions.details.toolset")}</div>
-            <div className="font-mono">{session?.toolsetId ?? "-"}</div>
-          </div>
-          <div className="grid gap-1 md:grid-cols-2">
-            <div className="text-muted">{t("sessions.details.selector")}</div>
-            <div className="font-mono">
-              {session?.executorSelector?.executorId ??
-                session?.executorSelector?.tag ??
-                session?.executorSelector?.group ??
-                (Array.isArray(session?.executorSelector?.labels) && session?.executorSelector?.labels.length > 0
-                  ? session?.executorSelector?.labels.join(",")
-                  : "-")}
+        <CardContent>
+          <AdvancedSection
+            id="session-detail-advanced"
+            title={t("advanced.title")}
+            description={t("advanced.description")}
+            labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+          >
+            <div className="grid gap-2 text-sm">
+              <div className="grid gap-1 md:grid-cols-2">
+                <div className="text-muted">{t("sessions.details.engine")}</div>
+                <div className="font-mono">{session?.engineId ?? "-"}</div>
+              </div>
+              <div className="grid gap-1 md:grid-cols-2">
+                <div className="text-muted">{t("sessions.details.llm")}</div>
+                <div className="font-mono">{session ? `${session.llmProvider}:${session.llmModel}` : "-"}</div>
+              </div>
+              <div className="grid gap-1 md:grid-cols-2">
+                <div className="text-muted">{t("sessions.details.toolset")}</div>
+                <div className="font-mono">{session?.toolsetId ?? "-"}</div>
+              </div>
+              <div className="grid gap-1 md:grid-cols-2">
+                <div className="text-muted">{t("sessions.details.selector")}</div>
+                <div className="font-mono">
+                  {session?.executorSelector?.executorId ??
+                    session?.executorSelector?.tag ??
+                    session?.executorSelector?.group ??
+                    (Array.isArray(session?.executorSelector?.labels) && session?.executorSelector?.labels.length > 0
+                      ? session?.executorSelector?.labels.join(",")
+                      : "-")}
+                </div>
+              </div>
             </div>
-          </div>
+          </AdvancedSection>
         </CardContent>
       </Card>
     </div>

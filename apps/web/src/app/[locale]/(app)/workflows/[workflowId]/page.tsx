@@ -19,6 +19,7 @@ import { Skeleton } from "../../../../../components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../../components/ui/tabs";
 import { Textarea } from "../../../../../components/ui/textarea";
 import { WorkflowGraphEditor } from "../../../../../components/app/workflow-graph-editor";
+import { AdvancedSection } from "../../../../../components/app/advanced-section";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import {
   type WorkflowRun,
@@ -82,7 +83,6 @@ export default function WorkflowDetailPage() {
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailSection, setDetailSection] = useState<"summary" | "history">("summary");
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const summaryRef = useRef<HTMLDivElement | null>(null);
   const historyRef = useRef<HTMLDivElement | null>(null);
 
@@ -156,7 +156,6 @@ export default function WorkflowDetailPage() {
 
   function openDetails(section: "summary" | "history") {
     setDetailSection(section);
-    setShowAdvanced(false);
     setDetailOpen(true);
   }
 
@@ -494,29 +493,28 @@ export default function WorkflowDetailPage() {
                 </div>
               )}
 
-              <div className="mt-6 flex items-center justify-between gap-3">
-                <div className="text-xs uppercase tracking-[0.28em] text-muted">{t("workflows.detail.sheet.advancedTitle")}</div>
-                <Button size="sm" variant="outline" onClick={() => setShowAdvanced((v) => !v)}>
-                  {showAdvanced ? t("common.hide") : t("common.show")}
-                </Button>
+              <div className="mt-6">
+                <AdvancedSection
+                  id="workflow-detail-advanced-json"
+                  title={t("workflows.detail.sheet.advancedTitle")}
+                  labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
+                >
+                  <div className="grid gap-3">
+                    <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
+                      <div className="text-xs font-semibold text-muted">workflow</div>
+                      <CodeBlock value={workflowQuery.data?.workflow ?? null} />
+                    </div>
+                    <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
+                      <div className="text-xs font-semibold text-muted">revisions</div>
+                      <CodeBlock value={revisionsQuery.data?.workflows ?? []} />
+                    </div>
+                    <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
+                      <div className="text-xs font-semibold text-muted">runs</div>
+                      <CodeBlock value={runsQuery.data?.runs ?? []} />
+                    </div>
+                  </div>
+                </AdvancedSection>
               </div>
-
-              {showAdvanced ? (
-                <div className="mt-3 grid gap-3">
-                  <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
-                    <div className="text-xs font-semibold text-muted">workflow</div>
-                    <CodeBlock value={workflowQuery.data?.workflow ?? null} />
-                  </div>
-                  <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
-                    <div className="text-xs font-semibold text-muted">revisions</div>
-                    <CodeBlock value={revisionsQuery.data?.workflows ?? []} />
-                  </div>
-                  <div className="rounded-2xl border border-borderSubtle/70 bg-panel/60 p-3 shadow-inset">
-                    <div className="text-xs font-semibold text-muted">runs</div>
-                    <CodeBlock value={runsQuery.data?.runs ?? []} />
-                  </div>
-                </div>
-              ) : null}
             </div>
           </div>
         </SheetContent>

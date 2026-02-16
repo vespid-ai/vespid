@@ -7,7 +7,17 @@ import { apiFetch } from "../../../../../lib/api";
 import { Badge } from "../../../../../components/ui/badge";
 import { Button } from "../../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
-import { CodeBlock } from "../../../../../components/ui/code-block";
+
+function formatResult(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const item = value as Record<string, unknown>;
+    const message = typeof item.message === "string" ? item.message : null;
+    if (message) return message;
+    const code = typeof item.code === "string" ? item.code : null;
+    if (code) return code;
+  }
+  return "Invitation processed.";
+}
 
 export default function InviteAcceptPage() {
   const params = useParams<{ locale?: string | string[]; token?: string | string[] }>();
@@ -63,10 +73,10 @@ export default function InviteAcceptPage() {
         <Card>
           <CardHeader>
             <CardTitle>Result</CardTitle>
-            <CardDescription>Debug payload returned by the API.</CardDescription>
+            <CardDescription>Latest invitation status.</CardDescription>
           </CardHeader>
           <CardContent>
-            <CodeBlock value={result} />
+            <div className="text-sm text-muted">{formatResult(result)}</div>
           </CardContent>
         </Card>
       ) : null}

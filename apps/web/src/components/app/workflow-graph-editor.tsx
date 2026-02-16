@@ -27,7 +27,6 @@ import {
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
-import { CodeBlock } from "../ui/code-block";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -36,6 +35,7 @@ import { useActiveOrgId } from "../../lib/hooks/use-active-org-id";
 import { useOrgSettings } from "../../lib/hooks/use-org-settings";
 import { useSecrets } from "../../lib/hooks/use-secrets";
 import { useUpdateWorkflowDraft, useWorkflow } from "../../lib/hooks/use-workflows";
+import { AdvancedSection } from "./advanced-section";
 import { LlmConfigField, type LlmConfigValue } from "./llm/llm-config-field";
 import { ModelPickerField } from "./model-picker/model-picker-field";
 import { SecretSelectField } from "./secrets/secret-select-field";
@@ -1997,11 +1997,8 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     return (
       <div className="grid gap-3">
         <div className="rounded-lg border border-border bg-panel/50 p-3 text-sm text-muted">
-          No form available for node type <span className="font-mono">{node.type}</span>. Use Advanced JSON.
+          No guided form available for node type <span className="font-mono">{node.type}</span>.
         </div>
-        <Button type="button" variant="outline" onClick={() => setInspectorTab("json")}>
-          Open Advanced JSON
-        </Button>
       </div>
     );
   }
@@ -2229,6 +2226,12 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                   <Input id="workflow-name" value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} />
                 </div>
 
+                <AdvancedSection
+                  id="workflow-graph-bulk-actions"
+                  title="Advanced settings"
+                  description="Bulk model actions and teammate overrides."
+                  labels={{ show: "Show", hide: "Hide" }}
+                >
                 <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
                   <div className="text-sm font-medium text-text">Bulk model actions</div>
 
@@ -2366,6 +2369,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                     </div>
                   </div>
                 </div>
+                </AdvancedSection>
 
                 <div className="grid gap-2">
                   <div className="text-sm font-medium">Add Node</div>
@@ -2404,37 +2408,51 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 </CardHeader>
                 <CardContent className="grid gap-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={inspectorTab === "form" ? "accent" : "outline"}
-                      onClick={() => {
-                        setConfigJson(stringifyJson(selectedNode.config));
-                        setConfigJsonDirty(false);
-                        setInspectorTab("form");
-                      }}
-                    >
-                      Form
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={inspectorTab === "json" ? "accent" : "outline"}
-                      onClick={() => {
-                        // Reset editor to current node config when entering JSON mode.
-                        setConfigJson(stringifyJson(selectedNode.config));
-                        setConfigJsonDirty(false);
-                        setInspectorTab("json");
-                      }}
-                    >
-                      Advanced JSON
-                    </Button>
+                    {inspectorTab === "json" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setConfigJson(stringifyJson(selectedNode.config));
+                          setConfigJsonDirty(false);
+                          setInspectorTab("form");
+                        }}
+                      >
+                        Back to guided form
+                      </Button>
+                    ) : null}
                     <Button size="sm" variant="outline" className="ml-auto" onClick={() => setSelectedNodeId("")}>
                       Close
                     </Button>
                   </div>
 
-                  {renderNodeInspector(selectedNode)}
+                  {inspectorTab === "json" ? (
+                    renderNodeInspector(selectedNode)
+                  ) : (
+                    <>
+                      {renderNodeInspector(selectedNode)}
+                      <AdvancedSection
+                        id={`workflow-node-json-${selectedNodeId}`}
+                        title="Advanced settings"
+                        description="Edit node config directly as JSON."
+                        labels={{ show: "Show", hide: "Hide" }}
+                      >
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setConfigJson(stringifyJson(selectedNode.config));
+                            setConfigJsonDirty(false);
+                            setInspectorTab("json");
+                          }}
+                        >
+                          Edit JSON config
+                        </Button>
+                      </AdvancedSection>
+                    </>
+                  )}
                 </CardContent>
               </Card>
             ) : null}
@@ -2477,16 +2495,6 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 </CardContent>
               </Card>
             ) : null}
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Debug</CardTitle>
-                <CardDescription>Current draft payload preview.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CodeBlock value={{ workflow: loaded, nodes: nodes.length, edges: edges.length }} />
-              </CardContent>
-            </Card>
 
             {issues.length ? (
               <Card>
