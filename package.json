@@ -16,6 +16,8 @@
     "db:rollback": "pnpm exec dotenv -e .env -- pnpm --filter @vespid/db rollback",
     "sync:openclaw-model-catalog": "pnpm exec tsx scripts/sync-openclaw-model-catalog.ts",
     "smoke:channels": "pnpm exec tsx scripts/channel-smoke-matrix.ts",
+    "load:channels": "pnpm exec tsx scripts/channel-load-matrix.ts",
+    "regression:channels": "pnpm --filter @vespid/gateway exec vitest run src/channels/adapters/core.test.ts src/channels/security.test.ts src/channels/router.test.ts src/channels/manager.test.ts && pnpm --filter @vespid/tests exec vitest run channels-core8.integration.test.ts channels-extended.integration.test.ts channels-auth.integration.test.ts",
     "check:boundary": "bash scripts/check-no-enterprise-imports.sh",
     "check:licenses": "node scripts/check-license-spdx.mjs",
     "check:mirror": "node scripts/check-oss-mirror-dry-run.mjs",

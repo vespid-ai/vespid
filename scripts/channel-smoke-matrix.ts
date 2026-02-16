@@ -1,4 +1,6 @@
-type ChannelId =
+import { pathToFileURL } from "node:url";
+
+export type ChannelId =
   | "whatsapp"
   | "telegram"
   | "discord"
@@ -21,7 +23,7 @@ type ChannelId =
   | "zalouser"
   | "webchat";
 
-const CHANNEL_IDS = [
+export const CHANNEL_IDS = [
   "whatsapp",
   "telegram",
   "discord",
@@ -45,11 +47,11 @@ const CHANNEL_IDS = [
   "webchat",
 ] as const satisfies readonly ChannelId[];
 
-type ChannelCase = {
+export type ChannelCase = {
   happyBody: unknown;
 };
 
-const CHANNEL_CASES: Record<ChannelId, ChannelCase> = {
+export const CHANNEL_CASES: Record<ChannelId, ChannelCase> = {
   whatsapp: {
     happyBody: {
       entry: [
@@ -642,8 +644,10 @@ async function run(): Promise<void> {
   }
 }
 
-run().catch((error) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error);
-  console.error(message);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run().catch((error) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    console.error(message);
+    process.exit(1);
+  });
+}

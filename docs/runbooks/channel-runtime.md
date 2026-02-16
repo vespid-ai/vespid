@@ -102,6 +102,36 @@ Useful options:
 pnpm smoke:channels -- --channels=telegram,slack,msteams
 ```
 
+### Regression gate
+
+Run focused channel regression before rollout expansion:
+
+```bash
+pnpm regression:channels
+```
+
+This command runs:
+
+- Gateway channel unit tests (`adapters`, `security`, `router`, `manager`)
+- Channel integration suites (`core8`, `extended13`, `auth-failure matrix`)
+
+### Load gate
+
+Run controlled ingress pressure validation (M5) with configurable channels, iterations, and concurrency:
+
+```bash
+CHANNEL_LOAD_API_BASE_URL=http://localhost:3001 \
+CHANNEL_LOAD_GATEWAY_BASE_URL=http://localhost:3002 \
+pnpm load:channels -- --channels=telegram,slack,webchat --iterations=50 --concurrency=10
+```
+
+Expected gate outcome:
+
+- `accepted == iterations` for every selected channel
+- workflow run count increases by at least `iterations` for the dedicated load workflow
+- malformed payload still returns `normalize_failed`
+- p95 ingress latency remains stable for your environment baseline
+
 ## Validation Matrix
 
 Automated coverage for channel runtime currently includes:
@@ -123,6 +153,10 @@ Automated coverage for channel runtime currently includes:
   - `.github/workflows/channels-smoke.yml`
   - Runs nightly and via manual dispatch.
   - Boots API + Gateway + Postgres + Redis, then executes `pnpm smoke:channels`.
+- CI load gate:
+  - `.github/workflows/channels-load.yml`
+  - Runs via manual dispatch with channel/iteration/concurrency inputs.
+  - Boots API + Gateway + Postgres + Redis, then executes `pnpm load:channels`.
 
 ### Runtime event sources
 
