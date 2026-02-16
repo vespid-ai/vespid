@@ -7,7 +7,7 @@ import {
   type LlmModelCatalogEntry,
   type LlmProviderId,
   type LlmUsageContext,
-} from "@vespid/shared";
+} from "@vespid/shared/llm/provider-registry";
 
 export type { LlmProviderId };
 

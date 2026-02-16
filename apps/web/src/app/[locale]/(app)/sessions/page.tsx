@@ -19,7 +19,7 @@ import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions, type AgentSession } from "../../../../lib/hooks/use-sessions";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
-import { isOAuthRequiredProvider } from "@vespid/shared";
+import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { providersForContext, type LlmProviderId } from "../../../../components/app/llm/model-catalog";
 
 export default function SessionsPage() {

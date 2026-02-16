@@ -3,7 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isOAuthRequiredProvider } from "@vespid/shared";
+import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Badge } from "../../../../components/ui/badge";

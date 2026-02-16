@@ -4,7 +4,7 @@ import { useTranslations } from "next-intl";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSearchParams } from "next/navigation";
-import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared";
+import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared/llm/provider-registry";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";

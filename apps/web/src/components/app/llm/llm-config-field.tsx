@@ -2,7 +2,7 @@
 
 import { LlmModelField, type LlmModelValue } from "./llm-model-field";
 import { LlmSecretField } from "./llm-secret-field";
-import { isOAuthRequiredProvider } from "@vespid/shared";
+import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { providersForContext, type LlmProviderId } from "./model-catalog";
 
 export type LlmConfigMode = "session" | "workflowAgentRun" | "toolsetBuilder";

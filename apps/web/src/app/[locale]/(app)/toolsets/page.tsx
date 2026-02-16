@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { getDefaultModelForProvider, type LlmProviderId } from "@vespid/shared";
+import { getDefaultModelForProvider, type LlmProviderId } from "@vespid/shared/llm/provider-registry";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
@@ -37,7 +37,7 @@ import {
   useUnpublishToolset,
   useUpdateToolset,
 } from "../../../../lib/hooks/use-toolsets";
-import type { ToolsetCatalogItem } from "@vespid/shared";
+import type { ToolsetCatalogItem } from "@vespid/shared/toolset-builder";
 
 const ENV_PLACEHOLDER_RE = /^\$\{ENV:[A-Z0-9_]{1,128}\}$/;
 const MCP_NAME_RE = /^[a-z0-9][a-z0-9-_]{0,63}$/;

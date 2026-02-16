@@ -24,7 +24,7 @@ import {
   type WorkflowDsl as WorkflowDslV2,
   type WorkflowDslV3,
 } from "@vespid/workflow";
-import { isOAuthRequiredProvider } from "@vespid/shared";
+import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { CodeBlock } from "../ui/code-block";

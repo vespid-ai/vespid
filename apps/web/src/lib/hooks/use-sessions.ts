@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { LlmProviderId } from "@vespid/shared";
+import type { LlmProviderId } from "@vespid/shared/llm/provider-registry";
 import { apiFetchJson } from "../api";
 
 export type AgentSession = {

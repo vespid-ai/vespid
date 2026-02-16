@@ -52,9 +52,15 @@ export async function buildEngineRunnerServer(input?: { token?: string }) {
     },
   });
 
-  const token = (input?.token ?? process.env.ENGINE_RUNNER_TOKEN ?? "").trim();
+  const configuredToken = (input?.token ?? process.env.ENGINE_RUNNER_TOKEN ?? "").trim();
+  const token = configuredToken.length > 0
+    ? configuredToken
+    : (process.env.NODE_ENV === "production" ? "" : "dev-engine-runner-token");
   if (token.length === 0) {
     throw new Error("ENGINE_RUNNER_TOKEN_REQUIRED");
+  }
+  if (configuredToken.length === 0) {
+    server.log.warn("ENGINE_RUNNER_TOKEN is empty; using development fallback token.");
   }
 
   server.get("/healthz", async () => ({ ok: true }));

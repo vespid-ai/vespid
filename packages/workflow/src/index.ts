@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { isOAuthRequiredProvider, normalizeLlmProviderId, providerSupportsContext, type LlmProviderId } from "@vespid/shared";
+import {
+  isOAuthRequiredProvider,
+  normalizeLlmProviderId,
+  providerSupportsContext,
+  type LlmProviderId,
+} from "@vespid/shared/llm/provider-registry";
 
 export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.manual") }),

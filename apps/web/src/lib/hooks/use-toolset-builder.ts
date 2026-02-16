@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { apiFetchJson } from "../api";
-import type { ToolsetCatalogItem, ToolsetDraft, ToolsetBuilderLlmConfig } from "@vespid/shared";
+import type { ToolsetCatalogItem, ToolsetDraft, ToolsetBuilderLlmConfig } from "@vespid/shared/toolset-builder";
 
 export function useCreateToolsetBuilderSession(orgId: string | null) {
   return useMutation({

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { LlmProviderApiKind, LlmProviderId } from "@vespid/shared";
+import type { LlmProviderApiKind, LlmProviderId } from "@vespid/shared/llm/provider-registry";
 import { apiFetchJson } from "../api";
 
 export type OrgSettings = {

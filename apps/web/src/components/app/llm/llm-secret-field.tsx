@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getDefaultConnectorIdForProvider, normalizeConnectorId } from "@vespid/shared";
+import { getDefaultConnectorIdForProvider, normalizeConnectorId } from "@vespid/shared/llm/provider-registry";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { useSecrets } from "../../../lib/hooks/use-secrets";
