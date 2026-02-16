@@ -477,9 +477,9 @@
       "selector": "选择器"
     },
     "engineOptions": {
-      "loop": "vespid agent (gateway.loop.v2)",
-      "codex": "codex agent (gateway.codex.v2)",
-      "claude": "claude agent (gateway.claude.v2)"
+      "loop": "vespid agent",
+      "codex": "codex agent",
+      "claude": "claude agent"
     }
   },
   "toolsets": {
