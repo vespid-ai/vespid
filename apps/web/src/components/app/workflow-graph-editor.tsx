@@ -24,6 +24,7 @@ import {
   type WorkflowDsl as WorkflowDslV2,
   type WorkflowDslV3,
 } from "@vespid/workflow";
+import { isOAuthRequiredProvider } from "@vespid/shared";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { CodeBlock } from "../ui/code-block";
@@ -827,8 +828,8 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               });
             }}
           />
-          {llmValue.providerId === "vertex" && !llmValue.secretId ? (
-            <div className="text-xs text-warn">Vertex requires a vertex OAuth secret.</div>
+          {isOAuthRequiredProvider(llmValue.providerId) && !llmValue.secretId ? (
+            <div className="text-xs text-warn">Selected provider requires secretId.</div>
           ) : null}
         </div>
 

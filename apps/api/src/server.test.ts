@@ -2170,7 +2170,11 @@ describe("vertex oauth advanced connection", () => {
     });
     expect(secrets.statusCode).toBe(200);
     const body = secrets.json() as { secrets: Array<{ connectorId: string; name: string }> };
-    expect(body.secrets.some((s) => s.connectorId === "llm.vertex.oauth" && s.name === "default")).toBe(true);
+    expect(
+      body.secrets.some(
+        (s) => (s.connectorId === "llm.vertex.oauth" || s.connectorId === "llm.google-vertex.oauth") && s.name === "default"
+      )
+    ).toBe(true);
   });
 });
 

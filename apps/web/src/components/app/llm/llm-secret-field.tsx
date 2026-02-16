@@ -2,22 +2,16 @@
 
 import { useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { getDefaultConnectorIdForProvider, normalizeConnectorId } from "@vespid/shared";
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { useSecrets } from "../../../lib/hooks/use-secrets";
 import type { LlmProviderId } from "./model-catalog";
 
 function llmConnectorIdForProvider(providerId: LlmProviderId): string {
-  switch (providerId) {
-    case "openai":
-      return "llm.openai";
-    case "anthropic":
-      return "llm.anthropic";
-    case "gemini":
-      return "llm.gemini";
-    case "vertex":
-      return "llm.vertex.oauth";
-  }
+  const connectorId = getDefaultConnectorIdForProvider(providerId);
+  if (!connectorId) return "";
+  return normalizeConnectorId(connectorId);
 }
 
 export function LlmSecretField(props: {
@@ -36,7 +30,7 @@ export function LlmSecretField(props: {
 
   const connectorId = llmConnectorIdForProvider(props.providerId);
   const all = secretsQuery.data?.secrets ?? [];
-  const list = useMemo(() => all.filter((s) => s.connectorId === connectorId), [all, connectorId]);
+  const list = useMemo(() => all.filter((s) => normalizeConnectorId(s.connectorId) === connectorId), [all, connectorId]);
   const defaultSecret = useMemo(() => list.find((s) => s.name === "default") ?? null, [list]);
 
   // Auto-select `name=default` when nothing is selected.
@@ -52,6 +46,7 @@ export function LlmSecretField(props: {
   const selected = props.value ?? "";
   const canOperate = Boolean(props.orgId) && !props.disabled;
   const hasAny = list.length > 0;
+  const providerNeedsNoSecret = connectorId.length === 0;
 
   return (
     <div className="grid gap-2">
@@ -59,10 +54,10 @@ export function LlmSecretField(props: {
         <Select
           value={selected}
           onValueChange={(v) => props.onChange(v ? v : null)}
-          disabled={!canOperate || (!hasAny && !props.required)}
+          disabled={!canOperate || providerNeedsNoSecret || (!hasAny && !props.required)}
         >
           <SelectTrigger>
-            <SelectValue placeholder={hasAny ? "Select secret" : "Not connected"} />
+            <SelectValue placeholder={providerNeedsNoSecret ? "No secret required" : hasAny ? "Select secret" : "Not connected"} />
           </SelectTrigger>
           <SelectContent>
             {!props.required ? <SelectItem value="">None</SelectItem> : null}
@@ -74,7 +69,7 @@ export function LlmSecretField(props: {
           </SelectContent>
         </Select>
 
-        {!hasAny ? (
+        {!providerNeedsNoSecret && !hasAny ? (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
             <span>No secret configured for {connectorId}.</span>
             <Button type="button" size="sm" variant="outline" onClick={() => router.push(`/${locale}/secrets`)}>
@@ -83,9 +78,8 @@ export function LlmSecretField(props: {
           </div>
         ) : null}
 
-        {props.required && !props.value ? <div className="text-xs text-red-700">Secret is required.</div> : null}
+        {props.required && !providerNeedsNoSecret && !props.value ? <div className="text-xs text-red-700">Secret is required.</div> : null}
       </div>
     </div>
   );
 }
-

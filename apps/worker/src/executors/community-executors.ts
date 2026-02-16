@@ -1,4 +1,4 @@
-import type { WorkflowNodeExecutor } from "@vespid/shared";
+import type { LlmProviderId, WorkflowNodeExecutor } from "@vespid/shared";
 import { createConnectorActionExecutor } from "./connector-action.js";
 import { createLegacyGithubIssueCreateExecutor } from "./github-issue-create.js";
 import { createAgentExecuteExecutor } from "./agent-execute.js";
@@ -16,7 +16,7 @@ export function getCommunityWorkflowNodeExecutors(input?: {
       runId: string;
       nodeId: string;
       attemptCount: number;
-      provider: "openai" | "anthropic" | "gemini" | "vertex";
+      provider: LlmProviderId;
       model: string;
       turn: number;
       credits: number;

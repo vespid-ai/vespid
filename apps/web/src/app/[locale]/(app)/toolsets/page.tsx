@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
+import { getDefaultModelForProvider, type LlmProviderId } from "@vespid/shared";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
@@ -751,7 +752,7 @@ export default function ToolsetsPage() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiStep, setAiStep] = useState<"start" | "chat" | "preview">("start");
   const [aiIntent, setAiIntent] = useState("");
-  const [aiProvider, setAiProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [aiProvider, setAiProvider] = useState<LlmProviderId>("openai");
   const [aiModel, setAiModel] = useState("claude-3-5-sonnet-latest");
   const [aiSecretId, setAiSecretId] = useState("");
   const [aiSessionId, setAiSessionId] = useState<string | null>(null);
@@ -766,8 +767,8 @@ export default function ToolsetsPage() {
     aiDefaultsInitRef.current = false;
     setAiStep("start");
     setAiIntent("");
-    setAiProvider("anthropic");
-    setAiModel("claude-3-5-sonnet-latest");
+    setAiProvider("openai");
+    setAiModel("gpt-4.1-mini");
     setAiSecretId("");
     setAiSessionId(null);
     setAiAssistant("");
@@ -791,11 +792,13 @@ export default function ToolsetsPage() {
     if (aiDefaultsInitRef.current) return;
     const d = (settingsQuery.data?.settings?.llm?.defaults?.toolsetBuilder as any) ?? null;
     if (d && typeof d === "object") {
-      if (typeof d.provider === "string" && (d.provider === "openai" || d.provider === "anthropic")) {
+      if (typeof d.provider === "string") {
         setAiProvider(d.provider);
       }
       if (typeof d.model === "string" && d.model.trim().length > 0) {
         setAiModel(d.model);
+      } else if (typeof d.provider === "string") {
+        setAiModel(getDefaultModelForProvider(d.provider) ?? "gpt-4.1-mini");
       }
       if (typeof d.secretId === "string") {
         setAiSecretId(d.secretId);
@@ -1153,7 +1156,7 @@ export default function ToolsetsPage() {
                       mode="toolsetBuilder"
                       value={{ providerId: aiProvider, modelId: aiModel, secretId: aiSecretId || null } as any}
                       onChange={(next) => {
-                        setAiProvider(next.providerId === "openai" ? "openai" : "anthropic");
+                        setAiProvider(next.providerId);
                         setAiModel(next.modelId);
                         setAiSecretId(next.secretId ?? "");
                       }}

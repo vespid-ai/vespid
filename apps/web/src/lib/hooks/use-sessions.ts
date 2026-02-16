@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { LlmProviderId } from "@vespid/shared";
 import { apiFetchJson } from "../api";
 
 export type AgentSession = {
@@ -14,6 +15,7 @@ export type AgentSession = {
   toolsetId: string | null;
   llmProvider: string;
   llmModel: string;
+  llmSecretId: string | null;
   toolsAllow: unknown;
   limits: unknown;
   promptSystem: string | null;
@@ -86,7 +88,7 @@ export function useCreateSession(orgId: string | null) {
       title?: string;
       engineId?: "vespid.loop.v1" | "codex.sdk.v1";
       toolsetId?: string;
-      llm: { provider: "openai" | "anthropic" | "gemini"; model: string };
+      llm?: { provider: LlmProviderId; model: string; auth?: { secretId?: string | null } };
       prompt: { system?: string; instructions: string };
       tools: { allow: string[] };
       selector?: { tag: string } | { group: string };

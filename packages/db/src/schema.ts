@@ -313,6 +313,7 @@ export const agentSessions = pgTable("agent_sessions", {
   toolsetId: uuid("toolset_id").references(() => agentToolsets.id, { onDelete: "set null" }),
   llmProvider: text("llm_provider").notNull().default("openai"),
   llmModel: text("llm_model").notNull().default("gpt-4.1-mini"),
+  llmSecretId: uuid("llm_secret_id").references(() => connectorSecrets.id, { onDelete: "set null" }),
   toolsAllow: jsonb("tools_allow").notNull().default(sql`'[]'::jsonb`),
   limits: jsonb("limits").notNull().default(sql`'{}'::jsonb`),
   promptSystem: text("prompt_system"),

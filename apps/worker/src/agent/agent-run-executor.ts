@@ -1,4 +1,5 @@
-import type { WorkflowNodeExecutor } from "@vespid/shared";
+import type { LlmProviderId, WorkflowNodeExecutor } from "@vespid/shared";
+import { normalizeLlmProviderId } from "@vespid/shared";
 import { z } from "zod";
 import { runAgentLoop } from "./agent-loop.js";
 
@@ -46,13 +47,25 @@ const agentRunTeamSchema = z
   })
   .optional();
 
+const llmProviderSchema = z.string().min(1).transform((value, ctx) => {
+  const normalized = normalizeLlmProviderId(value);
+  if (!normalized) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Unsupported provider: ${value}`,
+    });
+    return z.NEVER;
+  }
+  return normalized;
+});
+
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
   config: z.object({
     toolsetId: z.string().uuid().optional(),
     llm: z.object({
-      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]).default("openai"),
+      provider: llmProviderSchema.default("openai"),
       model: z.string().min(1).max(120),
       auth: z.object({
         secretId: z.string().uuid().optional(),
@@ -152,7 +165,7 @@ export function createAgentRunExecutor(input: {
       runId: string;
       nodeId: string;
       attemptCount: number;
-      provider: "openai" | "anthropic" | "gemini" | "vertex";
+      provider: LlmProviderId;
       model: string;
       turn: number;
       credits: number;

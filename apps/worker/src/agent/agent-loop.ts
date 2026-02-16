@@ -1,6 +1,7 @@
 import Ajv from "ajv";
 import type { ValidateFunction } from "ajv";
 import type { WorkflowNodeExecutorResult } from "@vespid/shared";
+import { getLlmProviderMeta, type LlmProviderApiKind, type LlmProviderId } from "@vespid/shared";
 import { z } from "zod";
 import type { OpenAiChatMessage } from "./openai.js";
 import { openAiChatCompletion } from "./openai.js";
@@ -54,7 +55,7 @@ export type AgentTeamMeta = {
 };
 
 export type AgentLoopConfig = {
-  llm: { provider: "openai" | "anthropic" | "gemini" | "vertex"; model: string; auth: { secretId?: string; fallbackToEnv?: true } };
+  llm: { provider: LlmProviderId; model: string; auth: { secretId?: string; fallbackToEnv?: true } };
   prompt: { system?: string; instructions: string; inputTemplate?: string };
   tools: {
     allow: string[];
@@ -230,6 +231,30 @@ function parseShellRunEnabled(settings: unknown): boolean {
   return Boolean(tools && typeof tools.shellRunEnabled === "boolean" ? tools.shellRunEnabled : false);
 }
 
+function parseLlmProviderRuntime(settings: unknown, provider: LlmProviderId): { apiKind: LlmProviderApiKind; apiBaseUrl?: string } {
+  const fallback = getLlmProviderMeta(provider)?.apiKind ?? "openai-compatible";
+  const root = asObject(settings);
+  const llm = root ? asObject(root.llm) : null;
+  const providers = llm ? asObject(llm.providers) : null;
+  const conf = providers ? asObject(providers[provider]) : null;
+  const apiKindRaw = conf?.apiKind;
+  const baseUrlRaw = conf?.baseUrl;
+
+  const apiKind =
+    apiKindRaw === "openai-compatible" ||
+    apiKindRaw === "anthropic-compatible" ||
+    apiKindRaw === "google" ||
+    apiKindRaw === "vertex" ||
+    apiKindRaw === "bedrock" ||
+    apiKindRaw === "copilot" ||
+    apiKindRaw === "custom"
+      ? apiKindRaw
+      : fallback;
+
+  const apiBaseUrl = typeof baseUrlRaw === "string" && baseUrlRaw.trim().length > 0 ? baseUrlRaw.trim() : undefined;
+  return { apiKind, ...(apiBaseUrl ? { apiBaseUrl } : {}) };
+}
+
 function trimAgentState(state: AgentRunRuntimeState, maxChars: number): { state: AgentRunRuntimeState; trimmed: boolean } {
   let trimmed = false;
   const next: AgentRunRuntimeState = {
@@ -319,7 +344,8 @@ async function resolveLlmAuth(input: {
   userId: string;
   loadSecretValue: AgentLoopInput["loadSecretValue"];
 }): Promise<ResolvedLlmAuth | null> {
-  if (input.llm.provider === "vertex") {
+  const providerMeta = getLlmProviderMeta(input.llm.provider);
+  if (providerMeta?.apiKind === "vertex") {
     if (!input.llm.auth.secretId) {
       return null;
     }
@@ -360,12 +386,45 @@ async function resolveLlmAuth(input: {
     return apiKey ? { kind: "api_key", apiKey } : null;
   }
 
-  const env =
-    input.llm.provider === "anthropic"
-      ? (process.env.ANTHROPIC_API_KEY ?? null)
-      : input.llm.provider === "gemini"
-        ? (process.env.GEMINI_API_KEY ?? null)
-        : (process.env.OPENAI_API_KEY ?? null);
+  if (providerMeta?.authMode === "oauth") {
+    return null;
+  }
+
+  const envByProvider: Partial<Record<LlmProviderId, string>> = {
+    openai: "OPENAI_API_KEY",
+    anthropic: "ANTHROPIC_API_KEY",
+    google: "GEMINI_API_KEY",
+    "google-antigravity": "GEMINI_API_KEY",
+    "google-gemini-cli": "GEMINI_API_KEY",
+    openrouter: "OPENROUTER_API_KEY",
+    xai: "XAI_API_KEY",
+    groq: "GROQ_API_KEY",
+    cerebras: "CEREBRAS_API_KEY",
+    mistral: "MISTRAL_API_KEY",
+    zai: "ZAI_API_KEY",
+    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
+    "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
+    minimax: "MINIMAX_API_KEY",
+    moonshot: "MOONSHOT_API_KEY",
+    "kimi-coding": "KIMI_API_KEY",
+    synthetic: "SYNTHETIC_API_KEY",
+    together: "TOGETHER_API_KEY",
+    huggingface: "HF_TOKEN",
+    venice: "VENICE_API_KEY",
+    qianfan: "QIANFAN_API_KEY",
+    nvidia: "NVIDIA_API_KEY",
+    vllm: "VLLM_API_KEY",
+    litellm: "LITELLM_API_KEY",
+    "amazon-bedrock": "AWS_ACCESS_KEY_ID",
+    xiaomi: "XIAOMI_API_KEY",
+    "copilot-proxy": "COPILOT_PROXY_API_KEY",
+    custom: "CUSTOM_LLM_API_KEY",
+    opencode: "OPENCODE_API_KEY",
+  };
+
+  const providerEnvName =
+    envByProvider[input.llm.provider] ?? `LLM_${input.llm.provider.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}_API_KEY`;
+  const env = process.env[providerEnvName] ?? null;
   const apiKey = env && env.trim().length > 0 ? env : null;
   return apiKey ? { kind: "api_key", apiKey } : null;
 }
@@ -552,7 +611,8 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     return { status: "failed", error: "LLM_AUTH_NOT_CONFIGURED" };
   }
 
-  const usesManagedCredits = input.config.llm.provider !== "vertex" && !input.config.llm.auth.secretId && Boolean(input.managedCredits);
+  const llmRuntime = parseLlmProviderRuntime(input.organizationSettings, input.config.llm.provider);
+  const usesManagedCredits = llmRuntime.apiKind !== "vertex" && !input.config.llm.auth.secretId && Boolean(input.managedCredits);
 
   for (;;) {
     if (Date.now() >= deadline) {
@@ -603,7 +663,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     const llm = await (async () => {
       const timeoutMs = Math.max(1000, deadline - Date.now());
 
-      if (input.config.llm.provider === "vertex") {
+      if (llmRuntime.apiKind === "vertex") {
         if (llmAuth.kind !== "vertex_oauth") {
           return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
         }
@@ -616,6 +676,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
           timeoutMs,
           maxOutputChars: input.config.limits.maxOutputChars,
           fetchImpl: input.fetchImpl,
+          ...(llmRuntime.apiBaseUrl ? { apiBaseUrl: llmRuntime.apiBaseUrl } : {}),
         });
       }
 
@@ -623,7 +684,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
         return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
       }
 
-      if (input.config.llm.provider === "anthropic") {
+      if (llmRuntime.apiKind === "anthropic-compatible") {
         return anthropicChatCompletion({
           apiKey: llmAuth.apiKey,
           model: input.config.llm.model,
@@ -631,10 +692,11 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
           timeoutMs,
           maxOutputChars: input.config.limits.maxOutputChars,
           fetchImpl: input.fetchImpl,
+          ...(llmRuntime.apiBaseUrl ? { apiBaseUrl: llmRuntime.apiBaseUrl } : {}),
         });
       }
 
-      if (input.config.llm.provider === "gemini") {
+      if (llmRuntime.apiKind === "google") {
         return geminiGenerateContent({
           apiKey: llmAuth.apiKey,
           model: input.config.llm.model,
@@ -642,6 +704,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
           timeoutMs,
           maxOutputChars: input.config.limits.maxOutputChars,
           fetchImpl: input.fetchImpl,
+          ...(llmRuntime.apiBaseUrl ? { apiBaseUrl: llmRuntime.apiBaseUrl } : {}),
         });
       }
 
@@ -652,6 +715,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
         timeoutMs,
         maxOutputChars: input.config.limits.maxOutputChars,
         fetchImpl: input.fetchImpl,
+        ...(llmRuntime.apiBaseUrl ? { apiBaseUrl: llmRuntime.apiBaseUrl } : {}),
       });
     })();
 

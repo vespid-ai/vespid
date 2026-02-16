@@ -1532,7 +1532,7 @@ export class MemoryAppStore implements AppStore {
     title?: string | null;
     engineId: string;
     toolsetId?: string | null;
-    llm: { provider: string; model: string };
+    llm: { provider: string; model: string; auth?: { secretId?: string | null } };
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
@@ -1553,6 +1553,7 @@ export class MemoryAppStore implements AppStore {
       toolsetId: input.toolsetId ?? null,
       llmProvider: input.llm.provider,
       llmModel: input.llm.model,
+      llmSecretId: input.llm.auth?.secretId ?? null,
       toolsAllow: input.tools.allow,
       limits: input.limits ?? {},
       promptSystem: input.prompt.system ?? null,

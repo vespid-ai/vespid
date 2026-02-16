@@ -1,4 +1,4 @@
-import type { AgentSkillBundle, McpServerConfig, ToolsetVisibility } from "@vespid/shared";
+import type { AgentSkillBundle, LlmProviderApiKind, LlmProviderId, McpServerConfig, ToolsetVisibility } from "@vespid/shared";
 
 export type UserRecord = {
   id: string;
@@ -25,18 +25,19 @@ export type OrganizationSettings = {
   llm?: {
     defaults?: {
       // Nullable fields represent "explicitly cleared" defaults.
-      session?: { provider?: "openai" | "anthropic" | "gemini" | null; model?: string | null };
+      session?: { provider?: LlmProviderId | null; model?: string | null; secretId?: string | null };
       workflowAgentRun?: {
-        provider?: "openai" | "anthropic" | "gemini" | "vertex" | null;
+        provider?: LlmProviderId | null;
         model?: string | null;
         secretId?: string | null;
       };
       toolsetBuilder?: {
-        provider?: "openai" | "anthropic" | null;
+        provider?: LlmProviderId | null;
         model?: string | null;
         secretId?: string | null;
       };
     };
+    providers?: Partial<Record<LlmProviderId, { baseUrl?: string | null; apiKind?: LlmProviderApiKind | null }>>;
   };
 };
 
@@ -236,6 +237,7 @@ export type AgentSessionRecord = {
   toolsetId: string | null;
   llmProvider: string;
   llmModel: string;
+  llmSecretId: string | null;
   toolsAllow: unknown;
   limits: unknown;
   promptSystem: string | null;
@@ -621,7 +623,7 @@ export interface AppStore {
     title?: string | null;
     engineId: string;
     toolsetId?: string | null;
-    llm: { provider: string; model: string };
+    llm: { provider: string; model: string; auth?: { secretId?: string | null } };
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;

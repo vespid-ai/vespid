@@ -22,6 +22,8 @@ type PickerItem = {
 
 const DISABLED_STORAGE_KEY = "vespid.ui.models.disabled.v1";
 const RECENT_STORAGE_KEY = "vespid.ui.models.recent.v1";
+const PROVIDER_IDS = Object.keys(providerLabels) as LlmProviderId[];
+const PROVIDER_GROUP_IDS: ProviderGroupId[] = [...PROVIDER_IDS, "other"];
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined" || typeof window.localStorage === "undefined") return fallback;
@@ -67,7 +69,7 @@ function pushRecent(modelId: string): void {
 }
 
 function normalizeProviderGroup(providerId: string | null): ProviderGroupId {
-  if (providerId === "openai" || providerId === "anthropic" || providerId === "gemini" || providerId === "vertex") return providerId;
+  if (providerId && (PROVIDER_IDS as string[]).includes(providerId)) return providerId as LlmProviderId;
   return "other";
 }
 
@@ -160,7 +162,7 @@ export function ModelPickerDialog({
   }, [baseItems, query, disabledMap]);
 
   const grouped = useMemo(() => {
-    const groups: Record<ProviderGroupId, PickerItem[]> = { openai: [], anthropic: [], gemini: [], vertex: [], other: [] };
+    const groups = Object.fromEntries(PROVIDER_GROUP_IDS.map((id) => [id, [] as PickerItem[]])) as Record<ProviderGroupId, PickerItem[]>;
     for (const it of filteredItems) {
       groups[it.providerId].push(it);
     }
@@ -255,7 +257,7 @@ export function ModelPickerDialog({
                     </Command.Group>
                   ) : null}
 
-                  {(Object.keys(grouped) as ProviderGroupId[]).map((providerId) => {
+                  {PROVIDER_GROUP_IDS.map((providerId) => {
                     const list = grouped[providerId];
                     if (!list.length) return null;
                     return (
@@ -303,7 +305,7 @@ export function ModelPickerDialog({
 
               <div className="mt-3 rounded-lg border border-borderSubtle/60 bg-panel/40 p-2 shadow-elev2 shadow-inset">
                 <div className="max-h-[420px] overflow-auto p-1">
-                  {(Object.keys({ openai: 1, anthropic: 1, gemini: 1, vertex: 1, other: 1 }) as ProviderGroupId[]).map((providerId) => {
+                  {PROVIDER_GROUP_IDS.map((providerId) => {
                     const list = baseItems.filter((it) => it.providerId === providerId);
                     if (!list.length) return null;
                     const disabled = new Set(disabledMap[providerId] ?? []);
@@ -367,4 +369,3 @@ export function ModelPickerDialog({
     </Dialog>
   );
 }
-

@@ -1,4 +1,5 @@
 import type { AgentSkillBundle, McpServerConfig } from "./toolsets.js";
+import type { LlmProviderId } from "./llm/provider-registry.js";
 
 export type ToolsetCatalogItem =
   | {
@@ -31,8 +32,7 @@ export type ToolsetDraft = {
 export type ToolsetBuilderSessionStatus = "ACTIVE" | "FINALIZED" | "ARCHIVED";
 
 export type ToolsetBuilderLlmConfig = {
-  provider: "anthropic" | "openai";
+  provider: LlmProviderId;
   model: string;
   auth: { secretId: string };
 };
-
