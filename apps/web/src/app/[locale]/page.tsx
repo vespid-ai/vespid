@@ -238,7 +238,7 @@ export default function LocaleHomePage() {
           artifact={{
             title: t("marketing.quickstart.artifact.title"),
             subtitle: t("marketing.quickstart.artifact.subtitle"),
-            dslSnippet: t("marketing.quickstart.artifact.dslSnippet"),
+            dslSnippet: String(t.raw("marketing.quickstart.artifact.dslSnippet")),
             events: [
               t("marketing.quickstart.artifact.events.started"),
               t("marketing.quickstart.artifact.events.nodeStarted"),
