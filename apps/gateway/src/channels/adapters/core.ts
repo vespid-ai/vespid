@@ -936,6 +936,148 @@ function createWebchatEnvelope(input: ChannelIngressAdapterInput): ChannelInboun
   });
 }
 
+function createNostrEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const event = asObject(root.event) ?? root;
+  const tags = asArray(event.tags)
+    .map((item) => asArray(item))
+    .filter((item) => item.length >= 2);
+  const kind = readNumber(event.kind);
+  const text = pickString(event, ["content", "text", "message"]);
+  const senderId = pickString(event, ["pubkey", "senderId"]);
+  const threadId = tags.find((tag) => tag[0] === "e")?.[1];
+  const peerId = tags.find((tag) => tag[0] === "p")?.[1];
+  const conversationId =
+    (typeof threadId === "string" ? threadId : null) ??
+    (typeof peerId === "string" ? peerId : null) ??
+    senderId;
+  const botPubKey = readString(input.query.botPubKey);
+  const mentionMatched =
+    tags.some((tag) => tag[0] === "p" && typeof botPubKey === "string" && tag[1] === botPubKey) ||
+    includesMention(text ?? "", unique([botPubKey, "@vespid", "@bot"]));
+  const isDirectMessage = kind === 4;
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(event, ["id", "event_id"]),
+    senderDisplayName: pickString(root, ["senderDisplayName"]),
+    receivedAt: parseUnixSeconds(event.created_at, input.receivedAt),
+    isDirectMessage,
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createTlonEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const message = asObject(root.message) ?? root;
+  const text = pickString(message, ["text", "message", "content", "body"]);
+  const senderId = pickString(message, ["ship", "author", "senderId", "from"]);
+  const conversationId = pickString(message, ["channel", "channelId", "conversationId", "threadId"]) ?? senderId;
+  const botShip = readString(input.query.botShip);
+  const mentions = asArray(message.mentions)
+    .filter((value): value is string => typeof value === "string");
+  const mentionMatched =
+    mentions.some((value) => typeof botShip === "string" && value === botShip) ||
+    includesMention(text ?? "", unique([botShip, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["id", "messageId"]),
+    senderDisplayName: pickString(message, ["senderDisplayName", "authorName"]),
+    receivedAt: pickString(message, ["time", "createdAt", "timestamp"]) ?? input.receivedAt.toISOString(),
+    isDirectMessage: Boolean(conversationId?.startsWith("dm:") || conversationId === senderId),
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createZaloEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const message = asObject(root.message) ?? root;
+  const sender = asObject(root.sender) ?? asObject(root.from) ?? asObject(message.sender);
+  const conversation = asObject(root.conversation) ?? asObject(root.chat) ?? asObject(message.conversation);
+  const text = pickString(message, ["text", "message", "content", "body"]) ?? pickString(root, ["text", "message"]);
+  const senderId = pickString(sender, ["id", "user_id", "userId"]) ?? pickString(message, ["senderId", "from"]);
+  const conversationId = pickString(conversation, ["id", "threadId", "conversationId"]) ?? senderId;
+  const botId = readString(input.query.botUserId);
+  const mentions = asArray(message.mentions)
+    .map((item) => asObject(item))
+    .filter((item): item is RecordObject => item !== null);
+  const mentionMatched =
+    mentions.some((mention) => {
+      const id = pickString(mention, ["id", "user_id", "userId"]);
+      return typeof botId === "string" && id === botId;
+    }) || includesMention(text ?? "", unique([botId ? `@${botId}` : null, "@vespid", "@bot"]));
+  const eventName = pickString(root, ["event_name", "eventName"]);
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["msg_id", "message_id", "id"]) ?? pickString(root, ["id"]),
+    senderDisplayName: pickString(sender, ["display_name", "name"]),
+    receivedAt: parseTimestampMs(root.timestamp ?? message.timestamp, input.receivedAt),
+    isDirectMessage:
+      pickString(conversation, ["type"]) === "private" ||
+      eventName === "user_send_text" ||
+      eventName === "user_send_image",
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
+function createZalouserEnvelope(input: ChannelIngressAdapterInput): ChannelInboundEnvelope | null {
+  const root = asObject(input.body);
+  if (!root) {
+    return null;
+  }
+
+  const message = asObject(root.message) ?? asObject(root.data) ?? root;
+  const sender = asObject(message.sender) ?? asObject(root.sender);
+  const conversation = asObject(message.conversation) ?? asObject(root.conversation);
+  const text = pickString(message, ["text", "content", "body", "message"]);
+  const senderId = pickString(sender, ["id", "userId", "user_id"]) ?? pickString(message, ["senderId", "from"]);
+  const conversationId = pickString(conversation, ["id", "conversationId", "threadId"]) ?? senderId;
+  const botUserId = readString(input.query.botUserId);
+  const mentions = asArray(message.mentions)
+    .map((item) => asObject(item))
+    .filter((item): item is RecordObject => item !== null);
+  const mentionMatched =
+    mentions.some((mention) => {
+      const id = pickString(mention, ["id", "userId", "user_id"]);
+      return typeof botUserId === "string" && id === botUserId;
+    }) || includesMention(text ?? "", unique([botUserId ? `@${botUserId}` : null, "@vespid", "@bot"]));
+
+  return createEnvelope(input, {
+    text,
+    senderId,
+    conversationId,
+    providerMessageId: pickString(message, ["id", "messageId", "msg_id"]),
+    senderDisplayName: pickString(sender, ["name", "displayName"]),
+    receivedAt: parseTimestampMs(root.timestamp ?? message.timestamp, input.receivedAt),
+    isDirectMessage: pickString(conversation, ["type"]) === "direct" || conversationId === senderId,
+    mentionMatched,
+    rawBody: root,
+  });
+}
+
 function validateSlackSignature(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
   const signingSecret = readString(input.accountMetadata.signingSecret);
   if (!signingSecret) {
@@ -1102,6 +1244,21 @@ function validateTwitchSignature(input: ChannelIngressAuthInput): ChannelIngress
   const expected = `sha256=${crypto.createHmac("sha256", secret).update(`${messageId}${timestamp}${body}`, "utf8").digest("hex")}`;
   if (!safeEqual(signature, expected)) {
     return failed("twitch_signature_invalid");
+  }
+  return ok();
+}
+
+function validateZaloSignature(input: ChannelIngressAuthInput): ChannelIngressAuthDecision {
+  const secret = readString(input.accountMetadata.webhookSecret);
+  if (!secret) {
+    return ok();
+  }
+  const signature = readString(input.headers["x-zalo-signature"]);
+  if (!signature) {
+    return failed("zalo_signature_missing");
+  }
+  if (!verifyHexHmac({ payload: input.body, secret, signature })) {
+    return failed("zalo_signature_invalid");
   }
   return ok();
 }
@@ -1345,6 +1502,82 @@ export function createWebchatWebhookAdapter(): ChannelIngressAdapter {
     },
     normalizeWebhook(input) {
       return createWebchatEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createNostrWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "nostr",
+    authenticateWebhook(input) {
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-nostr-token",
+        reason: "nostr_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createNostrEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createTlonWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "tlon",
+    authenticateWebhook(input) {
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-tlon-token",
+        reason: "tlon_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createTlonEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createZaloWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "zalo",
+    authenticateWebhook(input) {
+      const signatureDecision = validateZaloSignature(input);
+      if (!signatureDecision.ok) {
+        return signatureDecision;
+      }
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-zalo-token",
+        reason: "zalo_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createZaloEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
+    },
+  };
+}
+
+export function createZalouserWebhookAdapter(): ChannelIngressAdapter {
+  return {
+    channelId: "zalouser",
+    authenticateWebhook(input) {
+      const tokenDecision = validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-zalouser-token",
+        reason: "zalouser_token_invalid",
+      });
+      if (tokenDecision.ok) {
+        return tokenDecision;
+      }
+      return validateBearerOrHeaderToken(input, {
+        metadataKey: "ingressToken",
+        headerName: "x-zalo-user-token",
+        reason: "zalouser_token_invalid",
+      });
+    },
+    normalizeWebhook(input) {
+      return createZalouserEnvelope(input) ?? normalizeGenericEnvelope(input, ["@vespid"]);
     },
   };
 }

@@ -12,12 +12,16 @@ import {
   createMatrixWebhookAdapter,
   createMsteamsWebhookAdapter,
   createNextcloudTalkWebhookAdapter,
+  createNostrWebhookAdapter,
   createSignalWebhookAdapter,
   createSlackWebhookAdapter,
   createTelegramWebhookAdapter,
+  createTlonWebhookAdapter,
   createTwitchWebhookAdapter,
   createWebchatWebhookAdapter,
   createWhatsappWebhookAdapter,
+  createZaloWebhookAdapter,
+  createZalouserWebhookAdapter,
 } from "./adapters/core.js";
 import { createGenericWebhookAdapter } from "./adapters/webhook.js";
 
@@ -113,8 +117,20 @@ export function createDefaultChannelIngressAdapterRegistry(): ChannelIngressAdap
       case "matrix":
         registry.register(createMatrixWebhookAdapter());
         break;
+      case "nostr":
+        registry.register(createNostrWebhookAdapter());
+        break;
+      case "tlon":
+        registry.register(createTlonWebhookAdapter());
+        break;
       case "twitch":
         registry.register(createTwitchWebhookAdapter());
+        break;
+      case "zalo":
+        registry.register(createZaloWebhookAdapter());
+        break;
+      case "zalouser":
+        registry.register(createZalouserWebhookAdapter());
         break;
       case "webchat":
         registry.register(createWebchatWebhookAdapter());

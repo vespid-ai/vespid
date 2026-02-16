@@ -13,12 +13,16 @@ import {
   createMatrixWebhookAdapter,
   createMsteamsWebhookAdapter,
   createNextcloudTalkWebhookAdapter,
+  createNostrWebhookAdapter,
   createSignalWebhookAdapter,
   createSlackWebhookAdapter,
   createTelegramWebhookAdapter,
+  createTlonWebhookAdapter,
   createTwitchWebhookAdapter,
   createWebchatWebhookAdapter,
   createWhatsappWebhookAdapter,
+  createZaloWebhookAdapter,
+  createZalouserWebhookAdapter,
 } from "./core.js";
 import { createDefaultChannelIngressAdapterRegistry } from "../registry.js";
 
@@ -477,6 +481,110 @@ describe("core channel adapters", () => {
     expect(envelope?.conversationId).toBe("dm:wc-user-1");
   });
 
+  it("validates nostr token and normalizes event payload", () => {
+    const adapter = createNostrWebhookAdapter();
+    const body = {
+      event: {
+        id: "nostr-event-1",
+        pubkey: "nostr-user-1",
+        kind: 1,
+        created_at: 1710000700,
+        content: "deploy now",
+        tags: [["p", "nostr-bot-1"], ["e", "thread-1"]],
+      },
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("nostr", body, { headers: { "x-nostr-token": "nostr-token" } }),
+      accountMetadata: {
+        ingressToken: "nostr-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("nostr", body, { query: { botPubKey: "nostr-bot-1" } }));
+    expect(envelope?.channelId).toBe("nostr");
+    expect(envelope?.event).toBe("message.mentioned");
+    expect(envelope?.conversationId).toBe("thread-1");
+  });
+
+  it("validates tlon token and normalizes group message", () => {
+    const adapter = createTlonWebhookAdapter();
+    const body = {
+      message: {
+        id: "tlon-msg-1",
+        text: "deploy now",
+        ship: "~zod",
+        channel: "group:ops",
+        mentions: ["~bot"],
+      },
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("tlon", body, { headers: { "x-tlon-token": "tlon-token" } }),
+      accountMetadata: {
+        ingressToken: "tlon-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("tlon", body, { query: { botShip: "~bot" } }));
+    expect(envelope?.channelId).toBe("tlon");
+    expect(envelope?.event).toBe("message.mentioned");
+    expect(envelope?.senderId).toBe("~zod");
+  });
+
+  it("validates zalo signature and normalizes user text", () => {
+    const adapter = createZaloWebhookAdapter();
+    const body = {
+      event_name: "user_send_text",
+      sender: { id: "zalo-user-1", name: "Alice" },
+      message: { msg_id: "zalo-msg-1", text: "deploy now" },
+      timestamp: 1710000800000,
+    };
+    const signature = crypto.createHmac("sha256", "zalo-secret").update(JSON.stringify(body), "utf8").digest("hex");
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("zalo", body, { headers: { "x-zalo-signature": signature } }),
+      accountMetadata: {
+        webhookSecret: "zalo-secret",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("zalo", body));
+    expect(envelope?.channelId).toBe("zalo");
+    expect(envelope?.event).toBe("message.dm");
+    expect(envelope?.providerMessageId).toBe("zalo-msg-1");
+  });
+
+  it("validates zalouser token and normalizes mention payload", () => {
+    const adapter = createZalouserWebhookAdapter();
+    const body = {
+      message: {
+        id: "zu-msg-1",
+        text: "deploy now",
+        sender: { id: "zu-user-1", name: "Alice" },
+        conversation: { id: "zu-conv-1", type: "group" },
+        mentions: [{ id: "zu-bot-1" }],
+      },
+      timestamp: 1710000900000,
+    };
+
+    const auth = adapter.authenticateWebhook?.({
+      ...inputFor("zalouser", body, { headers: { "x-zalouser-token": "zu-token" } }),
+      accountMetadata: {
+        ingressToken: "zu-token",
+      },
+    });
+    expect(auth?.ok).toBe(true);
+
+    const envelope = adapter.normalizeWebhook(inputFor("zalouser", body, { query: { botUserId: "zu-bot-1" } }));
+    expect(envelope?.channelId).toBe("zalouser");
+    expect(envelope?.event).toBe("message.mentioned");
+    expect(envelope?.conversationId).toBe("zu-conv-1");
+  });
+
   it("validates msteams token and normalizes mention message", () => {
     const adapter = createMsteamsWebhookAdapter();
 
@@ -602,7 +710,7 @@ describe("core channel adapters", () => {
     expect(envelope?.conversationId).toBe("!room:example.org");
   });
 
-  it("registers dedicated adapters for core8 + selected extended and generic adapter for others", () => {
+  it("registers dedicated adapters for all channels", () => {
     const registry = createDefaultChannelIngressAdapterRegistry();
     const slackAdapter = registry.get("slack");
     const feishuAdapter = registry.get("feishu");
@@ -614,6 +722,9 @@ describe("core channel adapters", () => {
     const nextcloudTalkAdapter = registry.get("nextcloud-talk");
     const twitchAdapter = registry.get("twitch");
     const webchatAdapter = registry.get("webchat");
+    const nostrAdapter = registry.get("nostr");
+    const tlonAdapter = registry.get("tlon");
+    const zaloAdapter = registry.get("zalo");
     const zalouserAdapter = registry.get("zalouser");
 
     expect(slackAdapter).not.toBeNull();
@@ -636,7 +747,13 @@ describe("core channel adapters", () => {
     expect(typeof nextcloudTalkAdapter?.authenticateWebhook).toBe("function");
     expect(twitchAdapter).not.toBeNull();
     expect(typeof twitchAdapter?.authenticateWebhook).toBe("function");
+    expect(nostrAdapter).not.toBeNull();
+    expect(typeof nostrAdapter?.authenticateWebhook).toBe("function");
+    expect(tlonAdapter).not.toBeNull();
+    expect(typeof tlonAdapter?.authenticateWebhook).toBe("function");
+    expect(zaloAdapter).not.toBeNull();
+    expect(typeof zaloAdapter?.authenticateWebhook).toBe("function");
     expect(zalouserAdapter).not.toBeNull();
-    expect(zalouserAdapter?.authenticateWebhook).toBeUndefined();
+    expect(typeof zalouserAdapter?.authenticateWebhook).toBe("function");
   });
 });
