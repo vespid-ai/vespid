@@ -477,9 +477,9 @@
       "selector": "选择器"
     },
     "engineOptions": {
-      "loop": "平衡模式 (gateway.loop.v2)",
-      "codex": "编码模式 (gateway.codex.v2)",
-      "claude": "推理模式 (gateway.claude.v2)"
+      "loop": "vespid agent (gateway.loop.v2)",
+      "codex": "codex agent (gateway.codex.v2)",
+      "claude": "claude agent (gateway.claude.v2)"
     }
   },
   "toolsets": {

@@ -139,9 +139,9 @@
       "selector": "Selector"
     },
     "engineOptions": {
-      "loop": "Balanced (gateway.loop.v2)",
-      "codex": "Coding (gateway.codex.v2)",
-      "claude": "Reasoning (gateway.claude.v2)"
+      "loop": "vespid agent (gateway.loop.v2)",
+      "codex": "codex agent (gateway.codex.v2)",
+      "claude": "claude agent (gateway.claude.v2)"
     }
   },
   "commandPalette": {
