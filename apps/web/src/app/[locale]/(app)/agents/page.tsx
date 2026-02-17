@@ -83,10 +83,6 @@ function buildStartCommand(artifact: AgentInstallerArtifact): string {
   return `${executable} start`;
 }
 
-function buildFallbackCommand(input: { pairingToken: string; apiBase: string }): string {
-  return `pnpm --filter @vespid/node-agent dev -- connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(input.apiBase)}`;
-}
-
 function triggerInstallerDownload(artifact: AgentInstallerArtifact): void {
   if (typeof window === "undefined") {
     return;
@@ -159,8 +155,6 @@ export default function AgentsPage() {
     ? buildConnectCommand({ artifact: activeArtifact, pairingToken: resolvedPairingToken, apiBase })
     : "";
   const startCommand = activeArtifact ? buildStartCommand(activeArtifact) : "";
-  const fallbackCommand = buildFallbackCommand({ pairingToken: resolvedPairingToken, apiBase });
-  const fallbackStartCommand = "pnpm --filter @vespid/node-agent dev -- start";
   const isZh = locale.toLowerCase().startsWith("zh");
   const usageTitle = isZh ? "vespid-agent 使用说明" : "How to use vespid-agent";
   const usageSteps = isZh
@@ -435,9 +429,11 @@ export default function AgentsPage() {
               <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
                 <div className="text-xs font-medium text-text">{t("agents.installer.fallbackTitle")}</div>
                 <div className="text-xs text-muted">{t("agents.installer.fallbackDescription")}</div>
-                <CommandBlock command={fallbackCommand} copyLabel={t("agents.installer.copyFallback")} />
-                <div className="text-xs font-medium text-muted">{startCommandLabel}</div>
-                <CommandBlock command={fallbackStartCommand} copyLabel={startCommandLabel} />
+                {installerQuery.data?.docsUrl ? (
+                  <a href={installerQuery.data.docsUrl} target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2">
+                    {t("agents.installer.docs")}
+                  </a>
+                ) : null}
               </div>
             ) : null}
 

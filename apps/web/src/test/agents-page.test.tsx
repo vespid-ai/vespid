@@ -148,7 +148,7 @@ describe("Agents page installer experience", () => {
     });
   });
 
-  it("shows fallback command when installer metadata is unavailable", () => {
+  it("shows unavailable notice when installer metadata is unavailable", () => {
     mocks.installerMode = "error";
     const messages = readMessages("en");
     render(
@@ -158,7 +158,8 @@ describe("Agents page installer experience", () => {
     );
 
     expect(screen.getByText(messages.agents.installer.fallbackTitle)).toBeInTheDocument();
-    expect(screen.getByText(/pnpm --filter @vespid\/node-agent dev -- connect --pairing-token/)).toBeInTheDocument();
+    expect(screen.getByText(messages.agents.installer.fallbackDescription)).toBeInTheDocument();
+    expect(screen.queryByText(/pnpm --filter @vespid\/node-agent dev -- connect --pairing-token/)).not.toBeInTheDocument();
   });
 
   it("uses placeholder token in connect command when token is expired", async () => {
