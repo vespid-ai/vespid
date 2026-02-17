@@ -1,65 +1,58 @@
+export type WorkflowCreateSource = "blank" | "template";
+export type WorkflowAdvancedAction = "open-by-id" | "open-recent" | "paste-workflow-id";
 export type WorkflowTemplateId = "github-issue-triage" | "http-to-agent" | "agent-shell";
 
-export type WorkflowTemplate = {
+export type WorkflowTemplatePreset = {
   id: WorkflowTemplateId;
-  name: string;
-  description: string;
-  defaults: {
-    includeGithub: boolean;
-    runOnNodeAgent: boolean;
-    agentScript: string;
-    agentUseDocker: boolean;
-    agentAllowNetwork: boolean;
-    githubRepo: string;
-    githubTitle: string;
-    githubBody: string;
+  workflowName: string;
+  defaultLlm?: {
+    providerId?: string;
+    modelId?: string;
+  };
+  primaryNode: {
+    instructions: string;
+    toolGithubIssueCreate: boolean;
+    toolShellRun: boolean;
+    runToolsOnNodeAgent: boolean;
+    teamPreset: "none" | "research-triad" | "build-pipeline" | "qa-swarm";
   };
 };
 
-export const workflowTemplates: WorkflowTemplate[] = [
+export const workflowTemplatePresets: WorkflowTemplatePreset[] = [
   {
     id: "github-issue-triage",
-    name: "GitHub issue triage",
-    description: "Create an issue, then run an agent step.",
-    defaults: {
-      includeGithub: true,
-      runOnNodeAgent: false,
-      agentScript: "echo triage",
-      agentUseDocker: true,
-      agentAllowNetwork: false,
-      githubRepo: "octo/test",
-      githubTitle: "Vespid Issue",
-      githubBody: "Created by Vespid workflow",
+    workflowName: "Issue triage",
+    defaultLlm: { providerId: "openai", modelId: "gpt-5.3-codex" },
+    primaryNode: {
+      instructions: "Summarize incoming issue context, decide ownership, and draft the next operational action.",
+      toolGithubIssueCreate: true,
+      toolShellRun: false,
+      runToolsOnNodeAgent: false,
+      teamPreset: "none",
     },
   },
   {
     id: "http-to-agent",
-    name: "HTTP + agent.execute",
-    description: "Start with an HTTP request node, then execute an agent task.",
-    defaults: {
-      includeGithub: false,
-      runOnNodeAgent: false,
-      agentScript: "echo hello from agent",
-      agentUseDocker: true,
-      agentAllowNetwork: false,
-      githubRepo: "",
-      githubTitle: "",
-      githubBody: "",
+    workflowName: "Intake normalization",
+    defaultLlm: { providerId: "openai", modelId: "gpt-5.3-codex" },
+    primaryNode: {
+      instructions: "Normalize inbound payloads and produce a structured handoff for downstream automation.",
+      toolGithubIssueCreate: false,
+      toolShellRun: false,
+      runToolsOnNodeAgent: false,
+      teamPreset: "research-triad",
     },
   },
   {
     id: "agent-shell",
-    name: "Agent shell runner",
-    description: "A minimal workflow that runs a shell script.",
-    defaults: {
-      includeGithub: false,
-      runOnNodeAgent: true,
-      agentScript: "node -v && echo done",
-      agentUseDocker: true,
-      agentAllowNetwork: false,
-      githubRepo: "",
-      githubTitle: "",
-      githubBody: "",
+    workflowName: "Agent shell runner",
+    defaultLlm: { providerId: "openai", modelId: "gpt-5.3-codex" },
+    primaryNode: {
+      instructions: "Execute shell diagnostics, summarize output, and recommend safe follow-up actions.",
+      toolGithubIssueCreate: false,
+      toolShellRun: true,
+      runToolsOnNodeAgent: true,
+      teamPreset: "build-pipeline",
     },
   },
 ];

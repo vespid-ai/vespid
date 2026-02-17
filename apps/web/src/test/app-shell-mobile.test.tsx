@@ -62,5 +62,7 @@ describe("AppShell mobile rendering", () => {
     // The shell should not mount children twice (mobile + desktop).
     const nodes = await screen.findAllByText("child-content");
     expect(nodes).toHaveLength(1);
+    expect(screen.queryByText("Session expired or access denied")).not.toBeInTheDocument();
+    expect(screen.queryByText(/optimized for desktop/i)).not.toBeInTheDocument();
   });
 });

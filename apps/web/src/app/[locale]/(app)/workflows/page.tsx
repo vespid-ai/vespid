@@ -3,6 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { MoreHorizontal, SlidersHorizontal } from "lucide-react";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
@@ -14,16 +15,30 @@ import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
 import { Textarea } from "../../../../components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../../components/ui/dropdown-menu";
 import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
+import { QuickCreatePanel } from "../../../../components/app/quick-create-panel";
+import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-sheet";
+import {
+  type WorkflowAdvancedAction,
+  type WorkflowCreateSource,
+  workflowTemplatePresets,
+} from "../../../../components/app/workflow-templates";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { type Workflow, useCreateWorkflow, useWorkflows } from "../../../../lib/hooks/use-workflows";
 import { addRecentWorkflowId, getRecentWorkflowIds } from "../../../../lib/recents";
 import { isUnauthorizedError } from "../../../../lib/api";
+import { cn } from "../../../../lib/cn";
 
 type TeammateForm = {
   id: string;
@@ -103,6 +118,55 @@ function defaultAgentNode(index: number, defaults?: Partial<LlmConfigValue>): Ag
     outputMode: "text",
     jsonSchema: "",
   };
+}
+
+function teammatesFromPreset(preset: "none" | "research-triad" | "build-pipeline" | "qa-swarm"): TeammateForm[] {
+  if (preset === "research-triad") {
+    return [
+      {
+        ...defaultTeammate(0),
+        id: "ux",
+        instructions: "Review the UX and propose improvements as JSON.",
+        outputMode: "json",
+        jsonSchema:
+          '{"type":"object","properties":{"summary":{"type":"string"},"issues":{"type":"array","items":{"type":"string"}}},"required":["summary","issues"],"additionalProperties":false}',
+      },
+      {
+        ...defaultTeammate(1),
+        id: "architect",
+        instructions: "Review architecture and propose changes as JSON.",
+        outputMode: "json",
+        jsonSchema:
+          '{"type":"object","properties":{"risks":{"type":"array","items":{"type":"string"}},"recommendations":{"type":"array","items":{"type":"string"}}},"required":["risks","recommendations"],"additionalProperties":false}',
+      },
+      {
+        ...defaultTeammate(2),
+        id: "devils_advocate",
+        instructions: "Challenge assumptions and find failure modes as JSON.",
+        outputMode: "json",
+        jsonSchema:
+          '{"type":"object","properties":{"concerns":{"type":"array","items":{"type":"string"}},"counterexamples":{"type":"array","items":{"type":"string"}}},"required":["concerns","counterexamples"],"additionalProperties":false}',
+      },
+    ];
+  }
+
+  if (preset === "build-pipeline") {
+    return [
+      { ...defaultTeammate(0), id: "planner", instructions: "Plan the approach and return JSON.", outputMode: "json" },
+      { ...defaultTeammate(1), id: "implementer", instructions: "Implement the plan. Use tools if allowed.", outputMode: "text" },
+      { ...defaultTeammate(2), id: "reviewer", instructions: "Review for correctness and risks. Return JSON.", outputMode: "json" },
+    ];
+  }
+
+  if (preset === "qa-swarm") {
+    return [
+      { ...defaultTeammate(0), id: "tester", instructions: "Write test cases and edge cases as JSON.", outputMode: "json" },
+      { ...defaultTeammate(1), id: "security", instructions: "Perform a security review and threats as JSON.", outputMode: "json" },
+      { ...defaultTeammate(2), id: "perf", instructions: "Find performance risks and mitigations as JSON.", outputMode: "json" },
+    ];
+  }
+
+  return [];
 }
 
 function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }): unknown {
@@ -335,22 +399,50 @@ export default function WorkflowsPage() {
     secretId: null,
   });
   const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);
+  const [workflowAdvancedOpen, setWorkflowAdvancedOpen] = useState(false);
+  const [openByIdSheetOpen, setOpenByIdSheetOpen] = useState(false);
+  const [createSource, setCreateSource] = useState<WorkflowCreateSource>("blank");
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
+  const [builderFocusedPulse, setBuilderFocusedPulse] = useState(false);
 
   const [recent, setRecent] = useState<string[]>([]);
   const [openWorkflowId, setOpenWorkflowId] = useState("");
+  const builderPulseTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     setRecent(getRecentWorkflowIds());
   }, []);
 
-  const canCreate =
-    Boolean(scopedOrgId) &&
-    agentNodes.length > 0 &&
-    agentNodes.every((n) => {
-      const needsGithub =
-        n.toolGithubIssueCreate || (n.teamEnabled && n.teammates.some((t) => t.toolGithubIssueCreate));
-      return !needsGithub || n.githubSecretId.trim().length > 0;
-    });
+  useEffect(() => {
+    return () => {
+      if (builderPulseTimeoutRef.current) {
+        window.clearTimeout(builderPulseTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const missingGithubSecret = agentNodes.some((n) => {
+    const needsGithub = n.toolGithubIssueCreate || (n.teamEnabled && n.teammates.some((t) => t.toolGithubIssueCreate));
+    return needsGithub && n.githubSecretId.trim().length === 0;
+  });
+  const missingProviderSecret =
+    isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId
+      ? true
+      : agentNodes.some((n) => {
+          const effective = n.llmUseDefault ? defaultAgentLlm : n.llmOverride;
+          return isOAuthRequiredProvider(effective.providerId) && !effective.secretId;
+        });
+  const missingWorkflowName = workflowName.trim().length === 0;
+  const createDisabledReason = !scopedOrgId
+    ? t("workflows.createDisabledReasons.orgRequired")
+    : missingWorkflowName
+      ? t("workflows.createDisabledReasons.workflowName")
+      : missingGithubSecret
+        ? t("workflows.createDisabledReasons.githubSecret")
+        : missingProviderSecret
+          ? t("workflows.createDisabledReasons.providerSecret")
+          : null;
+  const canCreate = createDisabledReason === null;
 
   const defaultLlmInitRef = useRef(false);
   useEffect(() => {
@@ -426,39 +518,156 @@ export default function WorkflowsPage() {
         header: t("workflows.list.columns.open"),
         id: "open",
         cell: ({ row }: any) => (
-          <Button variant="outline" size="sm" onClick={() => openById(row.original.id)}>
-            {t("workflows.list.open")}
-          </Button>
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="accent" size="sm" onClick={() => openEditorById(row.original.id)}>
+              {t("workflows.list.openEditor")}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label={t("workflows.actions.more")}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => openById(row.original.id)}>
+                  {t("workflows.list.menu.openDetails")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         ),
       },
     ] as const;
-  }, [openById, t]);
+  }, [openById, openEditorById, t]);
 
-  async function submitCreate() {
+  function focusWorkflowNameField() {
+    const target = document.getElementById("workflow-name");
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.focus();
+    target.select();
+  }
+
+  function pulseBuilderPanel() {
+    if (builderPulseTimeoutRef.current) {
+      window.clearTimeout(builderPulseTimeoutRef.current);
+    }
+    setBuilderFocusedPulse(true);
+    builderPulseTimeoutRef.current = window.setTimeout(() => {
+      setBuilderFocusedPulse(false);
+      builderPulseTimeoutRef.current = null;
+    }, 1500);
+  }
+
+  function openCreatePanel() {
+    setWorkflowAdvancedOpen(false);
+    pulseBuilderPanel();
+    focusWorkflowNameField();
+  }
+
+  function startBlankCreate() {
+    setCreateSource("blank");
+    setActiveTemplateId(null);
+    openCreatePanel();
+  }
+
+  function openByIdSheet(nextWorkflowId = "") {
+    setOpenWorkflowId(nextWorkflowId);
+    setOpenByIdSheetOpen(true);
+    window.setTimeout(() => {
+      const target = document.getElementById("open-workflow-id");
+      if (target instanceof HTMLInputElement) {
+        target.focus();
+        target.select();
+      }
+    }, 40);
+  }
+
+  function openEditorById(id: string) {
+    const trimmed = id.trim();
+    if (!trimmed) {
+      toast.error(t("workflows.errors.workflowIdRequired"));
+      return;
+    }
+    addRecentWorkflowId(trimmed);
+    setRecent(getRecentWorkflowIds());
+    router.push(`/${locale}/workflows/${trimmed}/graph`);
+  }
+
+  async function runAdvancedAction(action: WorkflowAdvancedAction) {
+    if (action === "open-by-id") {
+      openByIdSheet();
+      return;
+    }
+
+    if (action === "open-recent") {
+      const latest = recent[0];
+      if (!latest) {
+        toast.error(t("workflows.noRecent"));
+        return;
+      }
+      openEditorById(latest);
+      return;
+    }
+
+    let pasted = "";
+    try {
+      pasted = (await navigator.clipboard.readText()).trim();
+    } catch {
+      pasted = "";
+    }
+    openByIdSheet(pasted);
+  }
+
+  function applyTemplate(templateId: string) {
+    const preset = workflowTemplatePresets.find((item) => item.id === templateId);
+    if (!preset) {
+      return;
+    }
+
+    const nextDefaultLlm: LlmConfigValue = {
+      providerId: (preset.defaultLlm?.providerId ?? defaultAgentLlm.providerId) as any,
+      modelId: preset.defaultLlm?.modelId ?? defaultAgentLlm.modelId,
+      secretId: defaultAgentLlm.secretId,
+    };
+    const teammates = teammatesFromPreset(preset.primaryNode.teamPreset).map((tm) =>
+      preset.primaryNode.toolGithubIssueCreate && tm.id === "implementer" ? { ...tm, toolGithubIssueCreate: true } : tm
+    );
+
+    const baseNode = defaultAgentNode(0, nextDefaultLlm);
+    const nextNode: AgentNodeForm = {
+      ...baseNode,
+      instructions: preset.primaryNode.instructions,
+      toolGithubIssueCreate: preset.primaryNode.toolGithubIssueCreate,
+      toolShellRun: preset.primaryNode.toolShellRun,
+      runToolsOnNodeAgent: preset.primaryNode.runToolsOnNodeAgent,
+      teamEnabled: teammates.length > 0,
+      teamLeadDelegateOnly: teammates.length > 0,
+      teammates,
+    };
+
+    setWorkflowName(preset.workflowName);
+    setDefaultAgentLlm(nextDefaultLlm);
+    setAgentNodes([nextNode]);
+    setActiveTemplateId(preset.id);
+    setCreateSource("template");
+    openCreatePanel();
+    toast.success(t("workflows.templates.applied"));
+  }
+
+  async function submitCreate(source: WorkflowCreateSource = createSource) {
     if (!scopedOrgId) {
       toast.error(t("workflows.errors.orgRequired"));
       return;
     }
-
-    const missingGithubSecret = agentNodes.some((n) => {
-      const needsGithub =
-        n.toolGithubIssueCreate || (n.teamEnabled && n.teammates.some((t) => t.toolGithubIssueCreate));
-      return needsGithub && n.githubSecretId.trim().length === 0;
-    });
     if (missingGithubSecret) {
       toast.error(t("workflows.errors.githubSecretRequired"));
       return;
     }
-
-    const missingProviderSecret =
-      isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId
-        ? true
-        : agentNodes.some((n) => {
-            const effective = n.llmUseDefault ? defaultAgentLlm : n.llmOverride;
-            return isOAuthRequiredProvider(effective.providerId) && !effective.secretId;
-          });
     if (missingProviderSecret) {
-      toast.error("Selected provider requires secretId.");
+      toast.error(t("workflows.createDisabledReasons.providerSecret"));
       return;
     }
 
@@ -467,7 +676,9 @@ export default function WorkflowsPage() {
     addRecentWorkflowId(id);
     setRecent(getRecentWorkflowIds());
     toast.success(t("workflows.toast.created"));
-    router.push(`/${locale}/workflows/${id}`);
+    setCreateSource("blank");
+    setActiveTemplateId(null);
+    router.push(`/${locale}/workflows/${id}/graph?source=${source === "template" ? "template" : "create"}`);
   }
 
   function openById(id: string) {
@@ -478,7 +689,19 @@ export default function WorkflowsPage() {
     }
     addRecentWorkflowId(trimmed);
     setRecent(getRecentWorkflowIds());
+    setOpenByIdSheetOpen(false);
     router.push(`/${locale}/workflows/${trimmed}`);
+  }
+
+  const primaryNode = agentNodes[0] ?? null;
+
+  function setPrimaryNodeInstructions(value: string) {
+    setAgentNodes((prev) => {
+      if (prev.length === 0) {
+        return [{ ...defaultAgentNode(0, defaultAgentLlm), instructions: value }];
+      }
+      return prev.map((node, idx) => (idx === 0 ? { ...node, instructions: value } : node));
+    });
   }
 
   if (!authSession.isLoading && !authSession.data?.session) {
@@ -543,18 +766,45 @@ export default function WorkflowsPage() {
 
   return (
     <div className="grid gap-4">
-      <div>
-        <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("workflows.title")}</div>
-        <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("workflows.title")}</div>
+          <div className="mt-1 text-sm text-muted">{t("workflows.subtitle")}</div>
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline">
+              <MoreHorizontal className="h-4 w-4" />
+              {t("workflows.actions.more")}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => void runAdvancedAction("open-by-id")}>
+              {t("workflows.actions.openById")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void runAdvancedAction("open-recent")}>
+              {t("workflows.actions.openRecent")}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void runAdvancedAction("paste-workflow-id")}>
+              {t("workflows.actions.pasteWorkflowId")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("workflows.createTitle")}</CardTitle>
-            <CardDescription>{orgId ? `Org: ${orgId}` : t("workflows.createWizardHint")}</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
+      <div className="grid gap-4">
+        <div data-testid="workflow-builder-panel" data-pulse={builderFocusedPulse ? "on" : "off"}>
+        <QuickCreatePanel
+          className={cn(
+            "transition-[box-shadow,border-color] duration-300",
+            builderFocusedPulse ? "border-accent/60 shadow-[0_0_0_1px_var(--color-accent)]" : ""
+          )}
+          title={t("workflows.builderTitle")}
+          description={t("workflows.builderHint")}
+          actions={<div className="text-xs text-muted">{t("workflows.nodesConfigured", { count: agentNodes.length })}</div>}
+          contentClassName="gap-3"
+        >
+            <div className="text-xs font-medium text-muted">{t("workflows.createWillOpenEditor")}</div>
             <div className="grid gap-1.5">
               <Label htmlFor="workflow-name">{t("workflows.fields.workflowName")}</Label>
               <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
@@ -567,6 +817,45 @@ export default function WorkflowsPage() {
                 <div className="text-xs text-warn">Selected provider requires secretId.</div>
               ) : null}
             </div>
+
+            <div className="grid gap-2 rounded-lg border border-borderSubtle bg-panel/70 p-3">
+              <Label htmlFor="workflow-primary-instructions">{t("workflows.quickInstructions")}</Label>
+              <Textarea
+                id="workflow-primary-instructions"
+                rows={4}
+                value={primaryNode?.instructions ?? ""}
+                onChange={(e) => setPrimaryNodeInstructions(e.target.value)}
+              />
+              <div className="text-xs text-muted">{t("workflows.quickInstructionsHint")}</div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button variant="accent" onClick={() => void submitCreate()} disabled={!canCreate || createWorkflow.isPending}>
+                {createWorkflow.isPending ? t("common.loading") : t("common.create")}
+              </Button>
+              <Button variant="outline" onClick={() => setWorkflowAdvancedOpen(true)}>
+                <SlidersHorizontal className="h-4 w-4" />
+                {t("workflows.customizeAdvanced")}
+              </Button>
+              {activeTemplateId ? (
+                <Badge variant="neutral">{t("workflows.templates.appliedTag")}</Badge>
+              ) : null}
+            </div>
+            {createDisabledReason ? <div className="text-xs text-warn">{createDisabledReason}</div> : null}
+
+            <AdvancedConfigSheet
+              open={workflowAdvancedOpen}
+              onOpenChange={setWorkflowAdvancedOpen}
+              title={t("workflows.advancedTitle")}
+              description={t("workflows.advancedDescription")}
+              footer={
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button variant="outline" onClick={() => setWorkflowAdvancedOpen(false)}>
+                    {t("common.close")}
+                  </Button>
+                </div>
+              }
+            >
 
             <div className="grid gap-3 rounded-lg border border-border bg-panel/50 p-3">
               <div className="text-sm font-medium text-text">{t("workflows.agentNodes")}</div>
@@ -1248,42 +1537,30 @@ export default function WorkflowsPage() {
                 </div>
               </div>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Button variant="accent" onClick={submitCreate} disabled={!canCreate || createWorkflow.isPending}>
-                {createWorkflow.isPending ? t("common.loading") : t("common.create")}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </AdvancedConfigSheet>
+        </QuickCreatePanel>
+        </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>{t("nav.openById")}</CardTitle>
-            <CardDescription>{t("workflows.openByIdDescription")}</CardDescription>
+            <CardTitle>{t("workflows.templates.title")}</CardTitle>
+            <CardDescription>{t("workflows.templates.description")}</CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="open-workflow-id">{t("workflows.workflowId")}</Label>
-              <Input id="open-workflow-id" value={openWorkflowId} onChange={(e) => setOpenWorkflowId(e.target.value)} />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="accent" onClick={() => openById(openWorkflowId)}>
-                {t("workflows.open")}
-              </Button>
-            </div>
-
-            <div className="mt-2">
-              <div className="text-xs font-medium text-muted">{t("workflows.recent")}</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {recent.length === 0 ? <div className="text-sm text-muted">{t("workflows.noRecent")}</div> : null}
-                {recent.map((id) => (
-                  <Button key={id} variant="outline" onClick={() => openById(id)}>
-                    {id.slice(0, 8)}
+          <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {workflowTemplatePresets.map((preset) => {
+              const selected = activeTemplateId === preset.id;
+              return (
+                <div key={preset.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/45 p-3">
+                  <div>
+                    <div className="font-medium text-text">{t(`workflows.templates.${preset.id}.name`)}</div>
+                    <div className="mt-1 text-sm text-muted">{t(`workflows.templates.${preset.id}.description`)}</div>
+                  </div>
+                  <Button variant={selected ? "accent" : "outline"} onClick={() => applyTemplate(preset.id)}>
+                    {selected ? t("workflows.templates.appliedTag") : t("workflows.templates.useTemplate")}
                   </Button>
-                ))}
-              </div>
-            </div>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
 
@@ -1303,13 +1580,8 @@ export default function WorkflowsPage() {
               <EmptyState
                 title={t("workflows.list.empty")}
                 action={
-                  <Button
-                    variant="accent"
-                    onClick={() => {
-                      document.getElementById("workflow-name")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }}
-                  >
-                    {t("common.create")}
+                  <Button variant="accent" onClick={startBlankCreate}>
+                    {t("workflows.empty.createActionLabel")}
                   </Button>
                 }
               />
@@ -1318,6 +1590,43 @@ export default function WorkflowsPage() {
             )}
           </CardContent>
         </Card>
+
+        <AdvancedConfigSheet
+          open={openByIdSheetOpen}
+          onOpenChange={setOpenByIdSheetOpen}
+          title={t("workflows.actions.openById")}
+          description={t("workflows.openByIdDescription")}
+          footer={
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={() => setOpenByIdSheetOpen(false)}>
+                {t("common.close")}
+              </Button>
+            </div>
+          }
+        >
+          <div className="grid gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="open-workflow-id">{t("workflows.workflowId")}</Label>
+              <Input id="open-workflow-id" value={openWorkflowId} onChange={(e) => setOpenWorkflowId(e.target.value)} />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="accent" onClick={() => openById(openWorkflowId)}>
+                {t("workflows.open")}
+              </Button>
+            </div>
+            <div className="grid gap-2">
+              <div className="text-xs font-medium text-muted">{t("workflows.recent")}</div>
+              <div className="flex flex-wrap gap-2">
+                {recent.length === 0 ? <div className="text-sm text-muted">{t("workflows.noRecent")}</div> : null}
+                {recent.map((id) => (
+                  <Button key={id} variant="outline" onClick={() => openEditorById(id)}>
+                    {id.slice(0, 8)}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </AdvancedConfigSheet>
       </div>
     </div>
   );
