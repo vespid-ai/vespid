@@ -223,7 +223,7 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
             null,
             2
           ),
-          "Note: GitHub auth is configured on this node; do not include secret IDs in tool calls.",
+          "Note: GitHub credentials are handled by connected integrations; do not include raw credentials in tool calls.",
         ].join("\n")
       );
     }
@@ -278,7 +278,7 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
                     null,
                     2
                   ),
-                  "Note: GitHub auth is configured on this agent; do not include secret IDs in tool calls.",
+                  "Note: GitHub credentials are handled by connected integrations; do not include raw credentials in tool calls.",
                 ].join("\n")
               );
             }

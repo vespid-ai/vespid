@@ -24,7 +24,6 @@ import {
   useChannelAccountStatus,
   useChannelTestSend,
   useChannelPairingRequests,
-  useCreateChannelSecret,
   useDeleteChannelAllowlistEntry,
   useDeleteChannelAccount,
   usePutChannelAllowlistEntry,
@@ -51,7 +50,6 @@ export default function ChannelAccountDetailPage() {
   const pairingQuery = useChannelPairingRequests(scopedOrgId, { accountId, status: "pending" });
 
   const updateAccount = useUpdateChannelAccount(scopedOrgId, accountId || null);
-  const createSecret = useCreateChannelSecret(scopedOrgId, accountId || null);
   const runAction = useRunChannelAccountAction(scopedOrgId, accountId || null);
   const testSend = useChannelTestSend(scopedOrgId, accountId || null);
   const deleteAccount = useDeleteChannelAccount(scopedOrgId);
@@ -74,8 +72,6 @@ export default function ChannelAccountDetailPage() {
   const [enabled, setEnabled] = useState(true);
   const [requireMentionInGroup, setRequireMentionInGroup] = useState(true);
   const [metadataRaw, setMetadataRaw] = useState("{}");
-  const [secretName, setSecretName] = useState("");
-  const [secretValue, setSecretValue] = useState("");
   const [allowlistScope, setAllowlistScope] = useState("sender");
   const [allowlistSubject, setAllowlistSubject] = useState("");
   const [testConversationId, setTestConversationId] = useState("");
@@ -256,21 +252,6 @@ export default function ChannelAccountDetailPage() {
         metadata,
       });
       toast.success(t("channels.detail.saved"));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-    }
-  }
-
-  async function onCreateSecret() {
-    if (!secretName.trim() || !secretValue.trim()) {
-      toast.error(t("channels.errors.secretRequired"));
-      return;
-    }
-    try {
-      await createSecret.mutateAsync({ name: secretName.trim(), value: secretValue });
-      toast.success(t("channels.detail.secretCreated"));
-      setSecretName("");
-      setSecretValue("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("common.unknownError"));
     }
@@ -497,7 +478,7 @@ export default function ChannelAccountDetailPage() {
             <div className="font-mono">{account?.status ?? "-"}</div>
           </div>
           <div className="grid gap-1 text-sm md:grid-cols-2">
-            <div className="text-muted">{t("channels.detail.secretsCount")}</div>
+            <div className="text-muted">{t("channels.detail.connectionsConfigured")}</div>
             <div className="font-mono">{status?.secretsCount ?? 0}</div>
           </div>
           <div className="grid gap-1 text-sm md:grid-cols-2">
@@ -573,6 +554,43 @@ export default function ChannelAccountDetailPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>{t("channels.detail.connectionTitle")}</CardTitle>
+          <CardDescription>{t("channels.detail.connectionSubtitle")}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="grid gap-1 text-sm md:grid-cols-2">
+            <div className="text-muted">{t("channels.detail.connectionStatus")}</div>
+            <div className="font-medium text-text">
+              {(status?.secretsCount ?? 0) > 0 ? t("channels.detail.connectionConnected") : t("channels.detail.connectionNotConnected")}
+            </div>
+          </div>
+          <div className="text-xs text-muted">{t("channels.detail.connectionHint")}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => void onRunAction("login")}>
+              login
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void onRunAction("start")}>
+              start
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => void onRunAction("reconnect")}>
+              reconnect
+            </Button>
+          </div>
+          {selectedChannel ? (
+            <a
+              href={`${docsBaseUrl}${selectedChannel.docsPath}`}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-xs underline underline-offset-2"
+            >
+              {`${docsBaseUrl}${selectedChannel.docsPath}`}
+            </a>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>{t("channels.detail.testSendTitle")}</CardTitle>
           <CardDescription>{t("channels.detail.testSendSubtitle")}</CardDescription>
         </CardHeader>
@@ -596,26 +614,6 @@ export default function ChannelAccountDetailPage() {
               {t("channels.detail.testSendButton")}
             </Button>
           </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("channels.detail.secretsTitle")}</CardTitle>
-          <CardDescription>{t("channels.detail.secretsSubtitle")}</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
-          <div className="grid gap-2">
-            <Label>{t("channels.detail.secretName")}</Label>
-            <Input value={secretName} onChange={(e) => setSecretName(e.target.value)} />
-          </div>
-          <div className="grid gap-2">
-            <Label>{t("channels.detail.secretValue")}</Label>
-            <Input type="password" value={secretValue} onChange={(e) => setSecretValue(e.target.value)} />
-          </div>
-          <Button variant="accent" onClick={() => void onCreateSecret()} disabled={createSecret.isPending}>
-            {t("channels.detail.createSecret")}
-          </Button>
         </CardContent>
       </Card>
 

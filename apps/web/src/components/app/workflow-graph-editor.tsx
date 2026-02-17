@@ -946,7 +946,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               });
             }}
             rows={6}
-            placeholder='Example: { "connectors": { "github": { "secretId": "uuid" } } }'
+            placeholder='Example: { "connectors": { "github": { "connection": "configured-by-connection" } } }'
           />
         </div>
 
@@ -1351,7 +1351,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                   return { ...cur, config: { ...curCfg, toolsetId: v.length ? v : undefined } };
                 });
               }}
-              placeholder="uuid"
+              placeholder="toolset_id"
             />
           </div>
 
