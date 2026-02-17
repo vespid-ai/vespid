@@ -1,10 +1,11 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { CodeBlock } from "../../../../components/ui/code-block";
+import { CommandBlock } from "../../../../components/ui/command-block";
 import { Badge } from "../../../../components/ui/badge";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
@@ -12,12 +13,22 @@ import { DataTable } from "../../../../components/ui/data-table";
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Separator } from "../../../../components/ui/separator";
+import { Tabs, TabsList, TabsTrigger } from "../../../../components/ui/tabs";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
-import { useAgents, useCreatePairingToken, useRevokeAgent, useUpdateAgentTags } from "../../../../lib/hooks/use-agents";
-import { isUnauthorizedError } from "../../../../lib/api";
+import {
+  useAgents,
+  useAgentInstaller,
+  useCreatePairingToken,
+  useRevokeAgent,
+  useUpdateAgentTags,
+  type AgentInstallerArtifact,
+} from "../../../../lib/hooks/use-agents";
+import { getApiBase, isUnauthorizedError } from "../../../../lib/api";
+
+type PlatformId = "darwin-arm64" | "linux-x64" | "windows-x64";
 
 function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   const normalized = status.toLowerCase();
@@ -25,6 +36,50 @@ function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   if (normalized.includes("revoked") || normalized.includes("disabled")) return "danger";
   if (normalized.includes("stale") || normalized.includes("unknown")) return "warn";
   return "neutral";
+}
+
+function detectPreferredPlatform(): PlatformId {
+  if (typeof navigator === "undefined") {
+    return "darwin-arm64";
+  }
+  const ua = navigator.userAgent.toLowerCase();
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes("mac") || ua.includes("mac")) {
+    if (platform.includes("arm") || ua.includes("arm64") || ua.includes("apple")) {
+      return "darwin-arm64";
+    }
+    return "darwin-arm64";
+  }
+  if (platform.includes("win") || ua.includes("windows")) {
+    return "windows-x64";
+  }
+  return "linux-x64";
+}
+
+function shellQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
+function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
+  if (artifact.platformId === "windows-x64") {
+    return [
+      `powershell -NoProfile -Command "Invoke-WebRequest -Uri '${artifact.downloadUrl}' -OutFile '${artifact.fileName}'; Expand-Archive -Path '${artifact.fileName}' -DestinationPath . -Force"`,
+    ].join("\n");
+  }
+  return [
+    `curl -fsSL ${shellQuote(artifact.downloadUrl)} -o ${shellQuote(artifact.fileName)}`,
+    `tar -xzf ${shellQuote(artifact.fileName)}`,
+    "chmod +x ./vespid-agent",
+  ].join("\n");
+}
+
+function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
+  const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
+  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(input.apiBase)}`;
+}
+
+function buildFallbackCommand(input: { pairingToken: string; apiBase: string }): string {
+  return `pnpm --filter @vespid/node-agent dev -- connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(input.apiBase)}`;
 }
 
 export default function AgentsPage() {
@@ -37,6 +92,7 @@ export default function AgentsPage() {
   const scopedOrgId = authSession.data?.session ? orgId : null;
 
   const agentsQuery = useAgents(scopedOrgId);
+  const installerQuery = useAgentInstaller();
   const pairing = useCreatePairingToken(scopedOrgId);
   const revoke = useRevokeAgent(scopedOrgId);
   const updateTags = useUpdateAgentTags(scopedOrgId);
@@ -45,9 +101,45 @@ export default function AgentsPage() {
 
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
+  const [platformId, setPlatformId] = useState<PlatformId>(() => detectPreferredPlatform());
   const [tagsDraftByAgentId, setTagsDraftByAgentId] = useState<Record<string, string>>({});
 
   const canOperate = Boolean(scopedOrgId);
+  const apiBase = getApiBase();
+
+  const pairingExpiresMs = pairingExpiresAt ? Date.parse(pairingExpiresAt) : NaN;
+  const pairingTokenExpired =
+    Boolean(pairingToken) && Number.isFinite(pairingExpiresMs) && pairingExpiresMs <= Date.now();
+  const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
+  const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
+
+  const installerByPlatform = useMemo(() => {
+    const map = new Map<PlatformId, AgentInstallerArtifact>();
+    for (const artifact of installerQuery.data?.artifacts ?? []) {
+      map.set(artifact.platformId, artifact);
+    }
+    return map;
+  }, [installerQuery.data?.artifacts]);
+
+  useEffect(() => {
+    const hasSelected = installerByPlatform.has(platformId);
+    if (hasSelected) {
+      return;
+    }
+    const first = installerQuery.data?.artifacts?.[0];
+    if (first) {
+      setPlatformId(first.platformId);
+    }
+  }, [installerByPlatform, installerQuery.data?.artifacts, platformId]);
+
+  const activeArtifact = installerByPlatform.get(platformId) ?? null;
+  const showInstallerCommands = Boolean(activeArtifact);
+  const showFallbackCommand = installerQuery.isError || (!installerQuery.isLoading && !showInstallerCommands);
+  const downloadCommand = activeArtifact ? buildDownloadCommand(activeArtifact) : "";
+  const connectCommand = activeArtifact
+    ? buildConnectCommand({ artifact: activeArtifact, pairingToken: resolvedPairingToken, apiBase })
+    : "";
+  const fallbackCommand = buildFallbackCommand({ pairingToken: resolvedPairingToken, apiBase });
 
   const columns = useMemo(() => {
     return [
@@ -209,7 +301,7 @@ export default function AgentsPage() {
           <CardTitle>{t("agents.pairing")}</CardTitle>
           <CardDescription>{t("agents.pairingHint")}</CardDescription>
         </CardHeader>
-          <CardContent className="grid gap-3">
+        <CardContent className="grid gap-3">
           <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
             <div className="text-sm font-medium text-text">{t("agents.pairingSteps.step1")}</div>
             <div className="text-xs text-muted">{t("agents.pairingSteps.step2")}</div>
@@ -224,6 +316,72 @@ export default function AgentsPage() {
               <CodeBlock value={{ token: pairingToken, expiresAt: pairingExpiresAt }} />
             </>
           ) : null}
+
+          <Separator />
+
+          <div className="grid gap-3">
+            <div>
+              <div className="text-sm font-semibold text-text">{t("agents.installer.title")}</div>
+              <div className="mt-1 text-xs text-muted">{t("agents.installer.subtitle")}</div>
+            </div>
+
+            <Tabs value={platformId} onValueChange={(value) => setPlatformId(value as PlatformId)}>
+              <TabsList>
+                <TabsTrigger value="darwin-arm64">{t("agents.installer.platforms.darwinArm64")}</TabsTrigger>
+                <TabsTrigger value="linux-x64">{t("agents.installer.platforms.linuxX64")}</TabsTrigger>
+                <TabsTrigger value="windows-x64">{t("agents.installer.platforms.windowsX64")}</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            {installerQuery.isLoading ? (
+              <div className="text-xs text-muted">{t("common.loading")}</div>
+            ) : null}
+
+            {showInstallerCommands ? (
+              <div className="grid gap-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <span>{t("agents.installer.channel", { channel: installerQuery.data?.channel ?? "latest" })}</span>
+                  {installerQuery.data?.checksumsUrl ? (
+                    <a
+                      href={installerQuery.data.checksumsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2"
+                    >
+                      {t("agents.installer.checksums")}
+                    </a>
+                  ) : null}
+                  {installerQuery.data?.docsUrl ? (
+                    <a href={installerQuery.data.docsUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                      {t("agents.installer.docs")}
+                    </a>
+                  ) : null}
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-xs font-medium text-muted">{t("agents.installer.downloadCommand")}</div>
+                  <CommandBlock command={downloadCommand} copyLabel={t("agents.installer.copyDownload")} />
+                </div>
+                <div className="grid gap-1">
+                  <div className="text-xs font-medium text-muted">{t("agents.installer.connectCommand")}</div>
+                  <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
+                </div>
+              </div>
+            ) : null}
+
+            {showFallbackCommand ? (
+              <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
+                <div className="text-xs font-medium text-text">{t("agents.installer.fallbackTitle")}</div>
+                <div className="text-xs text-muted">{t("agents.installer.fallbackDescription")}</div>
+                <CommandBlock command={fallbackCommand} copyLabel={t("agents.installer.copyFallback")} />
+              </div>
+            ) : null}
+
+            {!hasUsablePairingToken ? (
+              <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">
+                {pairingTokenExpired ? t("agents.installer.tokenExpired") : t("agents.installer.tokenMissing")}
+              </div>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
 
@@ -265,7 +423,6 @@ export default function AgentsPage() {
           ) : null}
         </CardContent>
       </Card>
-
     </div>
   );
 }

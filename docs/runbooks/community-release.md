@@ -7,6 +7,7 @@ Community release includes:
 - Source release in public repository
 - Community Docker images
 - Apache-licensed SDK packages
+- Node-agent standalone binaries (macOS arm64, Linux x64, Windows x64)
 
 ## Preconditions
 - CI is green on default branch.
@@ -29,6 +30,11 @@ Community release includes:
    - public source tag
    - GHCR images
    - npm publish status of SDK
+   - GitHub Release assets:
+     - `vespid-agent-darwin-arm64.tar.gz`
+     - `vespid-agent-linux-x64.tar.gz`
+     - `vespid-agent-windows-x64.zip`
+     - `vespid-agent-checksums.txt`
 6. Publish release notes with:
    - capability matrix (community vs enterprise)
    - commercial license contact path
@@ -46,8 +52,9 @@ If release is invalid:
 - Public mirror contains no `enterprise` paths.
 - License files are present and consistent.
 - No secrets in release artifacts.
+- Node-agent binary checksums file is present and matches all three platform archives.
 
 ## Summary (English Only)
 - Community release must pass four guardrails first (boundary, licenses, mirror dry-run, secrets scan).
-- After release, verify all three artifact classes: source, images, and SDK packages.
+- After release, verify all four artifact classes: source, images, SDK packages, and node-agent binaries.
 - If an issue is discovered, stop distribution first, then patch and document the incident.

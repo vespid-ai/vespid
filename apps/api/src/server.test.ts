@@ -258,6 +258,69 @@ describe("api hardening foundation", () => {
     expect(body.channels.some((channel) => channel.id === "webchat")).toBe(true);
   });
 
+  it("returns 503 when agent installer metadata is disabled", async () => {
+    const disabledServer = await buildServer({
+      store: createPaidMemoryStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+      agentInstaller: { enabled: false },
+    });
+
+    const response = await disabledServer.inject({
+      method: "GET",
+      url: "/v1/meta/agent-installer",
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect((response.json() as { code?: string }).code).toBe("AGENT_INSTALLER_UNAVAILABLE");
+    await disabledServer.close();
+  });
+
+  it("returns stable agent installer metadata when enabled", async () => {
+    const enabledServer = await buildServer({
+      store: createPaidMemoryStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+      agentInstaller: {
+        enabled: true,
+        repository: "vespid-ai/vespid-community",
+        channel: "community-v0.4.0",
+        docsUrl: "https://docs.vespid.ai/agent",
+      },
+    });
+
+    const response = await enabledServer.inject({
+      method: "GET",
+      url: "/v1/meta/agent-installer",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      provider: string;
+      repository: string;
+      channel: string;
+      docsUrl: string | null;
+      checksumsUrl: string;
+      artifacts: Array<{ platformId: string; fileName: string; downloadUrl: string; archiveType: string }>;
+    };
+    expect(body.provider).toBe("github-releases");
+    expect(body.repository).toBe("vespid-ai/vespid-community");
+    expect(body.channel).toBe("community-v0.4.0");
+    expect(body.docsUrl).toBe("https://docs.vespid.ai/agent");
+    expect(body.artifacts.map((artifact) => artifact.platformId)).toEqual(["darwin-arm64", "linux-x64", "windows-x64"]);
+    expect(body.artifacts.map((artifact) => artifact.fileName)).toEqual([
+      "vespid-agent-darwin-arm64.tar.gz",
+      "vespid-agent-linux-x64.tar.gz",
+      "vespid-agent-windows-x64.zip",
+    ]);
+    for (const artifact of body.artifacts) {
+      expect(artifact.downloadUrl).toContain(`/releases/download/community-v0.4.0/${artifact.fileName}`);
+      expect(["tar.gz", "zip"]).toContain(artifact.archiveType);
+    }
+    expect(body.checksumsUrl).toContain("/releases/download/community-v0.4.0/vespid-agent-checksums.txt");
+    await enabledServer.close();
+  });
+
   it("rejects non-loop session engines", async () => {
     const signup = await server.inject({
       method: "POST",

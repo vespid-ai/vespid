@@ -12,6 +12,35 @@ export type AgentMeta = {
   reportedTags?: string[];
 };
 
+export type AgentInstallerArtifact = {
+  platformId: "darwin-arm64" | "linux-x64" | "windows-x64";
+  os: "darwin" | "linux" | "windows";
+  arch: "arm64" | "x64";
+  fileName: string;
+  archiveType: "tar.gz" | "zip";
+  downloadUrl: string;
+};
+
+export type AgentInstallerMetadata = {
+  provider: "github-releases";
+  repository: string;
+  channel: string;
+  docsUrl: string | null;
+  artifacts: AgentInstallerArtifact[];
+  checksumsUrl: string;
+};
+
+export function useAgentInstaller() {
+  return useQuery({
+    queryKey: ["agentInstaller"],
+    queryFn: async () => {
+      return apiFetchJson<AgentInstallerMetadata>("/v1/meta/agent-installer", { method: "GET" });
+    },
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
 export function useAgents(orgId: string | null) {
   return useQuery({
     queryKey: ["agents", orgId],

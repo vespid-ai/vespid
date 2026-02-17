@@ -557,6 +557,27 @@
       "step1": "1. Create a pairing token",
       "step2": "2. Run the node agent command with the token",
       "step3": "3. Refresh this page and verify the agent is online"
+    },
+    "installer": {
+      "title": "Connector program",
+      "subtitle": "Download the standalone agent and run one command to connect this machine.",
+      "platforms": {
+        "darwinArm64": "macOS (Apple Silicon)",
+        "linuxX64": "Linux (x64)",
+        "windowsX64": "Windows (x64)"
+      },
+      "channel": "Release channel: {channel}",
+      "checksums": "Checksums",
+      "docs": "Setup guide",
+      "downloadCommand": "Download and unpack",
+      "connectCommand": "Connect to Vespid",
+      "fallbackTitle": "Developer fallback",
+      "fallbackDescription": "Installer metadata is unavailable. Use the workspace dev command instead.",
+      "tokenMissing": "Create a pairing token to get a copy-ready connect command.",
+      "tokenExpired": "The pairing token has expired. Create a new token before connecting.",
+      "copyDownload": "Copy download command",
+      "copyConnect": "Copy connect command",
+      "copyFallback": "Copy fallback command"
     }
   },
   "toolsets": {

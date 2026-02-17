@@ -33,6 +33,7 @@ describe("i18n message coverage", () => {
       "runs.trustTitle",
       "runs.orgLabel",
       "agents.subtitle",
+      "agents.installer.title",
       "secrets.createSecret",
       "auth.subtitle",
       "auth.passwordLoginTitle",

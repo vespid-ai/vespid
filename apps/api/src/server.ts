@@ -105,6 +105,21 @@ type RefreshTokenPayload = {
   expiresAt: number;
 };
 
+type AgentInstallerArtifact = {
+  platformId: "darwin-arm64" | "linux-x64" | "windows-x64";
+  os: "darwin" | "linux" | "windows";
+  arch: "arm64" | "x64";
+  fileName: string;
+  archiveType: "tar.gz" | "zip";
+};
+
+type AgentInstallerConfig = {
+  enabled: boolean;
+  repository: string;
+  channel: string;
+  docsUrl: string | null;
+};
+
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthContext;
@@ -133,6 +148,31 @@ const INTERNAL_API_SERVICE_TOKEN =
 const GATEWAY_HTTP_URL = process.env.GATEWAY_HTTP_URL ?? "http://localhost:3002";
 const GATEWAY_INTERNAL_SERVICE_TOKEN =
   process.env.GATEWAY_SERVICE_TOKEN ?? process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? "dev-gateway-token";
+const DEFAULT_AGENT_INSTALLER_REPOSITORY = "vespid-ai/vespid-community";
+const DEFAULT_AGENT_INSTALLER_CHANNEL = "latest";
+const AGENT_INSTALLER_ARTIFACTS: AgentInstallerArtifact[] = [
+  {
+    platformId: "darwin-arm64",
+    os: "darwin",
+    arch: "arm64",
+    fileName: "vespid-agent-darwin-arm64.tar.gz",
+    archiveType: "tar.gz",
+  },
+  {
+    platformId: "linux-x64",
+    os: "linux",
+    arch: "x64",
+    fileName: "vespid-agent-linux-x64.tar.gz",
+    archiveType: "tar.gz",
+  },
+  {
+    platformId: "windows-x64",
+    os: "windows",
+    arch: "x64",
+    fileName: "vespid-agent-windows-x64.zip",
+    archiveType: "zip",
+  },
+];
 
 function readSystemAdminEmailAllowlist(): Set<string> {
   return new Set(
@@ -829,6 +869,46 @@ function invalidSkillBundle(details?: unknown): AppError {
   return new AppError(400, { code: "INVALID_SKILL_BUNDLE", message: "Invalid skill bundle", details });
 }
 
+function agentInstallerUnavailable(message = "Agent installer metadata is unavailable"): AppError {
+  return new AppError(503, { code: "AGENT_INSTALLER_UNAVAILABLE", message });
+}
+
+function normalizeAgentInstallerRepository(value: string | null | undefined): string {
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    return DEFAULT_AGENT_INSTALLER_REPOSITORY;
+  }
+  return raw.replace(/^https?:\/\/github\.com\//i, "").replace(/\/+$/, "");
+}
+
+function normalizeAgentInstallerChannel(value: string | null | undefined): string {
+  const raw = (value ?? "").trim();
+  return raw.length > 0 ? raw : DEFAULT_AGENT_INSTALLER_CHANNEL;
+}
+
+function normalizeAgentInstallerDocsUrl(value: string | null | undefined): string | null {
+  const raw = (value ?? "").trim();
+  if (raw.length === 0) {
+    return null;
+  }
+  try {
+    return new URL(raw).toString();
+  } catch {
+    return null;
+  }
+}
+
+function parseAgentInstallerEnabled(value: string | null | undefined): boolean {
+  return String(value ?? "").trim() === "1";
+}
+
+function buildAgentInstallerReleaseBase(repository: string, channel: string): string {
+  if (channel === "latest") {
+    return `https://github.com/${repository}/releases/latest/download`;
+  }
+  return `https://github.com/${repository}/releases/download/${encodeURIComponent(channel)}`;
+}
+
 function base64UrlEncode(input: string): string {
   return Buffer.from(input, "utf8").toString("base64url");
 }
@@ -1152,6 +1232,7 @@ export async function buildServer(input?: {
   queueProducer?: WorkflowRunQueueProducer;
   enterpriseProvider?: EnterpriseProvider;
   stripe?: Stripe;
+  agentInstaller?: Partial<AgentInstallerConfig>;
 }) {
   const server = Fastify({
     logger: {
@@ -1190,6 +1271,12 @@ export async function buildServer(input?: {
     (process.env.NODE_ENV === "test" && !process.env.REDIS_URL
       ? createInMemoryWorkflowRunQueueProducer()
       : createBullMqWorkflowRunQueueProducer());
+  const agentInstallerConfig: AgentInstallerConfig = {
+    enabled: input?.agentInstaller?.enabled ?? parseAgentInstallerEnabled(process.env.AGENT_INSTALLER_ENABLED),
+    repository: normalizeAgentInstallerRepository(input?.agentInstaller?.repository ?? process.env.AGENT_INSTALLER_REPOSITORY),
+    channel: normalizeAgentInstallerChannel(input?.agentInstaller?.channel ?? process.env.AGENT_INSTALLER_CHANNEL),
+    docsUrl: normalizeAgentInstallerDocsUrl(input?.agentInstaller?.docsUrl ?? process.env.AGENT_INSTALLER_DOCS_URL),
+  };
   const enterpriseProvider = await loadEnterpriseProvider({
     ...(input?.enterpriseProvider ? { inlineProvider: input.enterpriseProvider } : {}),
     logger: server.log,
@@ -1979,6 +2066,29 @@ export async function buildServer(input?: {
   server.get("/v1/meta/channels", async () => {
     return {
       channels: channelCatalog,
+    };
+  });
+
+  server.get("/v1/meta/agent-installer", async () => {
+    if (!agentInstallerConfig.enabled) {
+      throw agentInstallerUnavailable();
+    }
+
+    const releaseBase = buildAgentInstallerReleaseBase(agentInstallerConfig.repository, agentInstallerConfig.channel);
+    return {
+      provider: "github-releases" as const,
+      repository: agentInstallerConfig.repository,
+      channel: agentInstallerConfig.channel,
+      docsUrl: agentInstallerConfig.docsUrl,
+      artifacts: AGENT_INSTALLER_ARTIFACTS.map((artifact) => ({
+        platformId: artifact.platformId,
+        os: artifact.os,
+        arch: artifact.arch,
+        fileName: artifact.fileName,
+        archiveType: artifact.archiveType,
+        downloadUrl: `${releaseBase}/${artifact.fileName}`,
+      })),
+      checksumsUrl: `${releaseBase}/vespid-agent-checksums.txt`,
     };
   });
 

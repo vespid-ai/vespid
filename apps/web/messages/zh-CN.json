@@ -487,6 +487,27 @@
       "step1": "1. 创建配对令牌",
       "step2": "2. 使用该令牌运行 node-agent 命令",
       "step3": "3. 刷新本页并确认代理在线"
+    },
+    "installer": {
+      "title": "连接程序",
+      "subtitle": "下载独立 agent 程序并执行一条命令，将当前机器连接到服务。",
+      "platforms": {
+        "darwinArm64": "macOS（Apple Silicon）",
+        "linuxX64": "Linux（x64）",
+        "windowsX64": "Windows（x64）"
+      },
+      "channel": "发布通道：{channel}",
+      "checksums": "校验和",
+      "docs": "安装说明",
+      "downloadCommand": "下载并解压",
+      "connectCommand": "连接到 Vespid",
+      "fallbackTitle": "开发回退方式",
+      "fallbackDescription": "连接程序元数据暂不可用，请使用工作区开发命令。",
+      "tokenMissing": "请先创建配对令牌，再复制可直接执行的连接命令。",
+      "tokenExpired": "配对令牌已过期，请创建新的令牌后再连接。",
+      "copyDownload": "复制下载命令",
+      "copyConnect": "复制连接命令",
+      "copyFallback": "复制回退命令"
     }
   },
   "sessions": {
