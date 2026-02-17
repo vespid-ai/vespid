@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-const execFileAsync = promisify(execFile);
 
 function currentPlatformInfo() {
   if (process.platform === "darwin" && process.arch === "arm64") {
@@ -37,9 +34,21 @@ function currentPlatformInfo() {
 }
 
 async function runCommand(command, args, cwd) {
-  await execFileAsync(command, args, {
-    cwd,
-    env: process.env,
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) {
+        resolve(undefined);
+        return;
+      }
+      reject(new Error(`${command} exited with code ${code ?? -1}`));
+    });
   });
 }
 
