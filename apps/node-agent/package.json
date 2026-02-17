@@ -21,8 +21,6 @@
     "@vespid/connectors": "workspace:*",
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",
-    "@vespid/engine-claude-agent-sdk": "workspace:*",
-    "@vespid/engine-codex-sdk": "workspace:*",
     "ajv": "^8.17.1",
     "ws": "^8.18.3",
     "zod": "^4.3.6"

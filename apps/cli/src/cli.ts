@@ -16,7 +16,7 @@ function usage(): never {
       "",
       "Commands:",
       "  vespid session list --api <url> --org <orgId> --token <accessToken>",
-      "  vespid session create --api <url> --org <orgId> --token <accessToken> --model <model> --instructions <text> [--title <text>] [--engine gateway.loop.v2|gateway.codex.v2|gateway.claude.v2] [--provider openai|anthropic] [--toolset <toolsetId>] [--tag <selectorTag>] [--tools <comma-separated>]",
+      "  vespid session create --api <url> --org <orgId> --token <accessToken> --model <model> --instructions <text> [--title <text>] [--provider openai|anthropic] [--toolset <toolsetId>] [--tag <selectorTag>] [--tools <comma-separated>]",
       "  vespid session send --gateway <wsUrl> --org <orgId> --token <accessToken> --session <sessionId> --message <text> [--timeout-ms <ms>]",
       "",
       "Notes:",
@@ -129,7 +129,6 @@ async function cmdSessionCreate(args: string[]) {
   const instructions = argValue(args, "--instructions");
   if (!apiBase || !orgId || !token || !model || !instructions) usage();
 
-  const engine = (argValue(args, "--engine") ?? "gateway.loop.v2") as "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
   const provider = (argValue(args, "--provider") ?? "openai") as "openai" | "anthropic";
   const title = argValue(args, "--title") ?? "";
   const system = argValue(args, "--system") ?? "";
@@ -139,9 +138,9 @@ async function cmdSessionCreate(args: string[]) {
 
   const payload = {
     ...(title.trim().length ? { title: title.trim() } : {}),
-    engineId: engine,
+    engineId: "gateway.loop.v2",
     ...(toolsetId && toolsetId.trim().length ? { toolsetId: toolsetId.trim() } : {}),
-    llm: { provider: engine === "gateway.codex.v2" ? "openai" : engine === "gateway.claude.v2" ? "anthropic" : provider, model: model.trim() },
+    llm: { provider, model: model.trim() },
     prompt: { ...(system.trim().length ? { system: system.trim() } : {}), instructions: instructions.trim() },
     tools: { allow: tools },
     ...(selectorTag && selectorTag.trim().length ? { executorSelector: { pool: "managed", tag: selectorTag.trim() } } : {}),

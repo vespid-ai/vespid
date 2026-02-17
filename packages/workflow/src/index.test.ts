@@ -84,27 +84,28 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
-  it("accepts gateway codex engine with gateway execution mode", () => {
-    const parsed = workflowDslSchema.parse({
-      version: "v2",
-      trigger: { type: "trigger.manual" },
-      nodes: [
-        {
-          id: "n1",
-          type: "agent.run",
-          config: {
-            llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
-            execution: { mode: "gateway" },
-            engine: { id: "gateway.codex.v2" },
-            prompt: { instructions: "Say hello." },
-            tools: { allow: [], execution: "cloud" },
-            limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
-            output: { mode: "text" },
+  it("rejects non-loop gateway engine ids", () => {
+    expect(() =>
+      workflowDslSchema.parse({
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [
+          {
+            id: "n1",
+            type: "agent.run",
+            config: {
+              llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
+              execution: { mode: "gateway" },
+              engine: { id: "gateway.codex.v2" as any },
+              prompt: { instructions: "Say hello." },
+              tools: { allow: [], execution: "cloud" },
+              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+              output: { mode: "text" },
+            },
           },
-        },
-      ],
-    });
-    expect(parsed.nodes[0]?.type).toBe("agent.run");
+        ],
+      })
+    ).toThrow();
   });
 
   it("rejects vertex provider when llm.auth.secretId is missing", () => {

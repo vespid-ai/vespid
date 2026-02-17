@@ -34,8 +34,6 @@ packages/workflow/
 packages/shared/
 packages/connectors/
 packages/sdk-client/
-packages/engine-codex-sdk/
-packages/engine-claude-agent-sdk/
 
 docs/adr/
 docs/architecture.md

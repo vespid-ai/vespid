@@ -778,7 +778,6 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     const tools = asObject(cfg["tools"]) ?? {};
     const limits = asObject(cfg["limits"]) ?? {};
     const output = asObject(cfg["output"]) ?? {};
-    const engine = asObject(cfg["engine"]) ?? {};
     const team = asObject(cfg["team"]);
 
     const llmValue: LlmConfigValue = {
@@ -795,11 +794,6 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     const maxTurns = asNumber(limits["maxTurns"], 8);
     const maxToolCalls = asNumber(limits["maxToolCalls"], 20);
     const timeoutMs = asNumber(limits["timeoutMs"], 60_000);
-
-    const engineId =
-      engine["id"] === "gateway.codex.v2" || engine["id"] === "gateway.claude.v2" || engine["id"] === "gateway.loop.v2"
-        ? (engine["id"] as string)
-        : "gateway.loop.v2";
 
     const toolsetId = typeof cfg["toolsetId"] === "string" ? (cfg["toolsetId"] as string) : "";
 
@@ -1353,35 +1347,6 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               }}
               placeholder="uuid"
             />
-          </div>
-
-          <div className="grid gap-1.5">
-            <Label>Engine</Label>
-            <Select
-              value={engineId}
-              onValueChange={(v) => {
-                const nextId = v === "gateway.codex.v2" || v === "gateway.claude.v2" ? v : "gateway.loop.v2";
-                updateNode(node.id, (cur) => {
-                  const curCfg = asObject(cur.config) ?? {};
-                  return {
-                    ...cur,
-                    config: {
-                      ...curCfg,
-                      engine: { id: nextId },
-                    },
-                  };
-                });
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="gateway.loop.v2">gateway.loop.v2</SelectItem>
-                <SelectItem value="gateway.claude.v2">gateway.claude.v2</SelectItem>
-                <SelectItem value="gateway.codex.v2">gateway.codex.v2</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="grid grid-cols-2 gap-2">

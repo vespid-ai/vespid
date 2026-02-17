@@ -3130,7 +3130,7 @@ export async function buildServer(input?: {
         scope: z.enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"]).default("main"),
         context: z.record(z.string().min(1), z.unknown()).optional(),
         executionMode: z.enum(["pinned-node-host"]).default("pinned-node-host"),
-        engineId: z.enum(["gateway.loop.v2", "gateway.codex.v2", "gateway.claude.v2"]).optional(),
+        engineId: z.enum(["gateway.loop.v2"]).optional(),
         toolsetId: z.string().uuid().optional(),
         llm: z
           .object({
@@ -3221,10 +3221,6 @@ export async function buildServer(input?: {
         auth: { secretId: defaults.secretId ?? null },
       };
     })();
-
-    if (engineId === "gateway.codex.v2" && resolvedLlm.provider !== "openai" && resolvedLlm.provider !== "openai-codex") {
-      throw badRequest("gateway.codex.v2 sessions support only openai/openai-codex providers.");
-    }
 
     if (isOAuthRequiredProvider(resolvedLlm.provider) && !resolvedLlm.auth.secretId) {
       throw badRequest("Provider requires llm.auth.secretId for sessions.");

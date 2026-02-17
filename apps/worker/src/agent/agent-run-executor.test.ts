@@ -97,7 +97,7 @@ describe("agent.run executor", () => {
     expect(loadSecretValue).not.toHaveBeenCalled();
   });
 
-  it("forces provider based on gateway engine id", async () => {
+  it("preserves configured provider for gateway loop engine", async () => {
     const executor = createAgentRunExecutor({
       getGithubApiBaseUrl: () => "https://api.github.com",
       loadSecretValue: vi.fn(async () => "sk-secret"),
@@ -110,7 +110,7 @@ describe("agent.run executor", () => {
       config: {
         llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
         execution: { mode: "gateway" },
-        engine: { id: "gateway.claude.v2" },
+        engine: { id: "gateway.loop.v2" },
         prompt: { instructions: "Do the thing." },
         tools: { allow: [], execution: "cloud" },
         limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 200_000 },
@@ -134,6 +134,6 @@ describe("agent.run executor", () => {
     });
 
     const payload = (result.block as any)?.payload;
-    expect(payload.node.config.llm.provider).toBe("anthropic");
+    expect(payload.node.config.llm.provider).toBe("openai");
   });
 });

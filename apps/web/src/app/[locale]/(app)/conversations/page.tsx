@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
 import { Separator } from "../../../../components/ui/separator";
 import { Textarea } from "../../../../components/ui/textarea";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
@@ -20,7 +19,7 @@ import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions } from "../../../../lib/hooks/use-sessions";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
-import { providersForContext, type LlmProviderId } from "../../../../components/app/llm/model-catalog";
+import { providersForContext } from "../../../../components/app/llm/model-catalog";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { isUnauthorizedError } from "../../../../lib/api";
@@ -30,7 +29,6 @@ import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
 
-type EngineId = "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
 type SessionCreateMode = "quick" | "advanced";
 
 function formatSessionTime(value: string | null | undefined): string {
@@ -79,7 +77,6 @@ export default function ConversationsPage() {
   const [title, setTitle] = useState<string>(DEFAULT_CHAT_TITLE);
   const [message, setMessage] = useState<string>("");
   const [instructions, setInstructions] = useState<string>(DEFAULT_INSTRUCTIONS);
-  const [engineId, setEngineId] = useState<EngineId>("gateway.loop.v2");
   const [toolsetId, setToolsetId] = useState<string>("");
   const [selectorTag, setSelectorTag] = useState<string>("");
   const [system, setSystem] = useState<string>("");
@@ -126,20 +123,10 @@ export default function ConversationsPage() {
     llmInitRef.current = true;
   }, [settingsQuery.data?.settings]);
 
-  useEffect(() => {
-    if (engineId === "gateway.codex.v2") {
-      setLlm((prev) => ({ ...prev, providerId: "openai" }));
-    }
-    if (engineId === "gateway.claude.v2") {
-      setLlm((prev) => ({ ...prev, providerId: "anthropic" }));
-    }
-  }, [engineId]);
-
   function resetDraft() {
     setTitle(DEFAULT_CHAT_TITLE);
     setMessage("");
     setInstructions(DEFAULT_INSTRUCTIONS);
-    setEngineId("gateway.loop.v2");
     setToolsetId("");
     setSelectorTag("");
     setSystem("");
@@ -162,7 +149,7 @@ export default function ConversationsPage() {
     try {
       const payload = {
         ...(title.trim().length > 0 ? { title: title.trim() } : {}),
-        engineId,
+        engineId: "gateway.loop.v2",
         ...(toolsetId.trim().length > 0 ? { toolsetId: toolsetId.trim() } : {}),
         llm: {
           provider: llm.providerId,
@@ -331,19 +318,11 @@ export default function ConversationsPage() {
                 orgId={scopedOrgId}
                 mode="session"
                 value={llm}
-                allowedProviders={
-                  engineId === "gateway.codex.v2"
-                    ? (["openai", "openai-codex"] as LlmProviderId[])
-                    : engineId === "gateway.claude.v2"
-                      ? ["anthropic"]
-                      : providersForContext("session")
-                }
+                allowedProviders={providersForContext("session")}
                 onChange={setLlm}
                 disabled={!canOperate || memberReadOnlyDefaults}
               />
-              <div className="text-xs text-muted">
-                {engineId === "gateway.codex.v2" ? t("sessions.codexProviderHint") : t("sessions.modelHint")}
-              </div>
+              <div className="text-xs text-muted">{t("sessions.modelHint")}</div>
               {llmSecretMissing ? <div className="text-xs text-warn">This provider requires a connected OAuth account.</div> : null}
               {memberReadOnlyDefaults ? <div className="text-xs text-muted">Members use organization default model settings.</div> : null}
             </div>
@@ -406,29 +385,6 @@ export default function ConversationsPage() {
                 <div className="grid gap-2">
                   <Label htmlFor="session-title">{t("sessions.fields.title")}</Label>
                   <Input id="session-title" value={title} onChange={(e) => setTitle(e.target.value)} disabled={!canOperate} />
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="session-engine">{t("sessions.fields.engine")}</Label>
-                  <Select
-                    value={engineId}
-                    onValueChange={(next) => {
-                      const normalized =
-                        next === "gateway.codex.v2" || next === "gateway.claude.v2" ? next : "gateway.loop.v2";
-                      setEngineId(normalized);
-                    }}
-                    disabled={!canOperate}
-                  >
-                    <SelectTrigger id="session-engine">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="gateway.loop.v2">{t("sessions.engineOptions.loop")}</SelectItem>
-                      <SelectItem value="gateway.codex.v2">{t("sessions.engineOptions.codex")}</SelectItem>
-                      <SelectItem value="gateway.claude.v2">{t("sessions.engineOptions.claude")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <div className="text-xs text-muted">{t("sessions.engineHint")}</div>
                 </div>
               </div>
 

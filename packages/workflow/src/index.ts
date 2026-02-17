@@ -115,7 +115,7 @@ const agentRunNodeSchema = z.object({
       .default({ mode: "gateway" }),
     engine: z
       .object({
-        id: z.enum(["gateway.loop.v2", "gateway.claude.v2", "gateway.codex.v2"]).default("gateway.loop.v2"),
+        id: z.enum(["gateway.loop.v2"]).default("gateway.loop.v2"),
       })
       .optional(),
     prompt: z.object({
@@ -215,14 +215,6 @@ const agentRunNodeSchema = z.object({
       .optional(),
     })
     .superRefine((value, ctx) => {
-      const engineId = value.engine?.id ?? "gateway.loop.v2";
-      if (engineId !== "gateway.loop.v2" && value.execution.mode !== "gateway") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "agent.run engine requires execution.mode=gateway",
-          path: ["execution", "mode"],
-        });
-      }
       if (!providerSupportsContext(value.llm.provider, "workflowAgentRun")) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
