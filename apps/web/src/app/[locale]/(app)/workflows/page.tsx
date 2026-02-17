@@ -805,7 +805,6 @@ export default function WorkflowsPage() {
           actions={<div className="text-xs text-muted">{t("workflows.nodesConfigured", { count: agentNodes.length })}</div>}
           contentClassName="gap-3"
         >
-            <div className="text-xs font-medium text-muted">{t("workflows.createWillOpenEditor")}</div>
             <div className="grid gap-1.5">
               <Label htmlFor="workflow-name">{t("workflows.fields.workflowName")}</Label>
               <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
@@ -827,7 +826,6 @@ export default function WorkflowsPage() {
                 value={primaryNode?.instructions ?? ""}
                 onChange={(e) => setPrimaryNodeInstructions(e.target.value)}
               />
-              <div className="text-xs text-muted">{t("workflows.quickInstructionsHint")}</div>
             </div>
 
             <div className="flex flex-wrap gap-2">

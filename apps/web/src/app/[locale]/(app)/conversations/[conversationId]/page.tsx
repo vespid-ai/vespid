@@ -649,8 +649,7 @@ export default function ConversationDetailPage() {
                 }
               }}
             />
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-muted">{t("sessions.chat.sendHint")}</div>
+            <div className="flex items-center justify-end gap-3">
               <Button variant="accent" disabled={!canConnect || !connected || message.trim().length === 0} onClick={send}>
                 {t("sessions.chat.send")}
               </Button>

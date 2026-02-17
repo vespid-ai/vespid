@@ -64,6 +64,7 @@ type NavItem = {
 };
 
 const SIDEBAR_COLLAPSED_KEY = "vespid.ui.sidebarCollapsed";
+const ONBOARDING_COLLAPSED_KEY = "vespid.ui.onboarding-collapsed";
 
 function shortId(value: string): string {
   return value.length > 10 ? `${value.slice(0, 8)}…` : value;
@@ -93,6 +94,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [hasStarterResource, setHasStarterResource] = useState(false);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [onboardingCollapsed, setOnboardingCollapsed] = useState(true);
 
   useEffect(() => {
     const current = getActiveOrgId();
@@ -102,6 +104,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
     const rawCollapsed = window.localStorage?.getItem(SIDEBAR_COLLAPSED_KEY);
     setSidebarCollapsed(rawCollapsed === "1");
+    const rawOnboardingCollapsed = window.localStorage?.getItem(ONBOARDING_COLLAPSED_KEY);
+    setOnboardingCollapsed(rawOnboardingCollapsed !== "0");
 
     return subscribeActiveOrg((next) => {
       setActiveOrgIdState(next ?? "");
@@ -221,6 +225,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     setSidebarCollapsed((prev) => {
       const next = !prev;
       window.localStorage?.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+      return next;
+    });
+  }
+
+  function toggleOnboarding() {
+    setOnboardingCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage?.setItem(ONBOARDING_COLLAPSED_KEY, next ? "1" : "0");
       return next;
     });
   }
@@ -648,36 +660,54 @@ export function AppShell({ children }: { children: ReactNode }) {
               ) : null}
 
               {onboardingVisible ? (
-                <div className="border-t border-borderSubtle bg-panel/40 px-3 md:px-4 py-3">
-                  <div className="grid gap-2">
-                    <div className="text-sm font-medium text-text">{t("onboarding.title")}</div>
-                    <div className="text-xs text-muted">{t("onboarding.subtitle")}</div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <Badge variant="ok">{t("onboarding.stepLogin")}</Badge>
-                      <Badge variant={activeOrgId ? "ok" : "warn"}>{t("onboarding.stepOrg")}</Badge>
-                      <Badge variant={hasStarterResource ? "ok" : "warn"}>{t("onboarding.stepFirstResource")}</Badge>
+                <div className="border-t border-borderSubtle bg-panel/40 px-3 py-2 md:px-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="text-sm font-medium text-text">{t("onboarding.title")}</div>
+                      <div className="hidden flex-wrap items-center gap-1 text-xs sm:flex">
+                        <Badge variant="ok">{t("onboarding.stepLogin")}</Badge>
+                        <Badge variant={activeOrgId ? "ok" : "warn"}>{t("onboarding.stepOrg")}</Badge>
+                        <Badge variant={hasStarterResource ? "ok" : "warn"}>{t("onboarding.stepFirstResource")}</Badge>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {!activeOrgId ? (
-                        <Button size="sm" variant="accent" asChild>
-                          <Link href={`/${locale}/org`}>{t("onboarding.goOrg")}</Link>
-                        </Button>
-                      ) : null}
-                      {activeOrgId && !hasStarterResource ? (
-                        <>
-                          <Button size="sm" variant="accent" asChild>
-                            <Link href={`/${locale}/conversations`}>{t("onboarding.goSession")}</Link>
-                          </Button>
-                          <Button size="sm" variant="outline" asChild>
-                            <Link href={`/${locale}/workflows`}>{t("onboarding.goWorkflow")}</Link>
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={toggleOnboarding}
+                      aria-expanded={!onboardingCollapsed}
+                    >
+                      {onboardingCollapsed ? t("common.show") : t("common.hide")}
+                    </Button>
                   </div>
                 </div>
               ) : null}
             </header>
+
+            {onboardingVisible && !onboardingCollapsed ? (
+              <div className="mb-3 rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/55 px-3 py-3 shadow-elev1 md:mb-4 md:px-4">
+                <div className="grid gap-2">
+                  <div className="text-xs text-muted">{t("onboarding.subtitle")}</div>
+                  <div className="flex flex-wrap gap-2">
+                    {!activeOrgId ? (
+                      <Button size="sm" variant="accent" asChild>
+                        <Link href={`/${locale}/org`}>{t("onboarding.goOrg")}</Link>
+                      </Button>
+                    ) : null}
+                    {activeOrgId && !hasStarterResource ? (
+                      <>
+                        <Button size="sm" variant="accent" asChild>
+                          <Link href={`/${locale}/conversations`}>{t("onboarding.goSession")}</Link>
+                        </Button>
+                        <Button size="sm" variant="outline" asChild>
+                          <Link href={`/${locale}/workflows`}>{t("onboarding.goWorkflow")}</Link>
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <main className="min-w-0">
               <div className="animate-fade-in">{children}</div>

@@ -75,7 +75,10 @@ export async function proxyControlPlaneRequest(request: Request, pathParts: stri
       cache: "no-store",
     };
     if (request.method !== "GET" && request.method !== "HEAD") {
-      init.body = await request.text();
+      const body = await request.text();
+      if (body.length > 0) {
+        init.body = body;
+      }
     }
     upstream = await fetch(upstreamUrl, init);
   } catch (err) {
@@ -113,4 +116,3 @@ export async function proxyControlPlaneRequest(request: Request, pathParts: stri
 
   return response;
 }
-

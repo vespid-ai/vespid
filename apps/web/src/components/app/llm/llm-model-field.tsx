@@ -97,7 +97,7 @@ export function LlmModelField(props: {
   }, [allowed, connectedConnectors]);
 
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-2 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)_auto] md:items-center">
       <ProviderPicker
         value={props.value.providerId}
         items={providerItems}
@@ -116,18 +116,22 @@ export function LlmModelField(props: {
         }}
       />
 
-      <div className="flex items-center gap-2">
-        <Input
-          value={props.value.modelId}
-          onChange={(e) => setModelId(e.target.value)}
-          placeholder={t("providerPicker.modelPlaceholder")}
-          disabled={props.disabled}
-        />
-        <Button type="button" variant="outline" onClick={() => setPickerOpen(true)} className="shrink-0" disabled={props.disabled}>
-          <Search className="mr-2 h-4 w-4" />
-          {t("providerPicker.searchModel")}
-        </Button>
-      </div>
+      <Input
+        value={props.value.modelId}
+        onChange={(e) => setModelId(e.target.value)}
+        placeholder={t("providerPicker.modelPlaceholder")}
+        disabled={props.disabled}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => setPickerOpen(true)}
+        className="w-full shrink-0 md:w-auto"
+        disabled={props.disabled}
+      >
+        <Search className="mr-2 h-4 w-4" />
+        {t("providerPicker.searchModel")}
+      </Button>
 
       <ModelPickerDialog
         open={pickerOpen}

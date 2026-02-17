@@ -14,6 +14,7 @@ import {
 } from "@vespid/shared/llm/provider-registry";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { ProviderPicker } from "../../../../components/app/llm/provider-picker";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
 import { EmptyState } from "../../../../components/ui/empty-state";
@@ -84,6 +85,12 @@ export default function ModelConnectionsPage() {
       return provider.id === "openai" || provider.id === "anthropic" || provider.id === "google";
     });
   }, [allProviderMeta]);
+  const apiKeyConnectionProviderMeta = useMemo(() => {
+    return connectionProviderMeta.filter((provider) => provider.authMode !== "oauth");
+  }, [connectionProviderMeta]);
+  const oauthConnectionProviderMeta = useMemo(() => {
+    return connectionProviderMeta.filter((provider) => provider.authMode === "oauth");
+  }, [connectionProviderMeta]);
 
   const providerMetaById = useMemo(() => {
     return Object.fromEntries(allProviderMeta.map((provider) => [provider.id, provider])) as Record<LlmProviderId, (typeof allProviderMeta)[number]>;
@@ -103,6 +110,19 @@ export default function ModelConnectionsPage() {
     }
     return map;
   }, [secretsQuery.data?.secrets]);
+  const overrideProviderItems = useMemo(() => {
+    return allProviderMeta.map((provider) => {
+      const connectorId = connectorIdForProvider(provider.id);
+      const connected = (secretsByConnector.get(connectorId) ?? []).length > 0;
+      return {
+        id: provider.id,
+        label: provider.displayName,
+        recommended: provider.tags.includes("recommended") || provider.tags.includes("popular"),
+        connected,
+        oauth: provider.authMode === "oauth",
+      };
+    });
+  }, [allProviderMeta, secretsByConnector]);
 
   const unauthorized =
     (settingsQuery.isError && isUnauthorizedError(settingsQuery.error)) ||
@@ -195,6 +215,274 @@ export default function ModelConnectionsPage() {
     );
   }
 
+  const renderConnectionProviderCard = (provider: (typeof allProviderMeta)[number]) => {
+    const connectorId = connectorIdForProvider(provider.id);
+    const connectedSecret = (secretsByConnector.get(connectorId) ?? []).find((secret) => secret.name === "default")
+      ?? (secretsByConnector.get(connectorId) ?? [])[0]
+      ?? null;
+    const keyDraft = apiKeyDrafts[provider.id] ?? "";
+    const flow = deviceFlows[provider.id] ?? null;
+
+    if (provider.authMode === "oauth") {
+      return (
+        <div key={provider.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/40 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-medium text-text">{provider.displayName}</div>
+            <div className="text-xs text-muted">
+              {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
+            </div>
+          </div>
+
+          {provider.id === "google-vertex" ? (
+            <div className="grid gap-2">
+              <div className="grid gap-1.5">
+                <Label>{t("models.connections.vertexProjectId")}</Label>
+                <Input value={vertexProjectId} onChange={(e) => setVertexProjectId(e.target.value)} placeholder="my-gcp-project" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>{t("models.connections.vertexLocation")}</Label>
+                <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="us-central1" />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="accent"
+                  disabled={vertexProjectId.trim().length === 0 || vertexLocation.trim().length === 0}
+                  onClick={async () => {
+                    try {
+                      const result = await apiFetchJson<{ authorizationUrl: string }>(
+                        `/v1/orgs/${orgId}/llm/oauth/google-vertex/start`,
+                        {
+                          method: "POST",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({
+                            projectId: vertexProjectId.trim(),
+                            location: vertexLocation.trim(),
+                            mode: "json",
+                          }),
+                        },
+                        { orgScoped: true }
+                      );
+                      if (typeof result.authorizationUrl === "string" && result.authorizationUrl.length > 0) {
+                        window.location.assign(result.authorizationUrl);
+                      }
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                    }
+                  }}
+                >
+                  {t("models.connections.connect")}
+                </Button>
+                {connectedSecret ? (
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/google-vertex/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
+                        await secretsQuery.refetch();
+                        toast.success(t("common.deleted"));
+                      } catch (error) {
+                        toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                      }
+                    }}
+                  >
+                    {t("models.connections.disconnect")}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              {!flow ? (
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      const started = await apiFetchJson<{
+                        deviceCode: string;
+                        userCode: string;
+                        verificationUri: string;
+                      }>(
+                        `/v1/orgs/${orgId}/llm/oauth/${provider.id}/device/start`,
+                        {
+                          method: "POST",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({ name: "default" }),
+                        },
+                        { orgScoped: true }
+                      );
+                      setDeviceFlows((prev) => ({
+                        ...prev,
+                        [provider.id]: {
+                          deviceCode: started.deviceCode,
+                          userCode: started.userCode,
+                          verificationUri: started.verificationUri,
+                          token: "",
+                        },
+                      }));
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                    }
+                  }}
+                >
+                  {t("models.connections.startDeviceFlow")}
+                </Button>
+              ) : (
+                <div className="grid gap-2">
+                  <div className="text-xs text-muted">{t("models.connections.userCode", { code: flow.userCode })}</div>
+                  <a href={flow.verificationUri} target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2">
+                    {flow.verificationUri}
+                  </a>
+                  <Input
+                    type="password"
+                    value={flow.token}
+                    onChange={(e) =>
+                      setDeviceFlows((prev) => ({
+                        ...prev,
+                        [provider.id]: { ...flow, token: e.target.value },
+                      }))
+                    }
+                    placeholder={t("models.connections.oauthTokenPlaceholder")}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="accent"
+                      disabled={flow.token.trim().length === 0}
+                      onClick={async () => {
+                        try {
+                          const result = await apiFetchJson<{ status: "pending" | "connected" }>(
+                            `/v1/orgs/${orgId}/llm/oauth/${provider.id}/device/poll`,
+                            {
+                              method: "POST",
+                              headers: { "content-type": "application/json" },
+                              body: JSON.stringify({
+                                deviceCode: flow.deviceCode,
+                                token: flow.token.trim(),
+                                name: "default",
+                              }),
+                            },
+                            { orgScoped: true }
+                          );
+                          if (result.status === "connected") {
+                            await secretsQuery.refetch();
+                            setDeviceFlows((prev) => {
+                              const next = { ...prev };
+                              delete next[provider.id];
+                              return next;
+                            });
+                            toast.success(t("common.saved"));
+                          } else {
+                            toast.message(t("models.connections.pending"));
+                          }
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                        }
+                      }}
+                    >
+                      {t("models.connections.completeConnection")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setDeviceFlows((prev) => {
+                          const next = { ...prev };
+                          delete next[provider.id];
+                          return next;
+                        });
+                      }}
+                    >
+                      {t("common.cancel")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {connectedSecret ? (
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/${provider.id}/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
+                      await secretsQuery.refetch();
+                      toast.success(t("common.deleted"));
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                    }
+                  }}
+                >
+                  {t("models.connections.disconnect")}
+                </Button>
+              ) : null}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div key={provider.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/40 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-medium text-text">{provider.displayName}</div>
+          <div className="text-xs text-muted">
+            {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
+          </div>
+        </div>
+        <Input
+          type="password"
+          value={keyDraft}
+          onChange={(e) =>
+            setApiKeyDrafts((prev) => ({
+              ...prev,
+              [provider.id]: e.target.value,
+            }))
+          }
+          placeholder={t("models.connections.apiKeyPlaceholder")}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="accent"
+            disabled={keyDraft.trim().length === 0}
+            onClick={async () => {
+              try {
+                const value = keyDraft.trim();
+                if (!connectedSecret) {
+                  await createSecret.mutateAsync({
+                    connectorId,
+                    name: "default",
+                    value,
+                  });
+                } else {
+                  await rotateSecret.mutateAsync({ secretId: connectedSecret.id, value });
+                }
+                setApiKeyDrafts((prev) => ({ ...prev, [provider.id]: "" }));
+                await secretsQuery.refetch();
+                toast.success(t("common.saved"));
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+              }
+            }}
+          >
+            {connectedSecret ? t("common.rotate") : t("models.connections.connect")}
+          </Button>
+          {connectedSecret ? (
+            <Button
+              variant="outline"
+              onClick={async () => {
+                try {
+                  await deleteSecret.mutateAsync(connectedSecret.id);
+                  await secretsQuery.refetch();
+                  toast.success(t("common.deleted"));
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                }
+              }}
+            >
+              {t("models.connections.disconnect")}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="grid gap-4">
       <div>
@@ -246,270 +534,17 @@ export default function ModelConnectionsPage() {
           <CardTitle>{t("models.connections.providersTitle")}</CardTitle>
           <CardDescription>{t("models.connections.providersSubtitle")}</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2">
-          {connectionProviderMeta.map((provider) => {
-            const connectorId = connectorIdForProvider(provider.id);
-            const connectedSecret = (secretsByConnector.get(connectorId) ?? []).find((secret) => secret.name === "default")
-              ?? (secretsByConnector.get(connectorId) ?? [])[0]
-              ?? null;
-            const keyDraft = apiKeyDrafts[provider.id] ?? "";
-            const flow = deviceFlows[provider.id] ?? null;
-
-            if (provider.authMode === "oauth") {
-              return (
-                <div key={provider.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/40 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-medium text-text">{provider.displayName}</div>
-                    <div className="text-xs text-muted">
-                      {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
-                    </div>
-                  </div>
-
-                  {provider.id === "google-vertex" ? (
-                    <div className="grid gap-2">
-                      <div className="grid gap-1.5">
-                        <Label>{t("models.connections.vertexProjectId")}</Label>
-                        <Input value={vertexProjectId} onChange={(e) => setVertexProjectId(e.target.value)} placeholder="my-gcp-project" />
-                      </div>
-                      <div className="grid gap-1.5">
-                        <Label>{t("models.connections.vertexLocation")}</Label>
-                        <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="us-central1" />
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="accent"
-                          disabled={vertexProjectId.trim().length === 0 || vertexLocation.trim().length === 0}
-                          onClick={async () => {
-                            try {
-                              const result = await apiFetchJson<{ authorizationUrl: string }>(
-                                `/v1/orgs/${orgId}/llm/oauth/google-vertex/start`,
-                                {
-                                  method: "POST",
-                                  headers: { "content-type": "application/json" },
-                                  body: JSON.stringify({
-                                    projectId: vertexProjectId.trim(),
-                                    location: vertexLocation.trim(),
-                                    mode: "json",
-                                  }),
-                                },
-                                { orgScoped: true }
-                              );
-                              if (typeof result.authorizationUrl === "string" && result.authorizationUrl.length > 0) {
-                                window.location.assign(result.authorizationUrl);
-                              }
-                            } catch (error) {
-                              toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                            }
-                          }}
-                        >
-                          {t("models.connections.connect")}
-                        </Button>
-                        {connectedSecret ? (
-                          <Button
-                            variant="outline"
-                            onClick={async () => {
-                              try {
-                                await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/google-vertex/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
-                                await secretsQuery.refetch();
-                                toast.success(t("common.deleted"));
-                              } catch (error) {
-                                toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                              }
-                            }}
-                          >
-                            {t("models.connections.disconnect")}
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid gap-2">
-                      {!flow ? (
-                        <Button
-                          variant="outline"
-                          onClick={async () => {
-                            try {
-                              const started = await apiFetchJson<{
-                                deviceCode: string;
-                                userCode: string;
-                                verificationUri: string;
-                              }>(
-                                `/v1/orgs/${orgId}/llm/oauth/${provider.id}/device/start`,
-                                { method: "POST" },
-                                { orgScoped: true }
-                              );
-                              setDeviceFlows((prev) => ({
-                                ...prev,
-                                [provider.id]: {
-                                  deviceCode: started.deviceCode,
-                                  userCode: started.userCode,
-                                  verificationUri: started.verificationUri,
-                                  token: "",
-                                },
-                              }));
-                            } catch (error) {
-                              toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                            }
-                          }}
-                        >
-                          {t("models.connections.startDeviceFlow")}
-                        </Button>
-                      ) : (
-                        <div className="grid gap-2">
-                          <div className="text-xs text-muted">{t("models.connections.userCode", { code: flow.userCode })}</div>
-                          <a href={flow.verificationUri} target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2">
-                            {flow.verificationUri}
-                          </a>
-                          <Input
-                            type="password"
-                            value={flow.token}
-                            onChange={(e) =>
-                              setDeviceFlows((prev) => ({
-                                ...prev,
-                                [provider.id]: { ...flow, token: e.target.value },
-                              }))
-                            }
-                            placeholder={t("models.connections.oauthTokenPlaceholder")}
-                          />
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              variant="accent"
-                              disabled={flow.token.trim().length === 0}
-                              onClick={async () => {
-                                try {
-                                  const result = await apiFetchJson<{ status: "pending" | "connected" }>(
-                                    `/v1/orgs/${orgId}/llm/oauth/${provider.id}/device/poll`,
-                                    {
-                                      method: "POST",
-                                      headers: { "content-type": "application/json" },
-                                      body: JSON.stringify({
-                                        deviceCode: flow.deviceCode,
-                                        token: flow.token.trim(),
-                                        name: "default",
-                                      }),
-                                    },
-                                    { orgScoped: true }
-                                  );
-                                  if (result.status === "connected") {
-                                    await secretsQuery.refetch();
-                                    setDeviceFlows((prev) => {
-                                      const next = { ...prev };
-                                      delete next[provider.id];
-                                      return next;
-                                    });
-                                    toast.success(t("common.saved"));
-                                  } else {
-                                    toast.message(t("models.connections.pending"));
-                                  }
-                                } catch (error) {
-                                  toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                                }
-                              }}
-                            >
-                              {t("models.connections.completeConnection")}
-                            </Button>
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setDeviceFlows((prev) => {
-                                  const next = { ...prev };
-                                  delete next[provider.id];
-                                  return next;
-                                });
-                              }}
-                            >
-                              {t("common.cancel")}
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                      {connectedSecret ? (
-                        <Button
-                          variant="outline"
-                          onClick={async () => {
-                            try {
-                              await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/${provider.id}/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
-                              await secretsQuery.refetch();
-                              toast.success(t("common.deleted"));
-                            } catch (error) {
-                              toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                            }
-                          }}
-                        >
-                          {t("models.connections.disconnect")}
-                        </Button>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            return (
-              <div key={provider.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/40 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="font-medium text-text">{provider.displayName}</div>
-                  <div className="text-xs text-muted">
-                    {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
-                  </div>
-                </div>
-                <Input
-                  type="password"
-                  value={keyDraft}
-                  onChange={(e) =>
-                    setApiKeyDrafts((prev) => ({
-                      ...prev,
-                      [provider.id]: e.target.value,
-                    }))
-                  }
-                  placeholder={t("models.connections.apiKeyPlaceholder")}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="accent"
-                    disabled={keyDraft.trim().length === 0}
-                    onClick={async () => {
-                      try {
-                        const value = keyDraft.trim();
-                        if (!connectedSecret) {
-                          await createSecret.mutateAsync({
-                            connectorId,
-                            name: "default",
-                            value,
-                          });
-                        } else {
-                          await rotateSecret.mutateAsync({ secretId: connectedSecret.id, value });
-                        }
-                        setApiKeyDrafts((prev) => ({ ...prev, [provider.id]: "" }));
-                        await secretsQuery.refetch();
-                        toast.success(t("common.saved"));
-                      } catch (error) {
-                        toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                      }
-                    }}
-                  >
-                    {connectedSecret ? t("common.rotate") : t("models.connections.connect")}
-                  </Button>
-                  {connectedSecret ? (
-                    <Button
-                      variant="outline"
-                      onClick={async () => {
-                        try {
-                          await deleteSecret.mutateAsync(connectedSecret.id);
-                          await secretsQuery.refetch();
-                          toast.success(t("common.deleted"));
-                        } catch (error) {
-                          toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                        }
-                      }}
-                    >
-                      {t("models.connections.disconnect")}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
+        <CardContent className="grid gap-4">
+          <div className="grid gap-2">
+            <div className="text-sm font-medium text-text">{t("models.connections.apiKeyGroupTitle")}</div>
+            <div className="text-xs text-muted">{t("models.connections.apiKeyGroupDescription")}</div>
+            <div className="grid gap-3 md:grid-cols-2">{apiKeyConnectionProviderMeta.map((provider) => renderConnectionProviderCard(provider))}</div>
+          </div>
+          <div className="grid gap-2">
+            <div className="text-sm font-medium text-text">{t("models.connections.oauthGroupTitle")}</div>
+            <div className="text-xs text-muted">{t("models.connections.oauthGroupDescription")}</div>
+            <div className="grid gap-3 md:grid-cols-2">{oauthConnectionProviderMeta.map((provider) => renderConnectionProviderCard(provider))}</div>
+          </div>
         </CardContent>
       </Card>
 
@@ -522,18 +557,22 @@ export default function ModelConnectionsPage() {
           <div className="grid gap-3 md:grid-cols-3">
             <div className="grid gap-1.5">
               <Label>{t("models.connections.provider")}</Label>
-              <Select value={overrideProviderId} onValueChange={(next) => setOverrideProviderId(next as LlmProviderId)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {allProviderMeta.map((provider) => (
-                    <SelectItem key={provider.id} value={provider.id}>
-                      {provider.displayName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ProviderPicker
+                value={overrideProviderId}
+                items={overrideProviderItems}
+                onChange={setOverrideProviderId}
+                labels={{
+                  title: t("providerPicker.title"),
+                  connected: t("providerPicker.filterConnected"),
+                  recommended: t("providerPicker.filterRecommended"),
+                  all: t("providerPicker.filterAll"),
+                  searchPlaceholder: t("providerPicker.searchProvider"),
+                  noResults: t("providerPicker.noResults"),
+                  badgeConnected: t("providerPicker.badgeConnected"),
+                  badgeRecommended: t("providerPicker.badgeRecommended"),
+                  badgeOauth: t("providerPicker.badgeOauth"),
+                }}
+              />
             </div>
             <div className="grid gap-1.5">
               <Label>{t("models.connections.baseUrl")}</Label>

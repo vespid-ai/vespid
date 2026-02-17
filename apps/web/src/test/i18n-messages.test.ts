@@ -39,6 +39,9 @@ describe("i18n message coverage", () => {
       "org.createTitle",
       "advanced.title",
       "providerPicker.title",
+      "models.connections.apiKeyPlaceholder",
+      "models.connections.apiKeyGroupTitle",
+      "models.connections.oauthGroupTitle",
       "onboarding.title",
       "billing.setupGuide",
     ];

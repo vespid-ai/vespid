@@ -29,8 +29,6 @@ import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
 
-type SessionCreateMode = "quick" | "advanced";
-
 function formatSessionTime(value: string | null | undefined): string {
   if (!value) {
     return "";
@@ -83,7 +81,6 @@ export default function ConversationsPage() {
   const [allowShellRun, setAllowShellRun] = useState(false);
   const [allowConnectorAction, setAllowConnectorAction] = useState(true);
   const [extraToolsRaw, setExtraToolsRaw] = useState<string>("");
-  const [createMode, setCreateMode] = useState<SessionCreateMode>("quick");
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5.3-codex", secretId: null });
@@ -133,7 +130,6 @@ export default function ConversationsPage() {
     setAllowShellRun(false);
     setAllowConnectorAction(true);
     setExtraToolsRaw("");
-    setCreateMode("quick");
     setAdvancedOpen(false);
   }
 
@@ -192,7 +188,6 @@ export default function ConversationsPage() {
   }
 
   function openAdvancedSettings() {
-    setCreateMode("advanced");
     setAdvancedOpen(true);
   }
 
@@ -310,7 +305,6 @@ export default function ConversationsPage() {
             title={t("sessions.create.title")}
             description={t("sessions.create.quickHint")}
             icon={<Sparkles className="h-4 w-4 text-accent" />}
-            actions={<div className="text-xs text-muted">{createMode === "quick" ? t("sessions.create.quickMode") : t("sessions.create.advancedMode")}</div>}
           >
             <div className="grid gap-2">
               <Label>{t("sessions.fields.model")}</Label>
@@ -322,7 +316,6 @@ export default function ConversationsPage() {
                 onChange={setLlm}
                 disabled={!canOperate || memberReadOnlyDefaults}
               />
-              <div className="text-xs text-muted">{t("sessions.modelHint")}</div>
               {llmSecretMissing ? <div className="text-xs text-warn">This provider requires a connected OAuth account.</div> : null}
               {memberReadOnlyDefaults ? <div className="text-xs text-muted">Members use organization default model settings.</div> : null}
             </div>
@@ -356,11 +349,7 @@ export default function ConversationsPage() {
                   <SlidersHorizontal className="h-4 w-4" />
                   {t("sessions.create.configureAdvanced")}
                 </Button>
-                <Button variant="ghost" onClick={resetDraft} disabled={createSession.isPending}>
-                  {t("sessions.create.title")}
-                </Button>
               </div>
-              <div className="text-xs text-muted">{t("sessions.chat.sendHint")}</div>
             </div>
           </QuickCreatePanel>
 
@@ -368,7 +357,6 @@ export default function ConversationsPage() {
             open={advancedOpen}
             onOpenChange={(next) => {
               setAdvancedOpen(next);
-              setCreateMode(next ? "advanced" : "quick");
             }}
             title={t("sessions.create.advancedTitle")}
             description={t("sessions.create.advancedDescription")}
