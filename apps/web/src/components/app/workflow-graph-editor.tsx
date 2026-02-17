@@ -182,7 +182,7 @@ function asNumber(value: unknown, fallback: number): number {
 }
 
 function readOrgDefaultAgentLlm(settings: any): LlmConfigValue {
-  const d = settings?.llm?.defaults?.workflowAgentRun;
+  const d = settings?.llm?.defaults?.primary;
   const providerId = typeof d?.provider === "string" ? d.provider : "openai";
   const modelId = typeof d?.model === "string" ? d.model : "gpt-5.3-codex";
   const secretId = typeof d?.secretId === "string" ? d.secretId : null;
@@ -840,7 +840,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
             }}
           />
           {isOAuthRequiredProvider(llmValue.providerId) && !llmValue.secretId ? (
-            <div className="text-xs text-warn">Selected provider requires secretId.</div>
+            <div className="text-xs text-warn">Selected provider requires a connected account.</div>
           ) : null}
         </div>
 

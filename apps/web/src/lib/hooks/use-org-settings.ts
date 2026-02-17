@@ -9,13 +9,7 @@ export type OrgSettings = {
   toolsets: { defaultToolsetId: string | null };
   llm?: {
     defaults?: {
-      session?: { provider?: LlmProviderId | null; model?: string | null; secretId?: string | null };
-      workflowAgentRun?: {
-        provider?: LlmProviderId | null;
-        model?: string | null;
-        secretId?: string | null;
-      };
-      toolsetBuilder?: {
+      primary?: {
         provider?: LlmProviderId | null;
         model?: string | null;
         secretId?: string | null;

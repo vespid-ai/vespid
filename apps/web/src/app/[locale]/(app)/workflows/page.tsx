@@ -27,6 +27,7 @@ import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { QuickCreatePanel } from "../../../../components/app/quick-create-panel";
 import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-sheet";
+import { SecretSelectField } from "../../../../components/app/secrets/secret-select-field";
 import {
   type WorkflowAdvancedAction,
   type WorkflowCreateSource,
@@ -447,7 +448,7 @@ export default function WorkflowsPage() {
   const defaultLlmInitRef = useRef(false);
   useEffect(() => {
     if (defaultLlmInitRef.current) return;
-    const defaults = (settingsQuery.data?.settings?.llm?.defaults?.workflowAgentRun as any) ?? null;
+    const defaults = (settingsQuery.data?.settings?.llm?.defaults?.primary as any) ?? null;
     if (!defaults || typeof defaults !== "object") return;
     setDefaultAgentLlm((prev) => ({
       ...prev,
@@ -812,9 +813,9 @@ export default function WorkflowsPage() {
 
             <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
               <div className="text-sm font-medium text-text">{t("workflows.defaultAgentModel")}</div>
-              <LlmConfigField orgId={scopedOrgId} mode="workflowAgentRun" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
+              <LlmConfigField orgId={scopedOrgId} mode="primary" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
               {isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId ? (
-                <div className="text-xs text-warn">Selected provider requires secretId.</div>
+                <div className="text-xs text-warn">Selected provider requires a connected account.</div>
               ) : null}
             </div>
 
@@ -966,7 +967,7 @@ export default function WorkflowsPage() {
                           />
                         )}
                         {!node.llmUseDefault && isOAuthRequiredProvider(node.llmOverride.providerId) && !node.llmOverride.secretId ? (
-                          <div className="text-xs text-warn">Selected provider requires secretId.</div>
+                          <div className="text-xs text-warn">Selected provider requires a connected account.</div>
                         ) : null}
                       </div>
 
@@ -1024,16 +1025,17 @@ export default function WorkflowsPage() {
                           <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
                             <div className="text-sm font-medium text-text">{t("workflows.githubDefaults")}</div>
                             <div className="grid gap-1.5">
-                              <Label htmlFor={`github-secret-id-${node.id}`}>{t("workflows.githubSecretId")}</Label>
-                              <Input
-                                id={`github-secret-id-${node.id}`}
-                                value={node.githubSecretId}
-                                onChange={(e) =>
+                              <Label>{t("workflows.githubSecretId")}</Label>
+                              <SecretSelectField
+                                orgId={scopedOrgId}
+                                connectorId="github"
+                                value={node.githubSecretId || null}
+                                onChange={(next) =>
                                   setAgentNodes((prev) =>
-                                    prev.map((n) => (n.id === node.id ? { ...n, githubSecretId: e.target.value } : n))
+                                    prev.map((n) => (n.id === node.id ? { ...n, githubSecretId: next ?? "" } : n))
                                   )
                                 }
-                                placeholder={t("workflows.fields.githubSecretPlaceholder")}
+                                required
                               />
                             </div>
                             <div className="grid gap-1.5">

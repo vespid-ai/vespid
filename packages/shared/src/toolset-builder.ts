@@ -34,5 +34,5 @@ export type ToolsetBuilderSessionStatus = "ACTIVE" | "FINALIZED" | "ARCHIVED";
 export type ToolsetBuilderLlmConfig = {
   provider: LlmProviderId;
   model: string;
-  auth: { secretId: string };
+  auth?: { secretId?: string };
 };

@@ -113,7 +113,7 @@ export default function ConversationsPage() {
 
   useEffect(() => {
     if (llmInitRef.current) return;
-    const sessionDefaults = settingsQuery.data?.settings?.llm?.defaults?.session as any;
+    const sessionDefaults = settingsQuery.data?.settings?.llm?.defaults?.primary as any;
     const provider = sessionDefaults && typeof sessionDefaults.provider === "string" ? sessionDefaults.provider : null;
     const model = sessionDefaults && typeof sessionDefaults.model === "string" ? sessionDefaults.model : null;
     if (provider || model) {
@@ -344,7 +344,7 @@ export default function ConversationsPage() {
               <div className="text-xs text-muted">
                 {engineId === "gateway.codex.v2" ? t("sessions.codexProviderHint") : t("sessions.modelHint")}
               </div>
-              {llmSecretMissing ? <div className="text-xs text-warn">This provider requires a connected OAuth secret.</div> : null}
+              {llmSecretMissing ? <div className="text-xs text-warn">This provider requires a connected OAuth account.</div> : null}
               {memberReadOnlyDefaults ? <div className="text-xs text-muted">Members use organization default model settings.</div> : null}
             </div>
 
@@ -516,7 +516,7 @@ export default function ConversationsPage() {
                     onClick={async () => {
                       if (!scopedOrgId) return;
                       await updateSettings.mutateAsync({
-                        llm: { defaults: { session: { provider: llm.providerId, model: llm.modelId.trim(), secretId: llm.secretId ?? null } } },
+                        llm: { defaults: { primary: { provider: llm.providerId, model: llm.modelId.trim(), secretId: llm.secretId ?? null } } },
                       });
                       toast.success(t("common.saved"));
                     }}

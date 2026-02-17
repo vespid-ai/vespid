@@ -5,7 +5,7 @@ import { LlmSecretField } from "./llm-secret-field";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { providersForContext, type LlmProviderId } from "./model-catalog";
 
-export type LlmConfigMode = "session" | "workflowAgentRun" | "toolsetBuilder";
+export type LlmConfigMode = "session" | "workflowAgentRun" | "toolsetBuilder" | "primary";
 
 export type LlmConfigValue = {
   providerId: LlmProviderId;
@@ -14,6 +14,7 @@ export type LlmConfigValue = {
 };
 
 function allowedProvidersForMode(mode: LlmConfigMode): LlmProviderId[] {
+  if (mode === "primary") return providersForContext("session");
   if (mode === "session") return providersForContext("session");
   if (mode === "toolsetBuilder") return providersForContext("toolsetBuilder");
   return providersForContext("workflowAgentRun");
@@ -30,7 +31,7 @@ export function LlmConfigField(props: {
   const allowedProviders = props.allowedProviders ?? allowedProvidersForMode(props.mode);
 
   const modelValue: LlmModelValue = { providerId: props.value.providerId, modelId: props.value.modelId };
-  const secretRequired = props.mode === "toolsetBuilder" || isOAuthRequiredProvider(props.value.providerId);
+  const secretRequired = isOAuthRequiredProvider(props.value.providerId);
   const showSecret = props.mode !== "session" || isOAuthRequiredProvider(props.value.providerId);
 
   return (

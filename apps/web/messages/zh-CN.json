@@ -91,7 +91,36 @@
     "otherProviders": "其他",
     "catalogUnavailable": "模型目录暂不可用。你仍可手动输入模型 ID。",
     "poweredBy": "目录来源",
-    "fetchedAt": "更新时间: {ts}"
+    "fetchedAt": "更新时间: {ts}",
+    "connections": {
+      "title": "模型连接",
+      "subtitle": "先完成连接，再用一个统一默认模型覆盖会话、工作流和工具集生成。",
+      "primaryTitle": "组织默认模型",
+      "primarySubtitle": "该默认值会用于会话、工作流和工具集生成。",
+      "oauthRequired": "该提供方需要已连接的 OAuth 账号。",
+      "providersTitle": "提供方连接",
+      "providersSubtitle": "连接、轮换或断开提供方账号，不向用户暴露内部 secret ID。",
+      "connected": "已连接",
+      "notConnected": "未连接",
+      "connect": "连接",
+      "disconnect": "断开",
+      "vertexProjectId": "项目 ID",
+      "vertexLocation": "区域",
+      "startDeviceFlow": "开始设备授权",
+      "userCode": "用户代码：{code}",
+      "oauthTokenPlaceholder": "粘贴 OAuth Token...",
+      "completeConnection": "完成连接",
+      "pending": "授权仍在进行中。",
+      "runtimeTitle": "提供方运行时覆盖",
+      "runtimeSubtitle": "支持 OpenAI-like / 自定义端点的 base URL 与 API kind 覆盖。",
+      "provider": "提供方",
+      "baseUrl": "Base URL",
+      "apiKind": "API 类型",
+      "apiKindDefault": "提供方默认",
+      "runtimeHint": "运行时覆盖仅作用于 {provider}。",
+      "vertexConnected": "Vertex 连接已保存",
+      "vertexFailed": "Vertex 连接失败"
+    }
   },
   "settings": {
     "title": "设置",
@@ -108,7 +137,8 @@
     },
     "locale": {
       "title": "语言"
-    }
+    },
+    "modelConnections": "模型连接"
   },
   "errors": {
     "apiUnreachable": {
@@ -188,8 +218,8 @@
     "model": "模型",
     "useDefaultModel": "使用默认",
     "usingDefaultModel": "使用默认: {provider} / {model}",
-    "llmSecretId": "LLM secretId（可选）",
-    "vertexSecretRequiredHint": "Vertex 需要配置 vertex OAuth secretId。",
+    "llmSecretId": "模型连接（可选）",
+    "vertexSecretRequiredHint": "Vertex 需要已连接的 OAuth 账号。",
     "tools": "工具",
     "teamTitle": "团队",
     "teamEnable": "启用团队（主管 + 队友）",
@@ -205,7 +235,7 @@
     "shellRun": "Shell 运行（node-agent）",
     "runToolsOnNodeAgent": "在 node-agent 上运行工具（远程）",
     "githubDefaults": "GitHub issue.create 默认参数",
-    "githubSecretId": "GitHub secretId",
+    "githubSecretId": "GitHub 连接",
     "repo": "仓库（owner/repo）",
     "issueTitle": "Issue 标题",
     "issueBody": "Issue 内容",
@@ -239,8 +269,8 @@
       "workflowName": "工作流名称",
       "templates": "模板",
       "includeGithub": "包含 GitHub 创建 Issue 节点",
-      "githubSecretId": "GitHub secretId",
-      "githubSecretPlaceholder": "从 /secrets 粘贴密钥 UUID",
+      "githubSecretId": "GitHub 连接",
+      "githubSecretPlaceholder": "请在「模型连接」中选择 GitHub 连接。",
       "githubRepo": "仓库 (owner/repo)",
       "githubTitle": "Issue 标题",
       "githubBody": "Issue 内容",
@@ -277,15 +307,15 @@
     },
     "errors": {
       "orgRequired": "请先选择当前组织。",
-      "githubSecretRequired": "包含 GitHub 节点时需要提供 secretId。",
-      "vertexSecretRequired": "Vertex 需要配置 secretId（Vertex OAuth）。",
+      "githubSecretRequired": "启用 GitHub 工具前请先连接 GitHub。",
+      "vertexSecretRequired": "Vertex 需要已连接的 OAuth 账号。",
       "workflowIdRequired": "需要填写工作流 ID"
     },
     "createDisabledReasons": {
       "orgRequired": "请先选择当前组织。",
       "workflowName": "请填写工作流名称。",
-      "githubSecret": "启用 GitHub 工具时必须配置 GitHub secret。",
-      "providerSecret": "所选模型提供方需要 secretId。"
+      "githubSecret": "启用 GitHub 工具时必须配置 GitHub 连接。",
+      "providerSecret": "所选提供方需要已连接账号。"
     },
     "toast": {
       "created": "已创建工作流"
@@ -582,12 +612,12 @@
       "generate": "AI 生成",
       "title": "AI 生成工具集",
       "subtitle": "描述你的需求，生成草稿后再审核和编辑。",
-      "guardrail": "不要粘贴密钥。请使用 $'{'ENV:...'}' 占位符，并在「密钥」页面管理 key。",
+      "guardrail": "不要粘贴凭据。请使用 $'{'ENV:...'}' 占位符，并在「模型连接」中管理连接。",
       "providerLabel": "LLM 提供方",
       "modelLabel": "模型",
-      "secretLabel": "组织密钥",
-      "secretPlaceholder": "选择一个密钥...",
-      "noSecretsHint": "当前提供方没有可用的 LLM 密钥，请先在「密钥」中创建。",
+      "secretLabel": "连接",
+      "secretPlaceholder": "选择连接...",
+      "noSecretsHint": "当前提供方没有可用模型连接，请先到「模型连接」中完成连接。",
       "intentLabel": "需求描述",
       "start": "开始会话",
       "assistantLabel": "助手",
@@ -702,7 +732,11 @@
       "connected": "Vertex 连接已保存",
       "disconnected": "Vertex 连接已移除",
       "failed": "Vertex 连接失败"
-    }
+    },
+    "internalOnlyHint": "内部兼容页面，用于运维与调试。",
+    "modelConnectionsTitle": "模型连接",
+    "modelConnectionsDescription": "常规配置与授权请使用「模型连接」页面。",
+    "openModelConnections": "打开模型连接"
   },
   "billing": {
     "credits": "Credits",

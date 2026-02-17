@@ -25,7 +25,6 @@ import { LlmConfigField } from "../../../../components/app/llm/llm-config-field"
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
-import { useSecrets } from "../../../../lib/hooks/use-secrets";
 import { useChatToolsetBuilderSession, useCreateToolsetBuilderSession, useFinalizeToolsetBuilderSession } from "../../../../lib/hooks/use-toolset-builder";
 import {
   type AgentSkillBundle,
@@ -758,7 +757,6 @@ export default function ToolsetsPage() {
   const unpublishToolset = useUnpublishToolset(scopedOrgId);
   const settingsQuery = useOrgSettings(scopedOrgId);
   const updateSettings = useUpdateOrgSettings(scopedOrgId);
-  const secretsQuery = useSecrets(scopedOrgId);
 
   const createBuilderSession = useCreateToolsetBuilderSession(scopedOrgId);
   const chatBuilderSession = useChatToolsetBuilderSession(scopedOrgId);
@@ -808,7 +806,7 @@ export default function ToolsetsPage() {
     }
     if (aiStep !== "start") return;
     if (aiDefaultsInitRef.current) return;
-    const d = (settingsQuery.data?.settings?.llm?.defaults?.toolsetBuilder as any) ?? null;
+    const d = (settingsQuery.data?.settings?.llm?.defaults?.primary as any) ?? null;
     if (d && typeof d === "object") {
       if (typeof d.provider === "string") {
         setAiProvider(d.provider);
@@ -983,7 +981,6 @@ export default function ToolsetsPage() {
             void toolsetsQuery.refetch();
             void galleryQuery.refetch();
             void settingsQuery.refetch();
-            void secretsQuery.refetch();
           }}
         />
       </div>
@@ -1013,8 +1010,7 @@ export default function ToolsetsPage() {
   const unauthorized =
     (toolsetsQuery.isError && isUnauthorizedError(toolsetsQuery.error)) ||
     (galleryQuery.isError && isUnauthorizedError(galleryQuery.error)) ||
-    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error)) ||
-    (secretsQuery.isError && isUnauthorizedError(secretsQuery.error));
+    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error));
 
   if (unauthorized) {
     return (
@@ -1029,7 +1025,6 @@ export default function ToolsetsPage() {
             void toolsetsQuery.refetch();
             void galleryQuery.refetch();
             void settingsQuery.refetch();
-            void secretsQuery.refetch();
           }}
         />
       </div>
@@ -1266,13 +1261,17 @@ export default function ToolsetsPage() {
                     </Button>
                     <Button
                       variant="accent"
-                      disabled={loading || !aiSecretId || aiModel.trim().length === 0}
+                      disabled={loading || aiModel.trim().length === 0}
                       onClick={async () => {
                         try {
                           const intent = aiIntent.trim();
                           const res = await createBuilderSession.mutateAsync({
                             ...(intent.length > 0 ? { intent } : {}),
-                            llm: { provider: aiProvider, model: aiModel.trim(), auth: { secretId: aiSecretId } },
+                            llm: {
+                              provider: aiProvider,
+                              model: aiModel.trim(),
+                              ...(aiSecretId ? { auth: { secretId: aiSecretId } } : {}),
+                            },
                           });
                           setAiSessionId(res.sessionId);
                           setAiAssistant(res.assistant.message);

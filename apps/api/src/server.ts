@@ -220,7 +220,7 @@ const llmProviderInputSchema = z.string().min(1).transform((value, ctx) => {
 
 const llmNullableProviderInputSchema = z.union([llmProviderInputSchema, z.null()]);
 
-const llmDefaultSessionSchema = z
+const llmDefaultPrimarySchema = z
   .object({
     provider: llmNullableProviderInputSchema.optional(),
     model: z.string().min(1).max(200).nullable().optional(),
@@ -231,41 +231,7 @@ const llmDefaultSessionSchema = z
     if (value.provider && !providerSupportsContext(value.provider, "session")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `${value.provider} cannot be used in session context`,
-        path: ["provider"],
-      });
-    }
-  });
-
-const llmDefaultWorkflowSchema = z
-  .object({
-    provider: llmNullableProviderInputSchema.optional(),
-    model: z.string().min(1).max(200).nullable().optional(),
-    secretId: z.string().uuid().nullable().optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (value.provider && !providerSupportsContext(value.provider, "workflowAgentRun")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${value.provider} cannot be used in workflowAgentRun context`,
-        path: ["provider"],
-      });
-    }
-  });
-
-const llmDefaultToolsetSchema = z
-  .object({
-    provider: llmNullableProviderInputSchema.optional(),
-    model: z.string().min(1).max(200).nullable().optional(),
-    secretId: z.string().uuid().nullable().optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (value.provider && !providerSupportsContext(value.provider, "toolsetBuilder")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${value.provider} cannot be used in toolsetBuilder context`,
+        message: `${value.provider} cannot be used in primary default context`,
         path: ["provider"],
       });
     }
@@ -361,9 +327,7 @@ const orgSettingsSchema = z
       .object({
         defaults: z
           .object({
-            session: llmDefaultSessionSchema.optional(),
-            workflowAgentRun: llmDefaultWorkflowSchema.optional(),
-            toolsetBuilder: llmDefaultToolsetSchema.optional(),
+            primary: llmDefaultPrimarySchema.optional(),
           })
           .strict()
           .optional(),
@@ -408,60 +372,64 @@ function normalizeOrgSettings(input: unknown): {
   toolsets: { defaultToolsetId: string | null };
   llm: {
     defaults: {
-      session: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
-      workflowAgentRun: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
-      toolsetBuilder: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
+      primary: { provider: LlmProviderId | null; model: string | null; secretId: string | null };
     };
     providers: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>>;
   };
 } {
-  const parsed = orgSettingsSchema.safeParse(input);
+  const root = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+  const toolsRaw = root["tools"];
+  const toolsetsRaw = root["toolsets"];
+  const llmRaw = root["llm"];
+
+  const toolsObj = toolsRaw && typeof toolsRaw === "object" && !Array.isArray(toolsRaw) ? (toolsRaw as Record<string, unknown>) : {};
+  const toolsetsObj =
+    toolsetsRaw && typeof toolsetsRaw === "object" && !Array.isArray(toolsetsRaw) ? (toolsetsRaw as Record<string, unknown>) : {};
+  const llmObj = llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw) ? (llmRaw as Record<string, unknown>) : {};
+
   const llmProviders: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>> = {};
 
-  if (parsed.success) {
-    const providers = parsed.data.llm?.providers ?? {};
-    for (const [providerIdRaw, conf] of Object.entries(providers)) {
-      const providerId = normalizeLlmProviderId(providerIdRaw);
-      if (!providerId) continue;
-      llmProviders[providerId] = {
-        baseUrl: typeof conf.baseUrl === "string" ? conf.baseUrl : null,
-        apiKind: conf.apiKind ?? null,
-      };
-    }
+  const providersRaw = llmObj["providers"];
+  const providersObj =
+    providersRaw && typeof providersRaw === "object" && !Array.isArray(providersRaw)
+      ? (providersRaw as Record<string, unknown>)
+      : {};
+  for (const [providerIdRaw, confRaw] of Object.entries(providersObj)) {
+    const providerId = normalizeLlmProviderId(providerIdRaw);
+    if (!providerId) continue;
+    const conf = confRaw && typeof confRaw === "object" && !Array.isArray(confRaw) ? (confRaw as Record<string, unknown>) : {};
+    const baseUrl =
+      typeof conf.baseUrl === "string" && z.string().url().max(2000).safeParse(conf.baseUrl).success ? conf.baseUrl : null;
+    const apiKind =
+      typeof conf.apiKind === "string" && llmApiKindValues.includes(conf.apiKind as (typeof llmApiKindValues)[number])
+        ? (conf.apiKind as LlmProviderApiKind)
+        : null;
+    llmProviders[providerId] = { baseUrl, apiKind };
   }
 
-  const sessionDefaults = normalizeProviderDefault({
-    provider: parsed.success ? (parsed.data.llm?.defaults?.session?.provider ?? null) : null,
-    model: parsed.success ? (parsed.data.llm?.defaults?.session?.model ?? null) : null,
-    secretId: parsed.success ? (parsed.data.llm?.defaults?.session?.secretId ?? null) : null,
+  const defaultsRaw = llmObj["defaults"];
+  const defaultsObj =
+    defaultsRaw && typeof defaultsRaw === "object" && !Array.isArray(defaultsRaw) ? (defaultsRaw as Record<string, unknown>) : {};
+  const primaryParsed = llmDefaultPrimarySchema.safeParse(defaultsObj["primary"] ?? {});
+  const primaryDefaults = normalizeProviderDefault({
+    provider: primaryParsed.success ? (primaryParsed.data.provider ?? null) : null,
+    model: primaryParsed.success ? (primaryParsed.data.model ?? null) : null,
+    secretId: primaryParsed.success ? (primaryParsed.data.secretId ?? null) : null,
     context: "session",
   });
 
-  const workflowDefaults = normalizeProviderDefault({
-    provider: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.provider ?? null) : null,
-    model: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.model ?? null) : null,
-    secretId: parsed.success ? (parsed.data.llm?.defaults?.workflowAgentRun?.secretId ?? null) : null,
-    context: "workflowAgentRun",
-  });
-
-  const toolsetDefaults = normalizeProviderDefault({
-    provider: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.provider ?? null) : null,
-    model: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.model ?? null) : null,
-    secretId: parsed.success ? (parsed.data.llm?.defaults?.toolsetBuilder?.secretId ?? null) : null,
-    context: "toolsetBuilder",
-  });
+  const shellRunEnabled = typeof toolsObj.shellRunEnabled === "boolean" ? toolsObj.shellRunEnabled : false;
+  const defaultToolsetId =
+    typeof toolsetsObj.defaultToolsetId === "string" && z.string().uuid().safeParse(toolsetsObj.defaultToolsetId).success
+      ? toolsetsObj.defaultToolsetId
+      : null;
 
   return {
-    tools: { shellRunEnabled: parsed.success ? Boolean(parsed.data.tools?.shellRunEnabled) : false },
-    toolsets: {
-      defaultToolsetId:
-        parsed.success && typeof parsed.data.toolsets?.defaultToolsetId === "string" ? parsed.data.toolsets.defaultToolsetId : null,
-    },
+    tools: { shellRunEnabled },
+    toolsets: { defaultToolsetId },
     llm: {
       defaults: {
-        session: sessionDefaults,
-        workflowAgentRun: workflowDefaults,
-        toolsetBuilder: toolsetDefaults,
+        primary: primaryDefaults,
       },
       providers: llmProviders,
     },
@@ -555,7 +523,12 @@ const toolsetBuilderLlmSchema = z
       }
     }),
     model: z.string().min(1).max(200),
-    auth: z.object({ secretId: z.string().uuid() }).strict(),
+    auth: z
+      .object({
+        secretId: z.string().uuid().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -2283,39 +2256,17 @@ export async function buildServer(input?: {
       },
       llm: {
         defaults: {
-          session:
-            llmDefaultsPatch && "session" in llmDefaultsPatch
+          primary:
+            llmDefaultsPatch && "primary" in llmDefaultsPatch
               ? {
-                  provider: llmDefaultsPatch.session?.provider ?? null,
-                  model: llmDefaultsPatch.session?.model ?? null,
+                  provider: llmDefaultsPatch.primary?.provider ?? null,
+                  model: llmDefaultsPatch.primary?.model ?? null,
                   secretId:
-                    llmDefaultsPatch.session && "secretId" in llmDefaultsPatch.session
-                      ? (llmDefaultsPatch.session.secretId ?? null)
+                    llmDefaultsPatch.primary && "secretId" in llmDefaultsPatch.primary
+                      ? (llmDefaultsPatch.primary.secretId ?? null)
                       : null,
                 }
-              : normalizedExisting.llm.defaults.session,
-          workflowAgentRun:
-            llmDefaultsPatch && "workflowAgentRun" in llmDefaultsPatch
-              ? {
-                  provider: llmDefaultsPatch.workflowAgentRun?.provider ?? null,
-                  model: llmDefaultsPatch.workflowAgentRun?.model ?? null,
-                  secretId:
-                    llmDefaultsPatch.workflowAgentRun && "secretId" in llmDefaultsPatch.workflowAgentRun
-                      ? (llmDefaultsPatch.workflowAgentRun.secretId ?? null)
-                      : null,
-                }
-              : normalizedExisting.llm.defaults.workflowAgentRun,
-          toolsetBuilder:
-            llmDefaultsPatch && "toolsetBuilder" in llmDefaultsPatch
-              ? {
-                  provider: llmDefaultsPatch.toolsetBuilder?.provider ?? null,
-                  model: llmDefaultsPatch.toolsetBuilder?.model ?? null,
-                  secretId:
-                    llmDefaultsPatch.toolsetBuilder && "secretId" in llmDefaultsPatch.toolsetBuilder
-                      ? (llmDefaultsPatch.toolsetBuilder.secretId ?? null)
-                      : null,
-                }
-              : normalizedExisting.llm.defaults.toolsetBuilder,
+              : normalizedExisting.llm.defaults.primary,
         },
         providers: nextProviderOverrides,
       },
@@ -2792,7 +2743,7 @@ export async function buildServer(input?: {
 
     function redirectWithError(code: string) {
       const locale = localeFromAcceptLanguage(request.headers["accept-language"] as string | undefined);
-      const redirectUrl = new URL(`/${locale}/secrets`, WEB_BASE_URL);
+      const redirectUrl = new URL(`/${locale}/models`, WEB_BASE_URL);
       redirectUrl.searchParams.set("vertex", "error");
       redirectUrl.searchParams.set("code", code);
       return reply.redirect(redirectUrl.toString());
@@ -2891,7 +2842,7 @@ export async function buildServer(input?: {
       }
 
       const locale = localeFromAcceptLanguage(request.headers["accept-language"] as string | undefined);
-      const redirectUrl = new URL(`/${locale}/secrets`, WEB_BASE_URL);
+      const redirectUrl = new URL(`/${locale}/models`, WEB_BASE_URL);
       redirectUrl.searchParams.set("vertex", "success");
       redirectUrl.searchParams.set("orgId", stored.organizationId);
       return reply.redirect(redirectUrl.toString());
@@ -3175,10 +3126,10 @@ export async function buildServer(input?: {
     const resolvedLlm = (() => {
       if (!isMember) {
         const candidate = body.data.llm ?? {
-          provider: orgSettings.llm.defaults.session.provider ?? "openai",
-          model: orgSettings.llm.defaults.session.model ?? "gpt-4.1-mini",
+          provider: orgSettings.llm.defaults.primary.provider ?? "openai",
+          model: orgSettings.llm.defaults.primary.model ?? "gpt-4.1-mini",
           auth: {
-            secretId: orgSettings.llm.defaults.session.secretId ?? null,
+            secretId: orgSettings.llm.defaults.primary.secretId ?? null,
           },
         };
         return {
@@ -3187,11 +3138,17 @@ export async function buildServer(input?: {
           auth: { secretId: candidate.auth?.secretId ?? null },
         };
       }
-      const defaults = orgSettings.llm.defaults.session;
+      const defaults = orgSettings.llm.defaults.primary;
       if (!defaults.provider || !defaults.model) {
         throw new AppError(400, {
           code: "ORG_DEFAULT_LLM_REQUIRED",
-          message: "Members must use organization default session model configuration.",
+          message: "Members must use organization default model configuration.",
+        });
+      }
+      if (!providerSupportsContext(defaults.provider, "session")) {
+        throw new AppError(400, {
+          code: "ORG_DEFAULT_LLM_REQUIRED",
+          message: "Organization default model does not support chat sessions.",
         });
       }
       return {
@@ -4055,6 +4012,37 @@ export async function buildServer(input?: {
     return normalizeConnectorId(connectorId);
   }
 
+  async function resolveToolsetBuilderSecretValue(input: {
+    llm: ToolsetBuilderLlmConfig;
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<string | null> {
+    const secretId = input.llm.auth?.secretId?.trim() ?? "";
+    if (!secretId) {
+      return null;
+    }
+    const expectedConnectorId = expectedLlmConnectorId(input.llm.provider);
+    const allSecrets = await store.listConnectorSecrets({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      connectorId: null,
+    });
+    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
+    const secretMeta = secrets.find((s) => s.id === secretId) ?? null;
+    if (!secretMeta) {
+      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
+    }
+    const secretValue = await store.loadConnectorSecretValue({
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      secretId,
+    });
+    if (!secretValue || secretValue.trim().length === 0) {
+      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
+    }
+    return secretValue;
+  }
+
   function resolveLlmProviderRuntime(input: {
     provider: LlmProviderId;
     orgSettings: ReturnType<typeof normalizeOrgSettings>;
@@ -4070,9 +4058,19 @@ export async function buildServer(input?: {
     };
   }
 
+  function resolveManagedBuilderApiKey(apiKind: LlmProviderApiKind): string | null {
+    if (apiKind === "anthropic-compatible") {
+      return process.env.LLM_MANAGED_ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? null;
+    }
+    if (apiKind === "google") {
+      return process.env.LLM_MANAGED_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? null;
+    }
+    return process.env.LLM_MANAGED_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? null;
+  }
+
   async function callBuilderLlm(input: {
     llm: ToolsetBuilderLlmConfig;
-    secretValue: string;
+    secretValue: string | null;
     messages: OpenAiChatMessage[];
     orgSettings: ReturnType<typeof normalizeOrgSettings>;
   }) {
@@ -4088,7 +4086,7 @@ export async function buildServer(input?: {
         })
         .safeParse((() => {
           try {
-            return JSON.parse(input.secretValue);
+            return JSON.parse(input.secretValue ?? "");
           } catch {
             return null;
           }
@@ -4108,7 +4106,9 @@ export async function buildServer(input?: {
       });
     }
 
-    const apiKey = input.secretValue.trim();
+    const explicitApiKey = input.secretValue?.trim() ?? "";
+    const managedApiKey = resolveManagedBuilderApiKey(runtime.apiKind);
+    const apiKey = explicitApiKey || managedApiKey || "";
     if (!apiKey) {
       return { ok: false as const, error: "LLM_AUTH_NOT_CONFIGURED" };
     }
@@ -4170,26 +4170,11 @@ export async function buildServer(input?: {
     );
 
     const llm = parsed.data.llm as ToolsetBuilderLlmConfig;
-    const expectedConnectorId = expectedLlmConnectorId(llm.provider);
-    const allSecrets = await store.listConnectorSecrets({
+    const secretValue = await resolveToolsetBuilderSecretValue({
+      llm,
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: null,
     });
-    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
-    const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
-    if (!secretMeta) {
-      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
-    }
-
-    const secretValue = await store.loadConnectorSecretValue({
-      organizationId: orgContext.organizationId,
-      actorUserId: auth.userId,
-      secretId: llm.auth.secretId,
-    });
-    if (!secretValue || secretValue.trim().length === 0) {
-      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
-    }
 
     const intent = parsed.data.intent?.trim() ?? "";
     const session = await store.createToolsetBuilderSession({
@@ -4336,25 +4321,11 @@ export async function buildServer(input?: {
     });
 
     const llm = session.llm as ToolsetBuilderLlmConfig;
-    const expectedConnectorId = expectedLlmConnectorId(llm.provider);
-    const allSecrets = await store.listConnectorSecrets({
+    const secretValue = await resolveToolsetBuilderSecretValue({
+      llm,
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: null,
     });
-    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
-    const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
-    if (!secretMeta) {
-      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
-    }
-    const secretValue = await store.loadConnectorSecretValue({
-      organizationId: orgContext.organizationId,
-      actorUserId: auth.userId,
-      secretId: llm.auth.secretId,
-    });
-    if (!secretValue || secretValue.trim().length === 0) {
-      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
-    }
 
     const ranked = rankCatalogItems({ query: message, items: toolsetCatalog, limit: 20 });
     const catalogPreview = ranked.map((it) => ({
@@ -4487,25 +4458,11 @@ export async function buildServer(input?: {
     const selectedSkillTemplates = selectedComponents.filter((c) => c.kind === "skill") as Array<Extract<ToolsetCatalogItem, { kind: "skill" }>>;
 
     const llm = session.llm as ToolsetBuilderLlmConfig;
-    const expectedConnectorId = expectedLlmConnectorId(llm.provider);
-    const allSecrets = await store.listConnectorSecrets({
+    const secretValue = await resolveToolsetBuilderSecretValue({
+      llm,
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
-      connectorId: null,
     });
-    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
-    const secretMeta = secrets.find((s) => s.id === llm.auth.secretId) ?? null;
-    if (!secretMeta) {
-      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
-    }
-    const secretValue = await store.loadConnectorSecretValue({
-      organizationId: orgContext.organizationId,
-      actorUserId: auth.userId,
-      secretId: llm.auth.secretId,
-    });
-    if (!secretValue || secretValue.trim().length === 0) {
-      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
-    }
 
     const turns = await store.listToolsetBuilderTurns({
       organizationId: orgContext.organizationId,

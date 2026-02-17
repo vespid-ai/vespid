@@ -45,13 +45,13 @@ export function SecretSelectField(props: {
     <div className="grid gap-2">
       <Select value={selected} onValueChange={(v) => props.onChange(v === NONE_SECRET_VALUE ? null : v)} disabled={!canOperate}>
         <SelectTrigger>
-          <SelectValue placeholder={hasAny ? "Select secret" : "Not connected"} />
+          <SelectValue placeholder={hasAny ? "Select connection" : "Not connected"} />
         </SelectTrigger>
         <SelectContent>
           {!props.required ? <SelectItem value={NONE_SECRET_VALUE}>None</SelectItem> : null}
           {list.map((s) => (
             <SelectItem key={s.id} value={s.id}>
-              {s.name} ({s.id.slice(0, 8)}…)
+              {s.name}
             </SelectItem>
           ))}
         </SelectContent>
@@ -59,14 +59,14 @@ export function SecretSelectField(props: {
 
       {!hasAny ? (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          <span>No secret configured for {props.connectorId}.</span>
-          <Button type="button" size="sm" variant="outline" onClick={() => router.push(`/${locale}/secrets`)}>
-            Go to Secrets
+          <span>No connection configured for {props.connectorId}.</span>
+          <Button type="button" size="sm" variant="outline" onClick={() => router.push(`/${locale}/models`)}>
+            Open Connections
           </Button>
         </div>
       ) : null}
 
-      {props.required && !props.value ? <div className="text-xs text-red-700">Secret is required.</div> : null}
+      {props.required && !props.value ? <div className="text-xs text-red-700">Connection is required.</div> : null}
     </div>
   );
 }

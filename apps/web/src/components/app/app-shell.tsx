@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CreditCard,
-  KeyRound,
   LayoutGrid,
   LogOut,
   Menu,
@@ -91,7 +90,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [knownOrgIds, setKnownOrgIds] = useState<string[]>([]);
   const [draftOrgId, setDraftOrgId] = useState<string>("");
   const [orgSummaries, setOrgSummaries] = useState<Array<{ id: string; name: string; roleKey: string }>>([]);
-  const [hasOrgSecrets, setHasOrgSecrets] = useState(false);
   const [hasStarterResource, setHasStarterResource] = useState(false);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -149,19 +147,13 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!session.data?.session || !activeOrgId) {
-      setHasOrgSecrets(false);
       setHasStarterResource(false);
       return;
     }
 
     let cancelled = false;
     (async () => {
-      const [secretsRes, sessionsRes, workflowsRes] = await Promise.allSettled([
-        apiFetchJson<{ secrets: Array<{ id: string }> }>(
-          `/v1/orgs/${activeOrgId}/secrets`,
-          { method: "GET" },
-          { orgScoped: true }
-        ),
+      const [sessionsRes, workflowsRes] = await Promise.allSettled([
         apiFetchJson<{ sessions: Array<{ id: string }> }>(
           `/v1/orgs/${activeOrgId}/sessions?limit=1`,
           { method: "GET" },
@@ -176,11 +168,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       if (cancelled) return;
 
-      const secretCount = secretsRes.status === "fulfilled" ? (secretsRes.value.secrets ?? []).length : 0;
       const sessionCount = sessionsRes.status === "fulfilled" ? (sessionsRes.value.sessions ?? []).length : 0;
       const workflowCount = workflowsRes.status === "fulfilled" ? (workflowsRes.value.workflows ?? []).length : 0;
 
-      setHasOrgSecrets(secretCount > 0);
       setHasStarterResource(sessionCount > 0 || workflowCount > 0);
     })();
 
@@ -199,7 +189,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       { href: (l) => `/${l}/conversations`, labelKey: "nav.sessions", icon: <MessageCircle className="h-4 w-4" /> },
       { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
       { href: (l) => `/${l}/channels`, labelKey: "nav.channels", icon: <MessageSquare className="h-4 w-4" /> },
-      { href: (l) => `/${l}/secrets`, labelKey: "nav.secrets", icon: <KeyRound className="h-4 w-4" /> },
       { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
       { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },
       { href: (l) => `/${l}/toolsets`, labelKey: "nav.toolsets", icon: <Braces className="h-4 w-4" /> },
@@ -246,7 +235,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     setOrgSummaries([]);
     setKnownOrgIds([]);
     setDraftOrgId("");
-    setHasOrgSecrets(false);
     setHasStarterResource(false);
     queryClient.setQueryData(["session"], null);
     router.push(`/${locale}/auth?loggedOut=1`);
@@ -325,6 +313,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
+            <Link href={`/${locale}/models`}>{t("settings.modelConnections")}</Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
             <a href="https://github.com/vespid-ai/vespid" target="_blank" rel="noreferrer">
               {t("common.docs")}
             </a>
@@ -377,7 +368,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           { title: t("nav.sessions"), href: `/${locale}/conversations`, icon: MessageCircle },
           { title: t("nav.workflows"), href: `/${locale}/workflows`, icon: LayoutGrid },
           { title: t("nav.channels"), href: `/${locale}/channels`, icon: MessageSquare },
-          { title: t("nav.secrets"), href: `/${locale}/secrets`, icon: KeyRound },
           { title: t("nav.billing"), href: `/${locale}/billing`, icon: CreditCard },
           { title: t("nav.agents"), href: `/${locale}/agents`, icon: Rocket },
           { title: t("nav.toolsets"), href: `/${locale}/toolsets`, icon: Braces },
@@ -665,7 +655,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <Badge variant="ok">{t("onboarding.stepLogin")}</Badge>
                       <Badge variant={activeOrgId ? "ok" : "warn"}>{t("onboarding.stepOrg")}</Badge>
-                      <Badge variant={hasOrgSecrets ? "ok" : "neutral"}>{t("onboarding.stepSecretOptional")}</Badge>
                       <Badge variant={hasStarterResource ? "ok" : "warn"}>{t("onboarding.stepFirstResource")}</Badge>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -683,11 +672,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                             <Link href={`/${locale}/workflows`}>{t("onboarding.goWorkflow")}</Link>
                           </Button>
                         </>
-                      ) : null}
-                      {activeOrgId && !hasOrgSecrets ? (
-                        <Button size="sm" variant="outline" asChild>
-                          <Link href={`/${locale}/secrets`}>{t("onboarding.goSecrets")}</Link>
-                        </Button>
                       ) : null}
                     </div>
                   </div>

@@ -1965,6 +1965,24 @@ describe("api hardening foundation", () => {
     expect(updated.statusCode).toBe(200);
     expect((updated.json() as any).settings.tools.shellRunEnabled).toBe(true);
 
+    const updatePrimaryDefault = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { llm: { defaults: { primary: { provider: "openai", model: "gpt-5.3-codex", secretId: null } } } },
+    });
+    expect(updatePrimaryDefault.statusCode).toBe(200);
+    expect((updatePrimaryDefault.json() as any).settings.llm.defaults.primary.provider).toBe("openai");
+    expect((updatePrimaryDefault.json() as any).settings.llm.defaults.primary.model).toBe("gpt-5.3-codex");
+
+    const rejectLegacyDefaults = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { llm: { defaults: { session: { provider: "openai", model: "gpt-4.1-mini", secretId: null } } } },
+    });
+    expect(rejectLegacyDefaults.statusCode).toBe(400);
+
     const memberEmail = `settings-member-${Date.now()}@example.com`;
     const invite = await server.inject({
       method: "POST",

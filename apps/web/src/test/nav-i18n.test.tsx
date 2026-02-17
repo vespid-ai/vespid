@@ -7,7 +7,7 @@ function NavLabels() {
   return (
     <div>
       <span>{t("nav.workflows")}</span>
-      <span>{t("nav.secrets")}</span>
+      <span>{t("nav.channels")}</span>
     </div>
   );
 }
@@ -18,7 +18,7 @@ describe("next-intl messages", () => {
       <NextIntlClientProvider
         locale="en"
         messages={{
-          nav: { workflows: "Workflows", secrets: "Secrets" },
+          nav: { workflows: "Workflows", channels: "Channels" },
         }}
       >
         <NavLabels />
@@ -26,7 +26,7 @@ describe("next-intl messages", () => {
     );
 
     expect(screen.getByText("Workflows")).toBeInTheDocument();
-    expect(screen.getByText("Secrets")).toBeInTheDocument();
+    expect(screen.getByText("Channels")).toBeInTheDocument();
   });
 
   it("renders zh-CN labels", () => {
@@ -34,7 +34,7 @@ describe("next-intl messages", () => {
       <NextIntlClientProvider
         locale="zh-CN"
         messages={{
-          nav: { workflows: "工作流", secrets: "密钥" },
+          nav: { workflows: "工作流", channels: "渠道" },
         }}
       >
         <NavLabels />
@@ -42,6 +42,6 @@ describe("next-intl messages", () => {
     );
 
     expect(screen.getByText("工作流")).toBeInTheDocument();
-    expect(screen.getByText("密钥")).toBeInTheDocument();
+    expect(screen.getByText("渠道")).toBeInTheDocument();
   });
 });

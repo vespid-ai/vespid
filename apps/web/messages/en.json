@@ -174,7 +174,36 @@
     "otherProviders": "Other",
     "catalogUnavailable": "Model catalog unavailable. You can still type a model ID manually.",
     "poweredBy": "Catalog",
-    "fetchedAt": "Updated: {ts}"
+    "fetchedAt": "Updated: {ts}",
+    "connections": {
+      "title": "Model Connections",
+      "subtitle": "Connect providers once, then use a single default model across chat, workflows, and toolsets.",
+      "primaryTitle": "Organization default model",
+      "primarySubtitle": "This default is used across chat, workflows, and toolset generation.",
+      "oauthRequired": "This provider requires a connected OAuth account.",
+      "providersTitle": "Provider connections",
+      "providersSubtitle": "Connect, rotate, or disconnect provider accounts without exposing internal secret IDs.",
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "connect": "Connect",
+      "disconnect": "Disconnect",
+      "vertexProjectId": "Project ID",
+      "vertexLocation": "Location",
+      "startDeviceFlow": "Start device flow",
+      "userCode": "User code: {code}",
+      "oauthTokenPlaceholder": "Paste OAuth token...",
+      "completeConnection": "Complete connection",
+      "pending": "Authorization is still pending.",
+      "runtimeTitle": "Provider runtime overrides",
+      "runtimeSubtitle": "Override base URL and API kind for OpenAI-like/custom endpoints.",
+      "provider": "Provider",
+      "baseUrl": "Base URL",
+      "apiKind": "API kind",
+      "apiKindDefault": "Provider default",
+      "runtimeHint": "Runtime override applies to {provider} only.",
+      "vertexConnected": "Vertex connection saved",
+      "vertexFailed": "Vertex connection failed"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -191,7 +220,8 @@
     },
     "locale": {
       "title": "Locale"
-    }
+    },
+    "modelConnections": "Model Connections"
   },
   "errors": {
     "apiUnreachable": {
@@ -271,8 +301,8 @@
     "model": "Model",
     "useDefaultModel": "Use default",
     "usingDefaultModel": "Using default: {provider} / {model}",
-    "llmSecretId": "LLM secretId (optional)",
-    "vertexSecretRequiredHint": "Vertex requires a vertex OAuth secretId.",
+    "llmSecretId": "Model connection (optional)",
+    "vertexSecretRequiredHint": "Vertex requires a connected OAuth account.",
     "tools": "Tools",
     "teamTitle": "Team",
     "teamEnable": "Enable team (supervisor + teammates)",
@@ -288,7 +318,7 @@
     "shellRun": "Shell run (node-agent)",
     "runToolsOnNodeAgent": "Run tools on node-agent (remote)",
     "githubDefaults": "GitHub issue.create defaults",
-    "githubSecretId": "GitHub secretId",
+    "githubSecretId": "GitHub connection",
     "repo": "Repo (owner/repo)",
     "issueTitle": "Issue title",
     "issueBody": "Issue body",
@@ -322,8 +352,8 @@
       "workflowName": "Workflow name",
       "templates": "Templates",
       "includeGithub": "Include GitHub create-issue node",
-      "githubSecretId": "GitHub secretId",
-      "githubSecretPlaceholder": "Paste secret UUID from /secrets",
+      "githubSecretId": "GitHub connection",
+      "githubSecretPlaceholder": "Select a GitHub connection from Model Connections.",
       "githubRepo": "Repo (owner/repo)",
       "githubTitle": "Issue title",
       "githubBody": "Issue body",
@@ -360,15 +390,15 @@
     },
     "errors": {
       "orgRequired": "Set an active org first.",
-      "githubSecretRequired": "Provide a GitHub secretId to include the GitHub node.",
-      "vertexSecretRequired": "Vertex requires a secretId (Vertex OAuth).",
+      "githubSecretRequired": "Connect GitHub before enabling GitHub tools.",
+      "vertexSecretRequired": "Vertex requires a connected OAuth account.",
       "workflowIdRequired": "Workflow ID required"
     },
     "createDisabledReasons": {
       "orgRequired": "Select an active organization first.",
       "workflowName": "Workflow name is required.",
-      "githubSecret": "A GitHub secret is required when GitHub tools are enabled.",
-      "providerSecret": "Selected provider requires secretId."
+      "githubSecret": "A GitHub connection is required when GitHub tools are enabled.",
+      "providerSecret": "Selected provider requires a connected account."
     },
     "toast": {
       "created": "Workflow created"
@@ -582,12 +612,12 @@
       "generate": "Generate with AI",
       "title": "Generate toolset with AI",
       "subtitle": "Create a draft toolset by describing what you need, then review and edit before saving.",
-      "guardrail": "Do not paste secrets. Use $'{'ENV:...'}' placeholders and manage keys via the Secrets page.",
+      "guardrail": "Do not paste credentials. Use $'{'ENV:...'}' placeholders and manage connections in Model Connections.",
       "providerLabel": "LLM provider",
       "modelLabel": "Model",
-      "secretLabel": "Org secret",
-      "secretPlaceholder": "Select a secret...",
-      "noSecretsHint": "No matching LLM secrets found for this provider. Create one in Secrets first.",
+      "secretLabel": "Connection",
+      "secretPlaceholder": "Select a connection...",
+      "noSecretsHint": "No matching model connection found for this provider. Connect it in Model Connections first.",
       "intentLabel": "Intent",
       "start": "Start session",
       "assistantLabel": "Assistant",
@@ -702,7 +732,11 @@
       "connected": "Vertex connection saved",
       "disconnected": "Vertex connection removed",
       "failed": "Vertex connection failed"
-    }
+    },
+    "internalOnlyHint": "Internal compatibility page for operations and debugging.",
+    "modelConnectionsTitle": "Model connections",
+    "modelConnectionsDescription": "Use Model Connections for normal setup and authorization flows.",
+    "openModelConnections": "Open Model Connections"
   },
   "billing": {
     "credits": "Credits",
