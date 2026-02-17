@@ -9,6 +9,7 @@
   "nav": {
     "workflows": "Workflows",
     "sessions": "Chat",
+    "models": "Model Connections",
     "secrets": "Secrets",
     "billing": "Billing",
     "agents": "Agents",

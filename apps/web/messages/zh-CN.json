@@ -9,6 +9,7 @@
   "nav": {
     "workflows": "工作流",
     "sessions": "对话",
+    "models": "模型连接",
     "secrets": "密钥",
     "billing": "计费",
     "agents": "代理",
