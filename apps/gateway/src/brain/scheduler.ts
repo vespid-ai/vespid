@@ -10,7 +10,7 @@ const routeSchema = z.object({
   organizationId: z.string().uuid().nullable().optional(),
   labels: z.array(z.string()).optional(),
   maxInFlight: z.number().int().min(1).optional(),
-  kinds: z.array(z.enum(["connector.action", "agent.execute"])).optional(),
+  kinds: z.array(z.enum(["connector.action", "agent.execute", "agent.run"])).optional(),
   lastSeenAtMs: z.number().optional(),
 });
 

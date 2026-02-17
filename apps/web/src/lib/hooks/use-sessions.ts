@@ -6,9 +6,16 @@ export type AgentSession = {
   id: string;
   organizationId: string;
   createdByUserId: string;
+  sessionKey: string;
+  scope: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer" | string;
   title: string;
   status: "active" | "archived" | string;
+  pinnedExecutorId: string | null;
+  pinnedExecutorPool: "managed" | "byon" | null;
   pinnedAgentId: string | null;
+  routedAgentId: string | null;
+  bindingId: string | null;
+  executionMode: "pinned-node-host";
   executorSelector: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   selectorTag: string | null;
   selectorGroup: string | null;
@@ -21,6 +28,7 @@ export type AgentSession = {
   limits: unknown;
   promptSystem: string | null;
   promptInstructions: string;
+  resetPolicySnapshot: unknown;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
@@ -33,6 +41,9 @@ export type AgentSessionEvent = {
   seq: number;
   eventType: string;
   level: "info" | "warn" | "error";
+  handoffFromAgentId: string | null;
+  handoffToAgentId: string | null;
+  idempotencyKey: string | null;
   payload: unknown;
   createdAt: string;
 };
@@ -87,11 +98,18 @@ export function useCreateSession(orgId: string | null) {
   return useMutation({
     mutationFn: async (input: {
       title?: string;
+      actor?: string;
+      channel?: string;
+      peer?: string;
+      scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+      context?: Record<string, unknown>;
+      executionMode?: "pinned-node-host";
       engineId?: "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
       toolsetId?: string;
       llm?: { provider: LlmProviderId; model: string; auth?: { secretId?: string | null } };
       prompt: { system?: string; instructions: string };
       tools: { allow: string[] };
+      resetPolicy?: unknown;
       executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string };
     }) => {
       return apiFetchJson<{ session: AgentSession }>(

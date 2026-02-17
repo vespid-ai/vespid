@@ -11,6 +11,7 @@ import type {
   MembershipRecord,
   OrganizationAgentRecord,
   OrganizationExecutorRecord,
+  ManagedExecutorRecord,
   OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
   OrganizationRecord,
@@ -30,6 +31,10 @@ import type {
   ChannelAllowlistEntryRecord,
   ChannelEventRecord,
   ChannelPairingRequestRecord,
+  AgentBindingRecord,
+  AgentMemoryChunkRecord,
+  AgentMemoryDocumentRecord,
+  AgentMemorySyncJobRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -75,6 +80,12 @@ export class MemoryAppStore implements AppStore {
       tokenHash: string;
     })
   >();
+  private managedExecutors = new Map<
+    string,
+    (ManagedExecutorRecord & {
+      tokenHash: string;
+    })
+  >();
   private organizationExecutorIdByTokenHash = new Map<string, string>();
   private toolsets = new Map<string, AgentToolsetRecord>();
   private toolsetBuilderSessions = new Map<string, ToolsetBuilderSessionRecord>();
@@ -83,6 +94,10 @@ export class MemoryAppStore implements AppStore {
   private agentSessions = new Map<string, AgentSessionRecord>();
   private agentSessionEventsBySessionId = new Map<string, AgentSessionEventRecord[]>();
   private agentSessionSeqBySessionId = new Map<string, number>();
+  private agentBindings = new Map<string, AgentBindingRecord>();
+  private agentMemoryDocuments = new Map<string, AgentMemoryDocumentRecord>();
+  private agentMemoryChunksByDocumentId = new Map<string, AgentMemoryChunkRecord[]>();
+  private agentMemorySyncJobs = new Map<string, AgentMemorySyncJobRecord>();
   private channelAccounts = new Map<string, ChannelAccountRecord>();
   private channelAccountSecrets = new Map<string, ChannelAccountSecretRecord & { value: string }>();
   private channelAllowlistEntries = new Map<string, ChannelAllowlistEntryRecord>();
@@ -1397,6 +1412,51 @@ export class MemoryAppStore implements AppStore {
     return true;
   }
 
+  async createManagedExecutor(input: {
+    name: string;
+    tokenHash: string;
+    maxInFlight?: number;
+    labels?: string[];
+    capabilities?: unknown;
+    enabled?: boolean;
+    drain?: boolean;
+    runtimeClass?: string;
+    region?: string | null;
+  }): Promise<ManagedExecutorRecord> {
+    const id = crypto.randomUUID();
+    const record: ManagedExecutorRecord = {
+      id,
+      name: input.name,
+      revokedAt: null,
+      lastSeenAt: null,
+      maxInFlight: Math.max(1, Math.floor(input.maxInFlight ?? 50)),
+      enabled: input.enabled ?? true,
+      drain: input.drain ?? false,
+      runtimeClass: input.runtimeClass ?? "container",
+      region: input.region ?? null,
+      capabilities: input.capabilities ?? null,
+      labels: input.labels ?? [],
+      createdAt: nowIso(),
+    };
+    this.managedExecutors.set(id, {
+      ...record,
+      tokenHash: input.tokenHash,
+    });
+    return record;
+  }
+
+  async revokeManagedExecutor(input: { executorId: string }): Promise<boolean> {
+    const existing = this.managedExecutors.get(input.executorId) ?? null;
+    if (!existing) {
+      return false;
+    }
+    if (existing.revokedAt) {
+      return true;
+    }
+    this.managedExecutors.set(input.executorId, { ...existing, revokedAt: nowIso() });
+    return true;
+  }
+
   async listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }): Promise<AgentToolsetRecord[]> {
     return [...this.toolsets.values()]
       .filter((t) => t.organizationId === input.organizationId)
@@ -1684,6 +1744,10 @@ export class MemoryAppStore implements AppStore {
   async createAgentSession(input: {
     organizationId: string;
     actorUserId: string;
+    sessionKey?: string;
+    scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+    routedAgentId?: string | null;
+    bindingId?: string | null;
     title?: string | null;
     engineId: string;
     toolsetId?: string | null;
@@ -1691,6 +1755,7 @@ export class MemoryAppStore implements AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
+    resetPolicySnapshot?: unknown;
     executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   }): Promise<AgentSessionRecord> {
     const id = crypto.randomUUID();
@@ -1699,9 +1764,16 @@ export class MemoryAppStore implements AppStore {
       id,
       organizationId: input.organizationId,
       createdByUserId: input.actorUserId,
+      sessionKey: input.sessionKey ?? `session:${id}`,
+      scope: input.scope ?? "main",
       title: input.title ?? "",
       status: "active",
+      pinnedExecutorId: null,
+      pinnedExecutorPool: null,
       pinnedAgentId: null,
+      routedAgentId: input.routedAgentId ?? null,
+      bindingId: input.bindingId ?? null,
+      executionMode: "pinned-node-host",
       executorSelector: input.executorSelector ?? null,
       selectorTag: input.executorSelector?.tag ?? null,
       selectorGroup: input.executorSelector?.group ?? null,
@@ -1714,6 +1786,7 @@ export class MemoryAppStore implements AppStore {
       limits: input.limits ?? {},
       promptSystem: input.prompt.system ?? null,
       promptInstructions: input.prompt.instructions,
+      resetPolicySnapshot: input.resetPolicySnapshot ?? {},
       createdAt: now,
       updatedAt: now,
       lastActivityAt: now,
@@ -1764,11 +1837,23 @@ export class MemoryAppStore implements AppStore {
     sessionId: string;
     eventType: string;
     level: "info" | "warn" | "error";
+    handoffFromAgentId?: string | null;
+    handoffToAgentId?: string | null;
+    idempotencyKey?: string | null;
     payload?: unknown;
   }): Promise<AgentSessionEventRecord> {
     const session = this.agentSessions.get(input.sessionId);
     if (!session || session.organizationId !== input.organizationId) {
       throw new Error("AGENT_SESSION_NOT_FOUND");
+    }
+
+    if (input.idempotencyKey && input.idempotencyKey.trim().length > 0) {
+      const existing = (this.agentSessionEventsBySessionId.get(input.sessionId) ?? []).find(
+        (event) => event.idempotencyKey === input.idempotencyKey
+      );
+      if (existing) {
+        return existing;
+      }
     }
 
     const seq = this.agentSessionSeqBySessionId.get(input.sessionId) ?? 0;
@@ -1781,6 +1866,9 @@ export class MemoryAppStore implements AppStore {
       seq,
       eventType: input.eventType,
       level: input.level,
+      handoffFromAgentId: input.handoffFromAgentId ?? null,
+      handoffToAgentId: input.handoffToAgentId ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
       payload: input.payload ?? null,
       createdAt: nowIso(),
     };
@@ -1815,6 +1903,204 @@ export class MemoryAppStore implements AppStore {
     const hasMore = filtered.length > limit;
     const nextCursor = hasMore && page.length > 0 ? { seq: page[page.length - 1]!.seq } : null;
     return { events: page, nextCursor };
+  }
+
+  async setAgentSessionPinnedAgent(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    pinnedAgentId?: string | null;
+    pinnedExecutorId?: string | null;
+    pinnedExecutorPool?: "managed" | "byon" | null;
+  }): Promise<AgentSessionRecord | null> {
+    const session = this.agentSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return null;
+    }
+    const now = nowIso();
+    const next = {
+      ...session,
+      ...(input.pinnedAgentId !== undefined ? { pinnedAgentId: input.pinnedAgentId } : {}),
+      ...(input.pinnedExecutorId !== undefined ? { pinnedExecutorId: input.pinnedExecutorId } : {}),
+      ...(input.pinnedExecutorPool !== undefined ? { pinnedExecutorPool: input.pinnedExecutorPool } : {}),
+      updatedAt: now,
+      lastActivityAt: now,
+    };
+    this.agentSessions.set(input.sessionId, next);
+    return next;
+  }
+
+  async setAgentSessionRoute(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    routedAgentId: string | null;
+    bindingId?: string | null;
+    sessionKey?: string;
+    scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  }): Promise<AgentSessionRecord | null> {
+    const session = this.agentSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return null;
+    }
+    const now = nowIso();
+    const next: AgentSessionRecord = {
+      ...session,
+      routedAgentId: input.routedAgentId,
+      ...(input.bindingId !== undefined ? { bindingId: input.bindingId } : {}),
+      ...(typeof input.sessionKey === "string" ? { sessionKey: input.sessionKey } : {}),
+      ...(input.scope ? { scope: input.scope } : {}),
+      updatedAt: now,
+      lastActivityAt: now,
+    };
+    this.agentSessions.set(input.sessionId, next);
+    return next;
+  }
+
+  async createAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    agentId: string;
+    priority: number;
+    dimension: string;
+    match: unknown;
+    metadata?: unknown;
+  }): Promise<AgentBindingRecord> {
+    const now = nowIso();
+    const row: AgentBindingRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      agentId: input.agentId,
+      priority: Math.floor(input.priority),
+      dimension: input.dimension,
+      match: input.match ?? {},
+      metadata: input.metadata ?? null,
+      createdByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.agentBindings.set(row.id, row);
+    return row;
+  }
+
+  async listAgentBindings(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<AgentBindingRecord[]> {
+    return [...this.agentBindings.values()]
+      .filter((row) => row.organizationId === input.organizationId)
+      .sort((a, b) => a.dimension.localeCompare(b.dimension) || b.priority - a.priority || a.id.localeCompare(b.id));
+  }
+
+  async patchAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    bindingId: string;
+    patch: {
+      agentId?: string;
+      priority?: number;
+      dimension?: string;
+      match?: unknown;
+      metadata?: unknown;
+    };
+  }): Promise<AgentBindingRecord | null> {
+    const current = this.agentBindings.get(input.bindingId) ?? null;
+    if (!current || current.organizationId !== input.organizationId) {
+      return null;
+    }
+    const next: AgentBindingRecord = {
+      ...current,
+      ...(input.patch.agentId !== undefined ? { agentId: input.patch.agentId } : {}),
+      ...(input.patch.priority !== undefined ? { priority: Math.floor(input.patch.priority) } : {}),
+      ...(input.patch.dimension !== undefined ? { dimension: input.patch.dimension } : {}),
+      ...(input.patch.match !== undefined ? { match: input.patch.match } : {}),
+      ...(input.patch.metadata !== undefined ? { metadata: input.patch.metadata } : {}),
+      updatedAt: nowIso(),
+    };
+    this.agentBindings.set(next.id, next);
+    return next;
+  }
+
+  async deleteAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    bindingId: string;
+  }): Promise<boolean> {
+    const current = this.agentBindings.get(input.bindingId) ?? null;
+    if (!current || current.organizationId !== input.organizationId) {
+      return false;
+    }
+    this.agentBindings.delete(input.bindingId);
+    return true;
+  }
+
+  async createAgentMemorySyncJob(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId?: string | null;
+    sessionKey: string;
+    provider: "builtin" | "qmd";
+    status?: "queued" | "running" | "succeeded" | "failed";
+    reason?: string | null;
+    details?: unknown;
+  }): Promise<AgentMemorySyncJobRecord> {
+    const now = nowIso();
+    const row: AgentMemorySyncJobRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      sessionId: input.sessionId ?? null,
+      sessionKey: input.sessionKey,
+      provider: input.provider,
+      status: input.status ?? "queued",
+      reason: input.reason ?? null,
+      details: input.details ?? {},
+      startedAt: input.status === "running" ? now : null,
+      finishedAt: input.status === "succeeded" || input.status === "failed" ? now : null,
+      createdByUserId: input.actorUserId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.agentMemorySyncJobs.set(row.id, row);
+    return row;
+  }
+
+  async listAgentMemoryDocuments(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionKey?: string;
+    limit?: number;
+  }): Promise<AgentMemoryDocumentRecord[]> {
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+    return [...this.agentMemoryDocuments.values()]
+      .filter((row) => row.organizationId === input.organizationId)
+      .filter((row) => !input.sessionKey || row.sessionKey === input.sessionKey)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
+      .slice(0, limit);
+  }
+
+  async getAgentMemoryDocumentById(input: {
+    organizationId: string;
+    actorUserId: string;
+    documentId: string;
+  }): Promise<AgentMemoryDocumentRecord | null> {
+    const row = this.agentMemoryDocuments.get(input.documentId) ?? null;
+    if (!row || row.organizationId !== input.organizationId) {
+      return null;
+    }
+    return row;
+  }
+
+  async listAgentMemoryChunksByDocument(input: {
+    organizationId: string;
+    actorUserId: string;
+    documentId: string;
+    limit?: number;
+  }): Promise<AgentMemoryChunkRecord[]> {
+    const limit = Math.max(1, Math.min(2000, Math.floor(input.limit ?? 400)));
+    return (this.agentMemoryChunksByDocumentId.get(input.documentId) ?? [])
+      .filter((row) => row.organizationId === input.organizationId)
+      .sort((a, b) => a.chunkIndex - b.chunkIndex)
+      .slice(0, limit);
   }
 
   async listChannelAccounts(input: {

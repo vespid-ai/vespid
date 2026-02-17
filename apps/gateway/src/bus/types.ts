@@ -1,11 +1,20 @@
 import type {
   ChannelSessionSource,
+  ExecutionMode,
   GatewayBrainSessionEventV2,
   GatewayDispatchRequest,
   GatewayDispatchResponse,
   GatewayInvokeToolV2,
+  GatewayMemoryQueryV2,
+  GatewayMemorySyncV2,
+  GatewaySessionCancelV2,
+  GatewaySessionOpenV2,
+  GatewaySessionTurnV2,
   GatewayToolEventV2,
   GatewayToolResultV2,
+  MemoryProvider,
+  SessionAttachmentV2,
+  SessionScope,
 } from "@vespid/shared";
 
 export type EdgeToBrainRequest =
@@ -24,8 +33,41 @@ export type EdgeToBrainRequest =
       sessionId: string;
       // The persisted seq for the user_message event (used for idempotency/debugging).
       userEventSeq: number;
+      message?: string;
+      attachments?: SessionAttachmentV2[];
+      idempotencyKey?: string;
       originEdgeId?: string;
       source?: ChannelSessionSource;
+    }
+  | {
+      type: "session_reset";
+      requestId: string;
+      organizationId: string;
+      userId: string;
+      sessionId: string;
+      mode: "keep_history" | "clear_history";
+      originEdgeId?: string;
+    }
+  | {
+      type: "memory_sync";
+      requestId: string;
+      organizationId: string;
+      userId: string;
+      sessionId: string;
+      sessionKey: string;
+      provider: MemoryProvider;
+      workspaceDir: string;
+    }
+  | {
+      type: "memory_query";
+      requestId: string;
+      organizationId: string;
+      userId: string;
+      sessionId: string;
+      sessionKey: string;
+      provider: MemoryProvider;
+      query: string;
+      limit?: number;
     }
   | {
       type: "executor_result";
@@ -45,9 +87,35 @@ export type BrainToEdgeCommand =
       invoke: GatewayInvokeToolV2;
     }
   | {
+      type: "executor_session";
+      executorId: string;
+      payload:
+        | GatewaySessionOpenV2
+        | GatewaySessionTurnV2
+        | GatewaySessionCancelV2
+        | GatewayMemorySyncV2
+        | GatewayMemoryQueryV2;
+    }
+  | {
       type: "client_broadcast";
       sessionId: string;
       event: GatewayBrainSessionEventV2;
+    }
+  | {
+      type: "session_state";
+      sessionId: string;
+      pinnedExecutorId: string | null;
+      pinnedExecutorPool: "managed" | "byon" | null;
+      pinnedAgentId: string | null;
+      routedAgentId: string | null;
+      scope: SessionScope;
+      executionMode: ExecutionMode;
+    }
+  | {
+      type: "session_error";
+      sessionId: string;
+      code: string;
+      message: string;
     }
   | {
       type: "workflow_reply";

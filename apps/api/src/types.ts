@@ -1,10 +1,14 @@
 import type {
   AgentSkillBundle,
+  BindingDimension,
   ChannelId,
+  ExecutionMode,
   ExecutorSelectorV1,
   LlmProviderApiKind,
   LlmProviderId,
+  MemoryProvider,
   McpServerConfig,
+  SessionScope,
   ToolsetVisibility,
 } from "@vespid/shared";
 
@@ -174,6 +178,21 @@ export type OrganizationExecutorRecord = {
   createdAt: string;
 };
 
+export type ManagedExecutorRecord = {
+  id: string;
+  name: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+  maxInFlight: number;
+  enabled: boolean;
+  drain: boolean;
+  runtimeClass: string;
+  region: string | null;
+  capabilities: unknown;
+  labels: string[];
+  createdAt: string;
+};
+
 export type UserOrgSummaryRecord = {
   organization: OrganizationRecord;
   membership: MembershipRecord;
@@ -259,9 +278,16 @@ export type AgentSessionRecord = {
   id: string;
   organizationId: string;
   createdByUserId: string;
+  sessionKey: string;
+  scope: SessionScope | string;
   title: string;
   status: "active" | "archived";
+  pinnedExecutorId: string | null;
+  pinnedExecutorPool: "managed" | "byon" | null;
   pinnedAgentId: string | null;
+  routedAgentId: string | null;
+  bindingId: string | null;
+  executionMode: ExecutionMode;
   executorSelector: ExecutorSelectorV1 | null;
   selectorTag: string | null;
   selectorGroup: string | null;
@@ -274,6 +300,7 @@ export type AgentSessionRecord = {
   limits: unknown;
   promptSystem: string | null;
   promptInstructions: string;
+  resetPolicySnapshot: unknown;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
@@ -286,8 +313,66 @@ export type AgentSessionEventRecord = {
   seq: number;
   eventType: string;
   level: "info" | "warn" | "error";
+  handoffFromAgentId: string | null;
+  handoffToAgentId: string | null;
+  idempotencyKey: string | null;
   payload: unknown;
   createdAt: string;
+};
+
+export type AgentBindingRecord = {
+  id: string;
+  organizationId: string;
+  agentId: string;
+  priority: number;
+  dimension: BindingDimension | string;
+  match: unknown;
+  metadata: unknown;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentMemoryDocumentRecord = {
+  id: string;
+  organizationId: string;
+  sessionId: string | null;
+  sessionKey: string;
+  provider: MemoryProvider | string;
+  docPath: string;
+  contentHash: string;
+  lineCount: number;
+  metadata: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgentMemoryChunkRecord = {
+  id: number;
+  organizationId: string;
+  documentId: string;
+  chunkIndex: number;
+  text: string;
+  tokenCount: number;
+  embedding: unknown;
+  metadata: unknown;
+  createdAt: string;
+};
+
+export type AgentMemorySyncJobRecord = {
+  id: string;
+  organizationId: string;
+  sessionId: string | null;
+  sessionKey: string;
+  provider: MemoryProvider | string;
+  status: "queued" | "running" | "succeeded" | "failed" | string;
+  reason: string | null;
+  details: unknown;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type ChannelAccountRecord = {
@@ -666,6 +751,20 @@ export interface AppStore {
     actorUserId: string;
     executorId: string;
   }): Promise<boolean>;
+  createManagedExecutor(input: {
+    name: string;
+    tokenHash: string;
+    maxInFlight?: number;
+    labels?: string[];
+    capabilities?: unknown;
+    enabled?: boolean;
+    drain?: boolean;
+    runtimeClass?: string;
+    region?: string | null;
+  }): Promise<ManagedExecutorRecord>;
+  revokeManagedExecutor(input: {
+    executorId: string;
+  }): Promise<boolean>;
 
   listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }): Promise<AgentToolsetRecord[]>;
   createAgentToolset(input: {
@@ -754,6 +853,10 @@ export interface AppStore {
   createAgentSession(input: {
     organizationId: string;
     actorUserId: string;
+    sessionKey?: string;
+    scope?: SessionScope;
+    routedAgentId?: string | null;
+    bindingId?: string | null;
     title?: string | null;
     engineId: string;
     toolsetId?: string | null;
@@ -761,6 +864,7 @@ export interface AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
+    resetPolicySnapshot?: unknown;
     executorSelector?: ExecutorSelectorV1 | null;
   }): Promise<AgentSessionRecord>;
   listAgentSessions(input: {
@@ -780,6 +884,9 @@ export interface AppStore {
     sessionId: string;
     eventType: string;
     level: "info" | "warn" | "error";
+    handoffFromAgentId?: string | null;
+    handoffToAgentId?: string | null;
+    idempotencyKey?: string | null;
     payload?: unknown;
   }): Promise<AgentSessionEventRecord>;
   listAgentSessionEvents(input: {
@@ -789,6 +896,80 @@ export interface AppStore {
     limit: number;
     cursor?: { seq: number } | null;
   }): Promise<{ events: AgentSessionEventRecord[]; nextCursor: { seq: number } | null }>;
+  setAgentSessionPinnedAgent(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    pinnedAgentId?: string | null;
+    pinnedExecutorId?: string | null;
+    pinnedExecutorPool?: "managed" | "byon" | null;
+  }): Promise<AgentSessionRecord | null>;
+  setAgentSessionRoute(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    routedAgentId: string | null;
+    bindingId?: string | null;
+    sessionKey?: string;
+    scope?: SessionScope;
+  }): Promise<AgentSessionRecord | null>;
+  createAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    agentId: string;
+    priority: number;
+    dimension: BindingDimension;
+    match: unknown;
+    metadata?: unknown;
+  }): Promise<AgentBindingRecord>;
+  listAgentBindings(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<AgentBindingRecord[]>;
+  patchAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    bindingId: string;
+    patch: {
+      agentId?: string;
+      priority?: number;
+      dimension?: BindingDimension;
+      match?: unknown;
+      metadata?: unknown;
+    };
+  }): Promise<AgentBindingRecord | null>;
+  deleteAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    bindingId: string;
+  }): Promise<boolean>;
+  createAgentMemorySyncJob(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId?: string | null;
+    sessionKey: string;
+    provider: MemoryProvider;
+    status?: "queued" | "running" | "succeeded" | "failed";
+    reason?: string | null;
+    details?: unknown;
+  }): Promise<AgentMemorySyncJobRecord>;
+  listAgentMemoryDocuments(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionKey?: string;
+    limit?: number;
+  }): Promise<AgentMemoryDocumentRecord[]>;
+  getAgentMemoryDocumentById(input: {
+    organizationId: string;
+    actorUserId: string;
+    documentId: string;
+  }): Promise<AgentMemoryDocumentRecord | null>;
+  listAgentMemoryChunksByDocument(input: {
+    organizationId: string;
+    actorUserId: string;
+    documentId: string;
+    limit?: number;
+  }): Promise<AgentMemoryChunkRecord[]>;
 
   listChannelAccounts(input: {
     organizationId: string;

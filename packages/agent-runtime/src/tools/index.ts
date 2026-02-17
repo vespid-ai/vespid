@@ -1,9 +1,17 @@
 import { connectorActionTool, parseConnectorToolId } from "./connector-tool.js";
+import { memoryGetTool, memorySearchTool } from "./memory-tools.js";
 import { shellRunTool } from "./shell-tool.js";
 import { teamDelegateTool, teamMapTool } from "./team-tools.js";
 import type { AgentToolDefinition } from "./types.js";
 
-const toolRegistry: AgentToolDefinition[] = [connectorActionTool, shellRunTool, teamDelegateTool, teamMapTool];
+const toolRegistry: AgentToolDefinition[] = [
+  connectorActionTool,
+  shellRunTool,
+  teamDelegateTool,
+  teamMapTool,
+  memorySearchTool,
+  memoryGetTool,
+];
 
 export function resolveAgentTool(toolId: string): { tool: AgentToolDefinition; args: Record<string, unknown> } | null {
   // Tool aliases:
@@ -11,6 +19,12 @@ export function resolveAgentTool(toolId: string): { tool: AgentToolDefinition; a
   // - shell.run -> shell.run
   if (toolId === "shell.run") {
     return { tool: shellRunTool, args: {} as Record<string, unknown> };
+  }
+  if (toolId === "memory.search") {
+    return { tool: memorySearchTool, args: {} as Record<string, unknown> };
+  }
+  if (toolId === "memory.get") {
+    return { tool: memoryGetTool, args: {} as Record<string, unknown> };
   }
 
   const connector = parseConnectorToolId(toolId);

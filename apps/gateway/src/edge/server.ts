@@ -26,6 +26,7 @@ import type {
   GatewayDispatchResponse,
   GatewayExecutorHelloV2,
   GatewayInvokeToolV2,
+  SessionAttachmentV2,
   GatewayToolEventV2,
   GatewayToolResultV2,
 } from "@vespid/shared";
@@ -49,7 +50,7 @@ type ConnectedExecutor = {
   name: string | null;
   labels: string[];
   maxInFlight: number;
-  kinds: Array<"connector.action" | "agent.execute">;
+  kinds: Array<"connector.action" | "agent.execute" | "agent.run">;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -197,16 +198,42 @@ function normalizeEventLevel(level: unknown): "info" | "warn" | "error" {
   return level === "warn" || level === "error" ? level : "info";
 }
 
+function normalizeSessionAttachments(
+  attachments:
+    | Array<{
+        name: string;
+        mimeType: string;
+        contentUrl?: string | null | undefined;
+        contentText?: string | null | undefined;
+        metadata?: Record<string, unknown> | undefined;
+      }>
+    | undefined
+): SessionAttachmentV2[] | undefined {
+  if (!attachments || attachments.length === 0) {
+    return undefined;
+  }
+  return attachments.map((item) => ({
+    name: item.name,
+    mimeType: item.mimeType,
+    ...(item.contentUrl !== undefined ? { contentUrl: item.contentUrl } : {}),
+    ...(item.contentText !== undefined ? { contentText: item.contentText } : {}),
+    ...(item.metadata !== undefined ? { metadata: item.metadata } : {}),
+  }));
+}
+
 function uniqueStrings(values: unknown[]): string[] {
   return [...new Set(values.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()))];
 }
 
-function parseKinds(capabilities: unknown): Array<"connector.action" | "agent.execute"> {
+function parseKinds(capabilities: unknown): Array<"connector.action" | "agent.execute" | "agent.run"> {
   const kindsRaw = capabilities && typeof capabilities === "object" ? (capabilities as any).kinds : null;
   const parsed = Array.isArray(kindsRaw)
-    ? kindsRaw.filter((k): k is "connector.action" | "agent.execute" => k === "connector.action" || k === "agent.execute")
+    ? kindsRaw.filter(
+        (k): k is "connector.action" | "agent.execute" | "agent.run" =>
+          k === "connector.action" || k === "agent.execute" || k === "agent.run"
+      )
     : [];
-  return parsed.length > 0 ? parsed : ["agent.execute", "connector.action"];
+  return parsed.length > 0 ? parsed : ["agent.execute", "connector.action", "agent.run"];
 }
 
 function parseMaxInFlight(capabilities: unknown, fallback: number): number {
@@ -252,6 +279,30 @@ const internalChannelTestSendSchema = z
   })
   .strict();
 
+const internalSessionSendSchema = z
+  .object({
+    organizationId: z.string().uuid(),
+    userId: z.string().uuid(),
+    sessionId: z.string().uuid(),
+    userEventSeq: z.number().int().min(0),
+    message: z.string().min(1).max(50_000),
+    attachments: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(200),
+          mimeType: z.string().min(1).max(120),
+          contentUrl: z.string().url().optional().nullable(),
+          contentText: z.string().max(100_000).optional().nullable(),
+          metadata: z.record(z.string().min(1), z.unknown()).optional(),
+        })
+      )
+      .max(32)
+      .optional(),
+    idempotencyKey: z.string().min(1).max(200).optional().nullable(),
+    originEdgeId: z.string().min(1).optional(),
+  })
+  .strict();
+
 export async function buildGatewayEdgeServer(input?: {
   pool?: ReturnType<typeof createPool>;
   serviceToken?: string;
@@ -264,7 +315,15 @@ export async function buildGatewayEdgeServer(input?: {
     logger: {
       level: process.env.GATEWAY_LOG_LEVEL ?? (process.env.NODE_ENV === "test" ? "silent" : "info"),
       redact: {
-        paths: ["req.headers.authorization", "req.headers.cookie", "req.headers['x-gateway-token']", "secret", "*.secret"],
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          "req.headers['x-gateway-token']",
+          "secret",
+          "*.secret",
+          "sessionConfig.llm.auth",
+          "*.sessionConfig.llm.auth",
+        ],
         censor: "[REDACTED]",
       },
     },
@@ -376,6 +435,17 @@ export async function buildGatewayEdgeServer(input?: {
     }
     clientStateByWs.set(input.ws, { organizationId: input.organizationId, userId: input.userId, joinedSessionId: input.sessionId });
     addClientToSession(input.sessionId, input.ws);
+    safeWsSend(input.ws, { type: "session_ack", sessionId: input.sessionId });
+    safeWsSend(input.ws, {
+      type: "session_state",
+      sessionId: input.sessionId,
+      pinnedExecutorId: (existing as any).pinnedExecutorId ?? existing.pinnedAgentId ?? null,
+      pinnedExecutorPool: (existing as any).pinnedExecutorPool ?? ((existing.pinnedAgentId ?? null) ? "byon" : null),
+      pinnedAgentId: existing.pinnedAgentId ?? null,
+      routedAgentId: (existing as any).routedAgentId ?? null,
+      scope: (existing as any).scope ?? "main",
+      executionMode: "pinned-node-host",
+    });
 
     // Track presence for cross-edge broadcast.
     try {
@@ -457,11 +527,58 @@ export async function buildGatewayEdgeServer(input?: {
             continue;
           }
 
+          if (cmd.type === "executor_session") {
+            const exec = executorsById.get(cmd.executorId) ?? null;
+            if (!exec) {
+              await redis.set(
+                replyKey(cmd.payload.requestId),
+                safeJsonStringify({ status: "failed", error: REMOTE_EXEC_ERROR.PinnedAgentOffline }),
+                "EX",
+                resultsTtlSec
+              );
+              continue;
+            }
+            safeWsSend(exec.ws, cmd.payload);
+            continue;
+          }
+
           if (cmd.type === "client_broadcast") {
             const set = sessionClientsBySessionId.get(cmd.sessionId);
             if (!set) continue;
             for (const ws of set) {
               safeWsSend(ws, cmd.event);
+            }
+            continue;
+          }
+
+          if (cmd.type === "session_state") {
+            const set = sessionClientsBySessionId.get(cmd.sessionId);
+            if (!set) continue;
+            for (const ws of set) {
+              safeWsSend(ws, {
+                type: "session_state",
+                sessionId: cmd.sessionId,
+                pinnedExecutorId: cmd.pinnedExecutorId,
+                pinnedExecutorPool: cmd.pinnedExecutorPool,
+                pinnedAgentId: cmd.pinnedAgentId,
+                routedAgentId: cmd.routedAgentId,
+                scope: cmd.scope,
+                executionMode: cmd.executionMode,
+              });
+            }
+            continue;
+          }
+
+          if (cmd.type === "session_error") {
+            const set = sessionClientsBySessionId.get(cmd.sessionId);
+            if (!set) continue;
+            for (const ws of set) {
+              safeWsSend(ws, {
+                type: "session_error",
+                sessionId: cmd.sessionId,
+                code: cmd.code,
+                message: cmd.message,
+              });
             }
             continue;
           }
@@ -527,6 +644,34 @@ export async function buildGatewayEdgeServer(input?: {
       ok: true,
       result,
     });
+  });
+
+  server.post("/internal/v1/sessions/send", async (request, reply) => {
+    const token = request.headers["x-gateway-token"];
+    if (typeof token !== "string" || token.length === 0 || token !== serviceToken) {
+      return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid gateway service token" });
+    }
+
+    const parsed = internalSessionSendSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid session send payload" });
+    }
+    const attachments = normalizeSessionAttachments(parsed.data.attachments);
+
+    const msg: EdgeToBrainRequest = {
+      type: "session_send",
+      requestId: `${parsed.data.sessionId}:turn:${parsed.data.userEventSeq}`,
+      organizationId: parsed.data.organizationId,
+      userId: parsed.data.userId,
+      sessionId: parsed.data.sessionId,
+      userEventSeq: parsed.data.userEventSeq,
+      message: parsed.data.message,
+      ...(attachments ? { attachments } : {}),
+      ...(parsed.data.idempotencyKey ? { idempotencyKey: parsed.data.idempotencyKey } : {}),
+      originEdgeId: parsed.data.originEdgeId ?? edgeId,
+    };
+    await xaddJson(redis, streamToBrain(), msg);
+    return reply.status(202).send({ accepted: true });
   });
 
   server.post("/internal/v1/dispatch", async (request, reply) => {
@@ -654,12 +799,26 @@ export async function buildGatewayEdgeServer(input?: {
             type: z.literal("session_send"),
             sessionId: z.string().uuid(),
             message: z.string().min(1).max(50_000),
+            attachments: z
+              .array(
+                z.object({
+                  name: z.string().min(1).max(200),
+                  mimeType: z.string().min(1).max(120),
+                  contentUrl: z.string().url().optional().nullable(),
+                  contentText: z.string().max(100_000).optional().nullable(),
+                  metadata: z.record(z.string().min(1), z.unknown()).optional(),
+                })
+              )
+              .max(32)
+              .optional(),
+            idempotencyKey: z.string().min(1).max(200).optional(),
           })
           .safeParse(message);
         if (!parsed.success) {
           safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_send payload" });
           return;
         }
+        const attachments = normalizeSessionAttachments(parsed.data.attachments);
 
         const session = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
           getAgentSessionById(db, { organizationId: context.organizationId, sessionId: parsed.data.sessionId })
@@ -675,7 +834,8 @@ export async function buildGatewayEdgeServer(input?: {
             sessionId: parsed.data.sessionId,
             eventType: "user_message",
             level: "info",
-            payload: { message: parsed.data.message },
+            ...(parsed.data.idempotencyKey ? { idempotencyKey: parsed.data.idempotencyKey } : {}),
+            payload: { message: parsed.data.message, attachments: attachments ?? [] },
           })
         );
 
@@ -700,10 +860,51 @@ export async function buildGatewayEdgeServer(input?: {
           userId: context.userId,
           sessionId: parsed.data.sessionId,
           userEventSeq: userEvent.seq,
+          message: parsed.data.message,
+          ...(attachments ? { attachments } : {}),
+          ...(parsed.data.idempotencyKey ? { idempotencyKey: parsed.data.idempotencyKey } : {}),
           originEdgeId: edgeId,
         };
         await xaddJson(redis, streamToBrain(), msg);
         return;
+      }
+
+      if (type === "session_reset_agent") {
+        const parsed = z
+          .object({
+            type: z.literal("session_reset_agent"),
+            sessionId: z.string().uuid(),
+            mode: z.enum(["keep_history", "clear_history"]).optional(),
+          })
+          .safeParse(message);
+        if (!parsed.success) {
+          safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_reset_agent payload" });
+          return;
+        }
+
+        await xaddJson(redis, streamToBrain(), {
+          type: "session_reset",
+          requestId: `${parsed.data.sessionId}:reset:${Date.now()}`,
+          organizationId: context.organizationId,
+          userId: context.userId,
+          sessionId: parsed.data.sessionId,
+          mode: parsed.data.mode ?? "keep_history",
+          originEdgeId: edgeId,
+        } satisfies EdgeToBrainRequest);
+        return;
+      }
+
+      if (type === "session_leave") {
+        const parsed = z.object({ type: z.literal("session_leave"), sessionId: z.string().uuid() }).safeParse(message);
+        if (!parsed.success) {
+          safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_leave payload" });
+          return;
+        }
+        removeClientFromSession(parsed.data.sessionId, ws);
+        const state = clientStateByWs.get(ws);
+        if (state && state.joinedSessionId === parsed.data.sessionId) {
+          clientStateByWs.set(ws, { ...state, joinedSessionId: null });
+        }
       }
     });
 
@@ -735,7 +936,7 @@ export async function buildGatewayEdgeServer(input?: {
             name: z.string().min(1).max(120).optional().nullable(),
             labels: z.array(z.string().min(1).max(64)).max(50),
             maxInFlight: z.number().int().min(1).max(200),
-            kinds: z.array(z.enum(["connector.action", "agent.execute"])).min(1),
+            kinds: z.array(z.enum(["connector.action", "agent.execute", "agent.run"])).min(1),
           })
           .safeParse(message) as { success: boolean; data?: GatewayExecutorHelloV2 };
         if (!parsed.success || !parsed.data) return;
@@ -757,7 +958,7 @@ export async function buildGatewayEdgeServer(input?: {
         executor.labels = parsed.data.labels ?? [];
         const reportedMax = parsed.data.maxInFlight ?? executor.configuredMaxInFlight;
         executor.maxInFlight = Math.max(1, Math.min(executor.configuredMaxInFlight, reportedMax));
-        executor.kinds = parsed.data.kinds ?? ["agent.execute"];
+        executor.kinds = parsed.data.kinds ?? ["agent.execute", "connector.action", "agent.run"];
         executor.name = parsed.data.name ?? null;
         await touchExecutor(executor);
         await writeExecutorRoute(executor);
@@ -804,6 +1005,120 @@ export async function buildGatewayEdgeServer(input?: {
         if (!parsed.success || !parsed.data) return;
         const msg: EdgeToBrainRequest = { type: "executor_event", executorId: executor.executorId, event: parsed.data };
         await xaddJson(redis, streamToBrain(), msg);
+        return;
+      }
+
+      if (type === "session_opened") {
+        const parsed = z
+          .object({
+            type: z.literal("session_opened"),
+            requestId: z.string().min(1),
+            sessionId: z.string().uuid(),
+          })
+          .safeParse(message);
+        if (!parsed.success) return;
+        await redis.set(replyKey(parsed.data.requestId), safeJsonStringify({ status: "ok", sessionId: parsed.data.sessionId }), "EX", resultsTtlSec);
+        return;
+      }
+
+      if (type === "turn_final") {
+        const parsed = z
+          .object({
+            type: z.literal("turn_final"),
+            requestId: z.string().min(1),
+            sessionId: z.string().uuid(),
+            content: z.string(),
+            payload: z.unknown().optional(),
+          })
+          .safeParse(message);
+        if (!parsed.success) return;
+        await redis.set(
+          replyKey(parsed.data.requestId),
+          safeJsonStringify({
+            status: "succeeded",
+            sessionId: parsed.data.sessionId,
+            content: parsed.data.content,
+            ...(parsed.data.payload !== undefined ? { payload: parsed.data.payload } : {}),
+          }),
+          "EX",
+          resultsTtlSec
+        );
+        return;
+      }
+
+      if (type === "turn_error") {
+        const parsed = z
+          .object({
+            type: z.literal("turn_error"),
+            requestId: z.string().min(1),
+            sessionId: z.string().uuid(),
+            code: z.string().min(1),
+            message: z.string().min(1),
+          })
+          .safeParse(message);
+        if (!parsed.success) return;
+        await redis.set(
+          replyKey(parsed.data.requestId),
+          safeJsonStringify({
+            status: "failed",
+            sessionId: parsed.data.sessionId,
+            code: parsed.data.code,
+            error: parsed.data.message,
+          }),
+          "EX",
+          resultsTtlSec
+        );
+        return;
+      }
+
+      if (type === "memory_sync_result") {
+        const parsed = z
+          .object({
+            type: z.literal("memory_sync_result"),
+            requestId: z.string().min(1),
+            sessionId: z.string().uuid(),
+            status: z.enum(["ok", "failed"]),
+            details: z.unknown().optional(),
+          })
+          .safeParse(message);
+        if (!parsed.success) return;
+        await redis.set(
+          replyKey(parsed.data.requestId),
+          safeJsonStringify({
+            status: parsed.data.status === "ok" ? "succeeded" : "failed",
+            sessionId: parsed.data.sessionId,
+            ...(parsed.data.details !== undefined ? { details: parsed.data.details } : {}),
+          }),
+          "EX",
+          resultsTtlSec
+        );
+        return;
+      }
+
+      if (type === "memory_query_result") {
+        const parsed = z
+          .object({
+            type: z.literal("memory_query_result"),
+            requestId: z.string().min(1),
+            sessionId: z.string().uuid(),
+            status: z.enum(["ok", "failed"]),
+            results: z.array(z.unknown()).optional(),
+            error: z.string().min(1).optional(),
+          })
+          .safeParse(message);
+        if (!parsed.success) return;
+        await redis.set(
+          replyKey(parsed.data.requestId),
+          safeJsonStringify({
+            status: parsed.data.status === "ok" ? "succeeded" : "failed",
+            sessionId: parsed.data.sessionId,
+            ...(parsed.data.results ? { results: parsed.data.results } : {}),
+            ...(parsed.data.error ? { error: parsed.data.error } : {}),
+          }),
+          "EX",
+          resultsTtlSec
+        );
+        return;
       }
     });
 
@@ -855,7 +1170,7 @@ export async function buildGatewayEdgeServer(input?: {
       return;
     }
 
-    if (url.pathname === "/ws/executor") {
+    if (url.pathname === "/ws/executor" || url.pathname === "/ws") {
       const token = parseBearerToken(req.headers.authorization);
       if (!token) {
         socket.destroy();

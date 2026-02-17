@@ -4,14 +4,13 @@ import { Redis } from "ioredis";
 import { z } from "zod";
 import {
   appendAgentSessionEvent,
+  setAgentSessionPinnedAgent,
   createExecutionWorkspace,
   createPool,
   getAgentSessionById,
   getConnectorSecretById,
   getExecutionWorkspaceByOwner,
   getOrganizationById,
-  listAgentSessionEventsTail,
-  setAgentSessionRuntime,
   tryLockExecutionWorkspace,
   commitExecutionWorkspaceVersion,
   withTenantContext,
@@ -19,6 +18,7 @@ import {
 import { runAgentLoop } from "@vespid/agent-runtime";
 import {
   REMOTE_EXEC_ERROR,
+  type GatewayExecutionKind,
   type ExecutorSelectorV1,
   type GatewayBrainSessionEventV2,
   type GatewayDispatchResponse,
@@ -86,6 +86,7 @@ type SelectedExecutor = {
   executorId: string;
   edgeId: string;
   maxInFlight: number;
+  pool: "managed" | "byon";
 };
 
 type SelectExecutorResult =
@@ -94,7 +95,7 @@ type SelectExecutorResult =
 
 async function selectExecutorForTool(redis: Redis, input: {
   organizationId: string;
-  kind: GatewayToolKind;
+  kind: GatewayExecutionKind;
   selector?: ExecutorSelectorV1 | null;
   orgMaxInFlight: number;
   reserveTtlMs: number;
@@ -147,7 +148,7 @@ async function selectExecutorForTool(redis: Redis, input: {
       return { ok: false, error: reserved.reason === "ORG_QUOTA_EXCEEDED" ? "ORG_QUOTA_EXCEEDED" : "EXECUTOR_OVER_CAPACITY" };
     }
     await markExecutorUsed(redis, match.executorId);
-    return { ok: true, selected: { executorId: match.executorId, edgeId: match.edgeId, maxInFlight } };
+    return { ok: true, selected: { executorId: match.executorId, edgeId: match.edgeId, maxInFlight, pool: match.pool } };
   }
 
   const routes = await listExecutorRoutes(redis, listInput);
@@ -190,7 +191,7 @@ async function selectExecutorForTool(redis: Redis, input: {
       continue;
     }
     await markExecutorUsed(redis, entry.r.executorId);
-    return { ok: true, selected: { executorId: entry.r.executorId, edgeId: entry.r.edgeId, maxInFlight } };
+    return { ok: true, selected: { executorId: entry.r.executorId, edgeId: entry.r.edgeId, maxInFlight, pool: entry.r.pool } };
   }
 
   if (sawOrgQuotaExceeded) return { ok: false, error: "ORG_QUOTA_EXCEEDED" };
@@ -198,26 +199,55 @@ async function selectExecutorForTool(redis: Redis, input: {
   return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
 }
 
-function buildSessionTranscript(events: Array<{ eventType: string; payload: any; level: string }>) {
-  const steps: any[] = [];
-  for (const e of events) {
-    if (e.eventType === "user_message") {
-      steps.push({ role: "user", content: typeof e.payload?.message === "string" ? e.payload.message : safeJsonStringify(e.payload ?? null) });
-      continue;
-    }
-    if (e.eventType === "agent_message" || e.eventType === "agent_delta") {
-      const content =
-        typeof e.payload?.message === "string"
-          ? e.payload.message
-          : typeof e.payload?.content === "string"
-            ? e.payload.content
-            : safeJsonStringify(e.payload ?? null);
-      steps.push({ role: "assistant", content });
-      continue;
-    }
-    steps.push({ type: e.eventType, level: e.level, payload: e.payload ?? null });
+function resolveSessionPoolOrder(selector: ExecutorSelectorV1 | null | undefined): Array<"byon" | "managed"> {
+  if (selector?.pool === "managed") {
+    return ["managed"];
   }
-  return steps;
+  return ["byon", "managed"];
+}
+
+async function selectSessionExecutor(redis: Redis, input: {
+  organizationId: string;
+  selector: ExecutorSelectorV1 | null | undefined;
+  orgMaxInFlight: number;
+  reserveTtlMs: number;
+}): Promise<SelectExecutorResult> {
+  const poolOrder = resolveSessionPoolOrder(input.selector);
+  let sawExecutorOverCapacity = false;
+  let sawNoExecutor = false;
+
+  for (const pool of poolOrder) {
+    const selection = await selectExecutorForTool(redis, {
+      organizationId: input.organizationId,
+      kind: "agent.run",
+      selector: {
+        ...(input.selector ?? { pool }),
+        pool,
+      },
+      orgMaxInFlight: input.orgMaxInFlight,
+      reserveTtlMs: input.reserveTtlMs,
+    });
+    if (selection.ok) {
+      return selection;
+    }
+    if (selection.error === "ORG_QUOTA_EXCEEDED") {
+      return selection;
+    }
+    if (selection.error === "EXECUTOR_OVER_CAPACITY") {
+      sawExecutorOverCapacity = true;
+    }
+    if (selection.error === "NO_EXECUTOR_AVAILABLE") {
+      sawNoExecutor = true;
+    }
+  }
+
+  if (sawExecutorOverCapacity) {
+    return { ok: false, error: "EXECUTOR_OVER_CAPACITY" };
+  }
+  if (sawNoExecutor) {
+    return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
+  }
+  return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
 }
 
 function normalizeEventLevel(level: unknown): "info" | "warn" | "error" {
@@ -389,6 +419,17 @@ export async function startGatewayBrainRuntime(input?: {
     const edgeIds = await redis.smembers(sessionEdgesKey(sessionId));
     for (const edgeId of edgeIds) {
       await xaddJson(redis, streamToEdge(edgeId), { type: "client_broadcast", sessionId, event });
+    }
+  }
+
+  async function broadcastRawToSessionEdges(sessionId: string, payload: unknown) {
+    const edgeIds = await redis.smembers(sessionEdgesKey(sessionId));
+    for (const edgeId of edgeIds) {
+      await xaddJson(redis, streamToEdge(edgeId), {
+        type: "client_broadcast",
+        sessionId,
+        event: payload,
+      });
     }
   }
 
@@ -725,164 +766,492 @@ export async function startGatewayBrainRuntime(input?: {
       return;
     }
 
+    let selectedExecutor: SelectedExecutor | null = null;
     try {
-      const session = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+      let session = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
         getAgentSessionById(db, { organizationId: msg.organizationId, sessionId: msg.sessionId })
       );
       if (!session) {
         return;
       }
 
-      const orgRow = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
-        getOrganizationById(db, { organizationId: msg.organizationId })
-      );
-      const organizationSettings = orgRow ? orgRow.settings : null;
+      const failSession = async (inputErr: { code: string; message: string }) => {
+        const errorEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+          appendAgentSessionEvent(db, {
+            organizationId: msg.organizationId,
+            sessionId: msg.sessionId,
+            eventType: "error",
+            level: "error",
+            payload: { code: inputErr.code, message: inputErr.message },
+          })
+        );
+        await broadcastToSessionEdges(msg.sessionId, {
+          type: "session_event_v2",
+          sessionId: msg.sessionId,
+          seq: errorEvent.seq,
+          eventType: errorEvent.eventType,
+          level: normalizeEventLevel(errorEvent.level),
+          payload: errorEvent.payload ?? null,
+          createdAt: errorEvent.createdAt.toISOString(),
+        });
+        await broadcastRawToSessionEdges(msg.sessionId, {
+          type: "session_error",
+          sessionId: msg.sessionId,
+          code: inputErr.code,
+          message: inputErr.message,
+        });
+      };
 
-      const tail = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
-        listAgentSessionEventsTail(db, { organizationId: msg.organizationId, sessionId: msg.sessionId, limit: 50 })
-      );
-      const steps = buildSessionTranscript(tail.map((e) => ({ eventType: e.eventType, payload: e.payload, level: e.level })));
+      const selectorRaw =
+        (session as any).executorSelector && typeof (session as any).executorSelector === "object"
+          ? ((session as any).executorSelector as Record<string, unknown>)
+          : null;
+      const selectorPoolRaw = selectorRaw?.pool;
+      const selectorPool = selectorPoolRaw === "managed" || selectorPoolRaw === "byon" ? selectorPoolRaw : null;
+      const selector: ExecutorSelectorV1 | null = selectorPool
+        ? ({
+            pool: selectorPool,
+            ...(Array.isArray(selectorRaw?.labels)
+              ? { labels: selectorRaw.labels.filter((label): label is string => typeof label === "string") }
+              : {}),
+            ...(typeof selectorRaw?.group === "string" ? { group: selectorRaw.group } : {}),
+            ...(typeof selectorRaw?.tag === "string" ? { tag: selectorRaw.tag } : {}),
+            ...(typeof selectorRaw?.executorId === "string" ? { executorId: selectorRaw.executorId } : {}),
+          } as ExecutorSelectorV1)
+        : null;
 
-      const toolsAllow = Array.isArray((session as any).toolsAllow) ? ((session as any).toolsAllow as any[]).filter((t) => typeof t === "string") : [];
       const limitsRaw = session.limits;
       const limits = typeof limitsRaw === "object" && limitsRaw && !Array.isArray(limitsRaw) ? (limitsRaw as any) : {};
       const timeoutMs = typeof limits.timeoutMs === "number" ? limits.timeoutMs : 60_000;
-      const sessionEngineId = session.engineId ?? "gateway.loop.v2";
-      const sessionLlmProvider =
-        sessionEngineId === "gateway.codex.v2"
-          ? "openai"
-          : sessionEngineId === "gateway.claude.v2"
-            ? "anthropic"
-            : (session.llmProvider as any);
+      const orgMaxInFlight = await getOrgMaxInFlight(msg.organizationId);
 
-      let runtime: any = session.runtime && typeof session.runtime === "object" ? session.runtime : {};
-      let pendingRemoteResult: unknown = null;
-      const runInput = { messageSeq: msg.userEventSeq };
+      const existingPinnedExecutorId =
+        typeof (session as any).pinnedExecutorId === "string" && (session as any).pinnedExecutorId.length > 0
+          ? ((session as any).pinnedExecutorId as string)
+          : (session.pinnedAgentId ?? null);
+      const pinnedPoolRaw = (session as any).pinnedExecutorPool;
+      const existingPinnedExecutorPool: "managed" | "byon" | null =
+        pinnedPoolRaw === "managed" || pinnedPoolRaw === "byon" ? pinnedPoolRaw : existingPinnedExecutorId ? "byon" : null;
+      const priorPinned =
+        existingPinnedExecutorId && existingPinnedExecutorPool
+          ? { executorId: existingPinnedExecutorId, pool: existingPinnedExecutorPool }
+          : null;
 
-      for (;;) {
-        const result = await runAgentLoop({
+      if (priorPinned) {
+        const pinnedSelection = await selectExecutorForTool(redis, {
           organizationId: msg.organizationId,
-          workflowId: msg.sessionId,
-          runId: msg.sessionId,
-          attemptCount: msg.userEventSeq + 1,
-          requestedByUserId: msg.userId,
-          nodeId: "agent",
-          nodeType: "agent.run",
-          runInput,
-          steps,
-          organizationSettings,
-          runtime,
-          pendingRemoteResult,
-          githubApiBaseUrl: process.env.GITHUB_API_BASE_URL ?? "https://api.github.com",
-          loadSecretValue: ({ organizationId, userId, secretId }) => loadSecretValueFromDb({ pool, organizationId, userId, secretId }),
-          fetchImpl: fetch,
-          llmInvoke: invokeViaEngineRunner,
-          config: {
-            llm: { provider: sessionLlmProvider as any, model: session.llmModel, auth: { fallbackToEnv: true } },
-            prompt: { ...(session.promptSystem ? { system: session.promptSystem } : {}), instructions: session.promptInstructions },
-            tools: { allow: toolsAllow, execution: "executor" },
-            limits: {
-              maxTurns: typeof limits.maxTurns === "number" ? limits.maxTurns : 8,
-              maxToolCalls: typeof limits.maxToolCalls === "number" ? limits.maxToolCalls : 20,
-              timeoutMs,
-              maxOutputChars: typeof limits.maxOutputChars === "number" ? limits.maxOutputChars : 50_000,
-              maxRuntimeChars: typeof limits.maxRuntimeChars === "number" ? limits.maxRuntimeChars : 200_000,
-            },
-            output: { mode: "text" },
+          kind: "agent.run",
+          selector: {
+            pool: priorPinned.pool,
+            executorId: priorPinned.executorId,
           },
-          persistNodeId: "agent",
-          allowRemoteBlocked: true,
+          orgMaxInFlight,
+          reserveTtlMs,
         });
-
-        if ((result as any).runtime && typeof (result as any).runtime === "object") {
-          runtime = (result as any).runtime;
-          await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
-            setAgentSessionRuntime(db, { organizationId: msg.organizationId, sessionId: msg.sessionId, runtime })
-          );
-        }
-
-        if (result.status === "succeeded") {
-          const out = result.output ?? null;
-          const outText = typeof out === "string" ? out : safeJsonStringify(out);
-          const agentEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
-            appendAgentSessionEvent(db, {
-              organizationId: msg.organizationId,
-              sessionId: msg.sessionId,
-              eventType: "agent_message",
-              level: "info",
-              payload: { message: outText },
-            })
-          );
-          await broadcastToSessionEdges(msg.sessionId, {
-            type: "session_event_v2",
-            sessionId: msg.sessionId,
-            seq: agentEvent.seq,
-            eventType: agentEvent.eventType,
-            level: normalizeEventLevel(agentEvent.level),
-            payload: agentEvent.payload ?? null,
-            createdAt: agentEvent.createdAt.toISOString(),
-          });
-          if (msg.source && msg.originEdgeId && outText.length > 0) {
-            await xaddJson(redis, streamToEdge(msg.originEdgeId), {
-              type: "channel_outbound",
-              organizationId: msg.organizationId,
-              sessionId: msg.sessionId,
-              sessionEventSeq: agentEvent.seq,
-              source: msg.source,
-              text: outText,
-            });
-          }
-          return;
-        }
-
-        if (result.status === "failed") {
-          const err = result.error ?? "AGENT_FAILED";
-          const errorEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
-            appendAgentSessionEvent(db, { organizationId: msg.organizationId, sessionId: msg.sessionId, eventType: "error", level: "error", payload: { code: err } })
-          );
-          await broadcastToSessionEdges(msg.sessionId, {
-            type: "session_event_v2",
-            sessionId: msg.sessionId,
-            seq: errorEvent.seq,
-            eventType: errorEvent.eventType,
-            level: normalizeEventLevel(errorEvent.level),
-            payload: errorEvent.payload ?? null,
-            createdAt: errorEvent.createdAt.toISOString(),
+        if (pinnedSelection.ok) {
+          selectedExecutor = pinnedSelection.selected;
+        } else if (pinnedSelection.error === "ORG_QUOTA_EXCEEDED") {
+          await failSession({
+            code: "ORG_QUOTA_EXCEEDED",
+            message: "Organization concurrent execution quota exceeded.",
           });
           return;
         }
+      }
 
-        if (result.status !== "blocked") {
-          return;
-        }
-
-        const block = (result as any).block;
-        const kind = block?.kind as GatewayToolKind;
-        if (kind !== "agent.execute" && kind !== "connector.action") {
-          throw new Error("INVALID_SESSION_BLOCK_KIND");
-        }
-        const toolRes = await invokeToolOnExecutor({
+      if (!selectedExecutor) {
+        const selected = await selectSessionExecutor(redis, {
           organizationId: msg.organizationId,
-          userId: msg.userId,
-          selector:
-            (block?.executorSelector as ExecutorSelectorV1 | null | undefined) ??
-            (((session as any).executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "managed" }),
-          kind,
-          payload: block.payload,
-          ...(typeof block.secret === "string" ? { secret: block.secret } : {}),
-          timeoutMs,
-          networkMode: "none",
-          workspaceOwner: { ownerType: "session", ownerId: msg.sessionId },
+          selector,
+          orgMaxInFlight,
+          reserveTtlMs,
         });
-        pendingRemoteResult = { requestId: msg.requestId, result: toolRes };
+        if (!selected.ok) {
+          if (selected.error === "ORG_QUOTA_EXCEEDED") {
+            await failSession({
+              code: "ORG_QUOTA_EXCEEDED",
+              message: "Organization concurrent execution quota exceeded.",
+            });
+            return;
+          }
+          if (selected.error === "EXECUTOR_OVER_CAPACITY") {
+            await failSession({
+              code: "EXECUTOR_OVER_CAPACITY",
+              message: "No available capacity on executor pool.",
+            });
+            return;
+          }
+          await failSession({
+            code: REMOTE_EXEC_ERROR.NoAgentAvailable,
+            message: "No node-host is currently available for this session.",
+          });
+          return;
+        }
+        selectedExecutor = selected.selected;
+      }
+      if (!selectedExecutor) {
+        await failSession({
+          code: REMOTE_EXEC_ERROR.NoAgentAvailable,
+          message: "No node-host is currently available for this session.",
+        });
+        return;
+      }
+      const executor = selectedExecutor;
+
+      const pinnedChanged = Boolean(
+        priorPinned?.executorId !== executor.executorId || priorPinned?.pool !== executor.pool
+      );
+      const shouldPersistPin = Boolean(
+        (session as any).pinnedExecutorId !== executor.executorId ||
+          (session as any).pinnedExecutorPool !== executor.pool ||
+          session.pinnedAgentId !== executor.executorId
+      );
+      if (shouldPersistPin) {
+        const updated = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+          setAgentSessionPinnedAgent(db, {
+            organizationId: msg.organizationId,
+            sessionId: msg.sessionId,
+            pinnedAgentId: executor.executorId,
+            pinnedExecutorId: executor.executorId,
+            pinnedExecutorPool: executor.pool,
+          })
+        );
+        if (updated) {
+          session = updated;
+        }
+        await broadcastRawToSessionEdges(msg.sessionId, {
+          type: "session_state",
+          sessionId: msg.sessionId,
+          pinnedExecutorId: executor.executorId,
+          pinnedExecutorPool: executor.pool,
+          pinnedAgentId: executor.executorId,
+          routedAgentId: (session as any).routedAgentId ?? null,
+          scope: (session as any).scope ?? "main",
+          executionMode: "pinned-node-host",
+        });
+      }
+
+      if (priorPinned && pinnedChanged) {
+        const failoverEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+          appendAgentSessionEvent(db, {
+            organizationId: msg.organizationId,
+            sessionId: msg.sessionId,
+            eventType: "system",
+            level: "warn",
+            payload: {
+              action: "session_executor_failover",
+              from: {
+                executorId: priorPinned.executorId,
+                pool: priorPinned.pool,
+              },
+              to: {
+                executorId: executor.executorId,
+                pool: executor.pool,
+              },
+            },
+          })
+        );
+        await broadcastToSessionEdges(msg.sessionId, {
+          type: "session_event_v2",
+          sessionId: msg.sessionId,
+          seq: failoverEvent.seq,
+          eventType: failoverEvent.eventType,
+          level: normalizeEventLevel(failoverEvent.level),
+          payload: failoverEvent.payload ?? null,
+          createdAt: failoverEvent.createdAt.toISOString(),
+        });
+      }
+
+      const sessionKey =
+        typeof (session as any).sessionKey === "string" && (session as any).sessionKey.length > 0
+          ? ((session as any).sessionKey as string)
+          : `session:${msg.sessionId}`;
+      const routedAgentId =
+        typeof (session as any).routedAgentId === "string" && (session as any).routedAgentId.length > 0
+          ? ((session as any).routedAgentId as string)
+          : selectedExecutor.executorId;
+      if (!routedAgentId) {
+        await failSession({
+          code: REMOTE_EXEC_ERROR.NoAgentAvailable,
+          message: "No routed agent was resolved for this session.",
+        });
+        return;
+      }
+
+      const providerRaw = typeof (session as any).llmProvider === "string" ? (session as any).llmProvider : "openai";
+      const llmProvider = providerRaw === "anthropic" || providerRaw === "gemini" || providerRaw === "vertex" ? providerRaw : "openai";
+      let llmAuthMode: "env" | "inline_api_key" | "inline_vertex_oauth" = "env";
+      let llmAuth:
+        | {
+            kind: "api_key";
+            apiKey: string;
+          }
+        | {
+            kind: "vertex_oauth";
+            refreshToken: string;
+            projectId: string;
+            location: string;
+          }
+        | undefined;
+
+      if (selectedExecutor.pool === "managed") {
+        const llmSecretId = typeof (session as any).llmSecretId === "string" ? ((session as any).llmSecretId as string) : null;
+        if (llmSecretId) {
+          const secretValue = (await loadSecretValueFromDb({
+            pool,
+            organizationId: msg.organizationId,
+            userId: msg.userId,
+            secretId: llmSecretId,
+          })).trim();
+          if (secretValue.length > 0) {
+            if (llmProvider === "vertex") {
+              try {
+                const parsed = JSON.parse(secretValue) as Record<string, unknown>;
+                if (
+                  typeof parsed.refreshToken === "string" &&
+                  typeof parsed.projectId === "string" &&
+                  typeof parsed.location === "string"
+                ) {
+                  llmAuthMode = "inline_vertex_oauth";
+                  llmAuth = {
+                    kind: "vertex_oauth",
+                    refreshToken: parsed.refreshToken,
+                    projectId: parsed.projectId,
+                    location: parsed.location,
+                  };
+                }
+              } catch {
+                // Keep env mode when secret shape is not vertex oauth payload.
+              }
+            } else {
+              llmAuthMode = "inline_api_key";
+              llmAuth = {
+                kind: "api_key",
+                apiKey: secretValue,
+              };
+            }
+          }
+        }
+      }
+
+      const toolsAllowRaw = Array.isArray((session as any).toolsAllow) ? ((session as any).toolsAllow as string[]) : [];
+      const managedSafeTools = new Set(["memory.search", "memory.get", "memory_search", "memory_get"]);
+      const toolsAllow =
+        selectedExecutor.pool === "managed"
+          ? toolsAllowRaw.filter((toolId) => managedSafeTools.has(toolId))
+          : toolsAllowRaw;
+      const memoryProviderRaw = limits.memoryProvider;
+      const memoryProvider = memoryProviderRaw === "qmd" ? "qmd" : "builtin";
+      const sessionLimits = {
+        maxTurns: typeof limits.maxTurns === "number" ? Math.max(1, Math.floor(limits.maxTurns)) : 8,
+        maxToolCalls: typeof limits.maxToolCalls === "number" ? Math.max(0, Math.floor(limits.maxToolCalls)) : 20,
+        timeoutMs,
+        maxOutputChars: typeof limits.maxOutputChars === "number" ? Math.max(256, Math.floor(limits.maxOutputChars)) : 100_000,
+        maxRuntimeChars: typeof limits.maxRuntimeChars === "number" ? Math.max(10_000, Math.floor(limits.maxRuntimeChars)) : 300_000,
+      };
+
+      const openRequestId = `${msg.requestId}:open`;
+      await xaddJson(redis, streamToEdge(selectedExecutor.edgeId), {
+        type: "executor_session",
+        executorId: selectedExecutor.executorId,
+        payload: {
+          type: "session_open",
+          requestId: openRequestId,
+          organizationId: msg.organizationId,
+          sessionId: msg.sessionId,
+          sessionKey,
+          routedAgentId,
+          userId: msg.userId,
+          sessionConfig: {
+            engineId: typeof (session as any).engineId === "string" ? (session as any).engineId : "gateway.loop.v2",
+            llm: {
+              provider: llmProvider,
+              model: typeof (session as any).llmModel === "string" ? (session as any).llmModel : "gpt-4.1-mini",
+              authMode: selectedExecutor.pool === "managed" ? llmAuthMode : "env",
+              ...(selectedExecutor.pool === "managed" && llmAuth ? { auth: llmAuth } : {}),
+            },
+            prompt: {
+              ...(typeof (session as any).promptSystem === "string" ? { system: (session as any).promptSystem } : {}),
+              instructions:
+                typeof (session as any).promptInstructions === "string"
+                  ? (session as any).promptInstructions
+                  : "Help me accomplish my task safely and efficiently.",
+            },
+            toolsAllow,
+            limits: sessionLimits,
+            memoryProvider,
+          },
+        },
+      });
+
+      const opened = await waitForJsonReply<{ status: "ok" | "failed"; error?: string }>(redis, openRequestId, Math.min(timeoutMs, 10_000));
+      if (!opened || opened.status !== "ok") {
+        await failSession({
+          code: selectedExecutor.pool === "byon" ? REMOTE_EXEC_ERROR.PinnedAgentOffline : REMOTE_EXEC_ERROR.NoAgentAvailable,
+          message: opened?.error ?? "Node-host could not open the session.",
+        });
+        return;
+      }
+
+      await xaddJson(redis, streamToEdge(selectedExecutor.edgeId), {
+        type: "executor_session",
+        executorId: selectedExecutor.executorId,
+        payload: {
+          type: "session_turn",
+          requestId: msg.requestId,
+          organizationId: msg.organizationId,
+          sessionId: msg.sessionId,
+          sessionKey,
+          userId: msg.userId,
+          eventSeq: msg.userEventSeq,
+          message: msg.message ?? "",
+          ...(msg.attachments ? { attachments: msg.attachments } : {}),
+        },
+      });
+
+      const turnReply = await waitForJsonReply<{ status: "succeeded" | "failed"; content?: string; payload?: unknown; error?: string; code?: string }>(
+        redis,
+        msg.requestId,
+        timeoutMs
+      );
+      if (!turnReply) {
+        await failSession({
+          code: REMOTE_EXEC_ERROR.NodeExecutionTimeout,
+          message: "Pinned node-host did not reply in time.",
+        });
+        return;
+      }
+      if (turnReply.status === "failed") {
+        await failSession({
+          code: turnReply.code ?? turnReply.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
+          message: turnReply.error ?? "Agent turn failed on pinned node-host.",
+        });
+        return;
+      }
+
+      const out = turnReply.payload ?? turnReply.content ?? null;
+      const outText =
+        typeof turnReply.content === "string"
+          ? turnReply.content
+          : typeof out === "string"
+            ? out
+            : safeJsonStringify(out);
+
+      const agentDeltaEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+        appendAgentSessionEvent(db, {
+          organizationId: msg.organizationId,
+          sessionId: msg.sessionId,
+          eventType: "agent_message",
+          level: "info",
+          payload: { message: outText, delta: true },
+        })
+      );
+      const agentFinalEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+        appendAgentSessionEvent(db, {
+          organizationId: msg.organizationId,
+          sessionId: msg.sessionId,
+          eventType: "agent_final",
+          level: "info",
+          payload: { message: outText, output: out },
+        })
+      );
+      await broadcastToSessionEdges(msg.sessionId, {
+        type: "session_event_v2",
+        sessionId: msg.sessionId,
+        seq: agentDeltaEvent.seq,
+        eventType: agentDeltaEvent.eventType,
+        level: normalizeEventLevel(agentDeltaEvent.level),
+        payload: agentDeltaEvent.payload ?? null,
+        createdAt: agentDeltaEvent.createdAt.toISOString(),
+      });
+      await broadcastToSessionEdges(msg.sessionId, {
+        type: "session_event_v2",
+        sessionId: msg.sessionId,
+        seq: agentFinalEvent.seq,
+        eventType: agentFinalEvent.eventType,
+        level: normalizeEventLevel(agentFinalEvent.level),
+        payload: agentFinalEvent.payload ?? null,
+        createdAt: agentFinalEvent.createdAt.toISOString(),
+      });
+      await broadcastRawToSessionEdges(msg.sessionId, {
+        type: "agent_delta",
+        sessionId: msg.sessionId,
+        seq: agentDeltaEvent.seq,
+        content: outText,
+        createdAt: agentDeltaEvent.createdAt.toISOString(),
+      });
+      await broadcastRawToSessionEdges(msg.sessionId, {
+        type: "agent_final",
+        sessionId: msg.sessionId,
+        seq: agentFinalEvent.seq,
+        content: outText,
+        payload: out,
+        createdAt: agentFinalEvent.createdAt.toISOString(),
+      });
+
+      if (msg.source && msg.originEdgeId && outText.length > 0) {
+        await xaddJson(redis, streamToEdge(msg.originEdgeId), {
+          type: "channel_outbound",
+          organizationId: msg.organizationId,
+          sessionId: msg.sessionId,
+          sessionEventSeq: agentFinalEvent.seq,
+          source: msg.source,
+          text: outText,
+        });
       }
     } finally {
+      if (selectedExecutor) {
+        await releaseCapacity(redis, { executorId: selectedExecutor.executorId, organizationId: msg.organizationId });
+      }
       try {
         await redis.del(lockKey);
       } catch {
         // ignore
       }
     }
+  }
+
+  async function handleSessionReset(msg: Extract<EdgeToBrainRequest, { type: "session_reset" }>) {
+    const updated = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+      setAgentSessionPinnedAgent(db, {
+        organizationId: msg.organizationId,
+        sessionId: msg.sessionId,
+        pinnedAgentId: null,
+        pinnedExecutorId: null,
+        pinnedExecutorPool: null,
+      })
+    );
+    if (!updated) {
+      return;
+    }
+    const event = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+      appendAgentSessionEvent(db, {
+        organizationId: msg.organizationId,
+        sessionId: msg.sessionId,
+        eventType: "system",
+        level: "info",
+        payload: { action: "session_reset_agent", mode: msg.mode },
+      })
+    );
+    await broadcastToSessionEdges(msg.sessionId, {
+      type: "session_event_v2",
+      sessionId: msg.sessionId,
+      seq: event.seq,
+      eventType: event.eventType,
+      level: normalizeEventLevel(event.level),
+      payload: event.payload ?? null,
+      createdAt: event.createdAt.toISOString(),
+    });
+    await broadcastRawToSessionEdges(msg.sessionId, {
+      type: "session_state",
+      sessionId: msg.sessionId,
+      pinnedExecutorId: null,
+      pinnedExecutorPool: null,
+      pinnedAgentId: null,
+      routedAgentId: (updated as any).routedAgentId ?? null,
+      scope: (updated as any).scope ?? "main",
+      executionMode: "pinned-node-host",
+    });
   }
 
   const stream = streamToBrain();
@@ -906,6 +1275,8 @@ export async function startGatewayBrainRuntime(input?: {
             await handleWorkflowDispatch(msg);
           } else if (msg.type === "session_send") {
             await handleSessionSend(msg);
+          } else if (msg.type === "session_reset") {
+            await handleSessionReset(msg);
           }
         } finally {
           try {

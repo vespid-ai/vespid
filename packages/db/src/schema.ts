@@ -309,6 +309,10 @@ export const managedExecutors = pgTable("managed_executors", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   maxInFlight: integer("max_in_flight").notNull().default(50),
+  enabled: boolean("enabled").notNull().default(true),
+  drain: boolean("drain").notNull().default(false),
+  runtimeClass: text("runtime_class").notNull().default("container"),
+  region: text("region"),
   labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
   capabilities: jsonb("capabilities"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -367,9 +371,15 @@ export const agentSessions = pgTable("agent_sessions", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  sessionKey: text("session_key").notNull().default(""),
+  scope: text("scope").notNull().default("main"),
   title: text("title").notNull().default(""),
   status: text("status").notNull().default("active"),
   pinnedAgentId: uuid("pinned_agent_id").references(() => organizationAgents.id, { onDelete: "set null" }),
+  pinnedExecutorId: uuid("pinned_executor_id"),
+  pinnedExecutorPool: text("pinned_executor_pool"),
+  routedAgentId: uuid("routed_agent_id").references(() => organizationAgents.id, { onDelete: "set null" }),
+  bindingId: uuid("binding_id"),
   selectorTag: text("selector_tag"),
   selectorGroup: text("selector_group"),
   engineId: text("engine_id").notNull().default("gateway.loop.v2"),
@@ -382,6 +392,7 @@ export const agentSessions = pgTable("agent_sessions", {
   promptSystem: text("prompt_system"),
   promptInstructions: text("prompt_instructions").notNull().default(""),
   runtime: jsonb("runtime").notNull().default(sql`'{}'::jsonb`),
+  resetPolicySnapshot: jsonb("reset_policy_snapshot").notNull().default(sql`'{}'::jsonb`),
   workspaceId: uuid("workspace_id").references(() => executionWorkspaces.id, { onDelete: "set null" }),
   executorSelector: jsonb("executor_selector"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -389,6 +400,12 @@ export const agentSessions = pgTable("agent_sessions", {
   lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   agentSessionsOrgUpdatedIdx: index("agent_sessions_org_updated_idx").on(table.organizationId, table.updatedAt, table.id),
+  agentSessionsOrgPinnedExecutorPoolUpdatedIdx: index("agent_sessions_org_pinned_executor_pool_updated_idx").on(
+    table.organizationId,
+    table.pinnedExecutorPool,
+    table.updatedAt
+  ),
+  agentSessionsOrgSessionKeyUnique: uniqueIndex("agent_sessions_org_session_key_unique").on(table.organizationId, table.sessionKey),
 }));
 
 export const agentSessionEvents = pgTable("agent_session_events", {
@@ -398,11 +415,119 @@ export const agentSessionEvents = pgTable("agent_session_events", {
   seq: integer("seq").notNull(),
   eventType: text("event_type").notNull(),
   level: text("level").notNull().default("info"),
+  handoffFromAgentId: uuid("handoff_from_agent_id").references(() => organizationAgents.id, { onDelete: "set null" }),
+  handoffToAgentId: uuid("handoff_to_agent_id").references(() => organizationAgents.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
   payload: jsonb("payload"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   agentSessionEventsSessionSeqUnique: uniqueIndex("agent_session_events_session_seq_unique").on(table.sessionId, table.seq),
   agentSessionEventsOrgSessionSeqIdx: index("agent_session_events_org_session_seq_idx").on(table.organizationId, table.sessionId, table.seq),
+  agentSessionEventsOrgSessionIdempotencyUnique: uniqueIndex("agent_session_events_org_session_idempotency_unique").on(
+    table.organizationId,
+    table.sessionId,
+    table.idempotencyKey
+  ),
+}));
+
+export const agentBindings = pgTable("agent_bindings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => organizationAgents.id, { onDelete: "cascade" }),
+  priority: integer("priority").notNull().default(0),
+  dimension: text("dimension").notNull(),
+  match: jsonb("match").notNull().default(sql`'{}'::jsonb`),
+  metadata: jsonb("metadata"),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentBindingsOrgDimensionPriorityIdx: index("agent_bindings_org_dimension_priority_idx").on(
+    table.organizationId,
+    table.dimension,
+    table.priority,
+    table.id
+  ),
+  agentBindingsOrgAgentIdx: index("agent_bindings_org_agent_idx").on(table.organizationId, table.agentId),
+}));
+
+export const agentResetPolicies = pgTable("agent_reset_policies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").references(() => organizationAgents.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  policy: jsonb("policy").notNull().default(sql`'{}'::jsonb`),
+  active: boolean("active").notNull().default(true),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentResetPoliciesOrgActiveIdx: index("agent_reset_policies_org_active_idx").on(table.organizationId, table.active, table.id),
+  agentResetPoliciesOrgAgentIdx: index("agent_reset_policies_org_agent_idx").on(table.organizationId, table.agentId),
+}));
+
+export const agentMemoryDocuments = pgTable("agent_memory_documents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  sessionId: uuid("session_id").references(() => agentSessions.id, { onDelete: "set null" }),
+  sessionKey: text("session_key").notNull().default(""),
+  provider: text("provider").notNull().default("builtin"),
+  docPath: text("doc_path").notNull(),
+  contentHash: text("content_hash").notNull(),
+  lineCount: integer("line_count").notNull().default(0),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentMemoryDocumentsOrgSessionDocIdx: index("agent_memory_documents_org_session_doc_idx").on(
+    table.organizationId,
+    table.sessionKey,
+    table.docPath
+  ),
+  agentMemoryDocumentsOrgSessionDocHashUnique: uniqueIndex("agent_memory_documents_org_session_doc_hash_unique").on(
+    table.organizationId,
+    table.sessionKey,
+    table.docPath,
+    table.contentHash
+  ),
+}));
+
+export const agentMemoryChunks = pgTable("agent_memory_chunks", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  documentId: uuid("document_id").notNull().references(() => agentMemoryDocuments.id, { onDelete: "cascade" }),
+  chunkIndex: integer("chunk_index").notNull(),
+  text: text("text").notNull(),
+  tokenCount: integer("token_count").notNull().default(0),
+  embedding: jsonb("embedding"),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentMemoryChunksDocumentChunkUnique: uniqueIndex("agent_memory_chunks_document_chunk_unique").on(table.documentId, table.chunkIndex),
+  agentMemoryChunksOrgDocumentIdx: index("agent_memory_chunks_org_document_idx").on(table.organizationId, table.documentId),
+}));
+
+export const agentMemorySyncJobs = pgTable("agent_memory_sync_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  sessionId: uuid("session_id").references(() => agentSessions.id, { onDelete: "set null" }),
+  sessionKey: text("session_key").notNull().default(""),
+  provider: text("provider").notNull().default("builtin"),
+  status: text("status").notNull().default("queued"),
+  reason: text("reason"),
+  details: jsonb("details").notNull().default(sql`'{}'::jsonb`),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  agentMemorySyncJobsOrgCreatedIdx: index("agent_memory_sync_jobs_org_created_idx").on(table.organizationId, table.createdAt, table.id),
+  agentMemorySyncJobsOrgSessionStatusIdx: index("agent_memory_sync_jobs_org_session_status_idx").on(
+    table.organizationId,
+    table.sessionKey,
+    table.status
+  ),
 }));
 
 export const channelAccounts = pgTable("channel_accounts", {
@@ -688,6 +813,14 @@ export const agentSessionsRelations = relations(agentSessions, ({ one, many }) =
     fields: [agentSessions.pinnedAgentId],
     references: [organizationAgents.id],
   }),
+  routedAgent: one(organizationAgents, {
+    fields: [agentSessions.routedAgentId],
+    references: [organizationAgents.id],
+  }),
+  binding: one(agentBindings, {
+    fields: [agentSessions.bindingId],
+    references: [agentBindings.id],
+  }),
   workspace: one(executionWorkspaces, {
     fields: [agentSessions.workspaceId],
     references: [executionWorkspaces.id],
@@ -703,6 +836,83 @@ export const agentSessionEventsRelations = relations(agentSessionEvents, ({ one 
   session: one(agentSessions, {
     fields: [agentSessionEvents.sessionId],
     references: [agentSessions.id],
+  }),
+  handoffFromAgent: one(organizationAgents, {
+    fields: [agentSessionEvents.handoffFromAgentId],
+    references: [organizationAgents.id],
+  }),
+  handoffToAgent: one(organizationAgents, {
+    fields: [agentSessionEvents.handoffToAgentId],
+    references: [organizationAgents.id],
+  }),
+}));
+
+export const agentBindingsRelations = relations(agentBindings, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [agentBindings.organizationId],
+    references: [organizations.id],
+  }),
+  agent: one(organizationAgents, {
+    fields: [agentBindings.agentId],
+    references: [organizationAgents.id],
+  }),
+  createdByUser: one(users, {
+    fields: [agentBindings.createdByUserId],
+    references: [users.id],
+  }),
+  sessions: many(agentSessions),
+}));
+
+export const agentResetPoliciesRelations = relations(agentResetPolicies, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [agentResetPolicies.organizationId],
+    references: [organizations.id],
+  }),
+  agent: one(organizationAgents, {
+    fields: [agentResetPolicies.agentId],
+    references: [organizationAgents.id],
+  }),
+  createdByUser: one(users, {
+    fields: [agentResetPolicies.createdByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const agentMemoryDocumentsRelations = relations(agentMemoryDocuments, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [agentMemoryDocuments.organizationId],
+    references: [organizations.id],
+  }),
+  session: one(agentSessions, {
+    fields: [agentMemoryDocuments.sessionId],
+    references: [agentSessions.id],
+  }),
+  chunks: many(agentMemoryChunks),
+}));
+
+export const agentMemoryChunksRelations = relations(agentMemoryChunks, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [agentMemoryChunks.organizationId],
+    references: [organizations.id],
+  }),
+  document: one(agentMemoryDocuments, {
+    fields: [agentMemoryChunks.documentId],
+    references: [agentMemoryDocuments.id],
+  }),
+}));
+
+export const agentMemorySyncJobsRelations = relations(agentMemorySyncJobs, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [agentMemorySyncJobs.organizationId],
+    references: [organizations.id],
+  }),
+  session: one(agentSessions, {
+    fields: [agentMemorySyncJobs.sessionId],
+    references: [agentSessions.id],
+  }),
+  createdByUser: one(users, {
+    fields: [agentMemorySyncJobs.createdByUserId],
+    references: [users.id],
   }),
 }));
 
@@ -834,6 +1044,11 @@ export type DbToolsetBuilderSession = typeof toolsetBuilderSessions.$inferSelect
 export type DbToolsetBuilderTurn = typeof toolsetBuilderTurns.$inferSelect;
 export type DbAgentSession = typeof agentSessions.$inferSelect;
 export type DbAgentSessionEvent = typeof agentSessionEvents.$inferSelect;
+export type DbAgentBinding = typeof agentBindings.$inferSelect;
+export type DbAgentResetPolicy = typeof agentResetPolicies.$inferSelect;
+export type DbAgentMemoryDocument = typeof agentMemoryDocuments.$inferSelect;
+export type DbAgentMemoryChunk = typeof agentMemoryChunks.$inferSelect;
+export type DbAgentMemorySyncJob = typeof agentMemorySyncJobs.$inferSelect;
 export type DbChannelAccount = typeof channelAccounts.$inferSelect;
 export type DbChannelAccountSecret = typeof channelAccountSecrets.$inferSelect;
 export type DbChannelAllowlistEntry = typeof channelAllowlistEntries.$inferSelect;

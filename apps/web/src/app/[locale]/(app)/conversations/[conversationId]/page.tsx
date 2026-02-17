@@ -24,6 +24,44 @@ type GatewayClientMessage =
 
 type GatewayServerMessage =
   | {
+      type: "session_ack";
+      sessionId: string;
+    }
+  | {
+      type: "agent_delta";
+      sessionId: string;
+      seq: number;
+      content: string;
+      createdAt: string;
+    }
+  | {
+      type: "agent_final";
+      sessionId: string;
+      seq: number;
+      content: string;
+      payload?: any;
+      createdAt: string;
+    }
+  | {
+      type: "agent_handoff";
+      sessionId: string;
+      seq: number;
+      fromAgentId: string | null;
+      toAgentId: string;
+      reason?: string | null;
+      createdAt: string;
+    }
+  | {
+      type: "session_state";
+      sessionId: string;
+      pinnedExecutorId: string | null;
+      pinnedExecutorPool: "managed" | "byon" | null;
+      pinnedAgentId: string | null;
+      routedAgentId: string | null;
+      scope: string;
+      executionMode: string;
+    }
+  | {
       type: "session_event_v2";
       sessionId: string;
       seq: number;
@@ -273,19 +311,79 @@ export default function ConversationDetailPage() {
           toast.error(`${msg.code}: ${msg.message}`);
           return;
         }
-        if (msg.type !== "session_event_v2") return;
+        if (msg.type === "session_ack" || msg.type === "session_state") {
+          return;
+        }
         if (msg.sessionId !== conversationId) return;
-        const e: AgentSessionEvent = {
-          id: `${msg.sessionId}:${msg.seq}`,
-          organizationId: scopedOrgId ?? "",
-          sessionId: msg.sessionId,
-          seq: msg.seq,
-          eventType: msg.eventType,
-          level: msg.level,
-          payload: msg.payload ?? null,
-          createdAt: msg.createdAt,
-        };
-        setEvents((prev) => mergeBySeq(prev, [e]));
+
+        if (msg.type === "agent_delta") {
+          const e: AgentSessionEvent = {
+            id: `${msg.sessionId}:${msg.seq}:delta`,
+            organizationId: scopedOrgId ?? "",
+            sessionId: msg.sessionId,
+            seq: msg.seq,
+            eventType: "agent_message",
+            level: "info",
+            handoffFromAgentId: null,
+            handoffToAgentId: null,
+            idempotencyKey: null,
+            payload: { content: msg.content },
+            createdAt: msg.createdAt,
+          };
+          setEvents((prev) => mergeBySeq(prev, [e]));
+          return;
+        }
+        if (msg.type === "agent_final") {
+          const e: AgentSessionEvent = {
+            id: `${msg.sessionId}:${msg.seq}:final`,
+            organizationId: scopedOrgId ?? "",
+            sessionId: msg.sessionId,
+            seq: msg.seq,
+            eventType: "agent_final",
+            level: "info",
+            handoffFromAgentId: null,
+            handoffToAgentId: null,
+            idempotencyKey: null,
+            payload: { content: msg.content, payload: msg.payload ?? null },
+            createdAt: msg.createdAt,
+          };
+          setEvents((prev) => mergeBySeq(prev, [e]));
+          return;
+        }
+        if (msg.type === "agent_handoff") {
+          const e: AgentSessionEvent = {
+            id: `${msg.sessionId}:${msg.seq}:handoff`,
+            organizationId: scopedOrgId ?? "",
+            sessionId: msg.sessionId,
+            seq: msg.seq,
+            eventType: "agent_handoff",
+            level: "info",
+            handoffFromAgentId: msg.fromAgentId,
+            handoffToAgentId: msg.toAgentId,
+            idempotencyKey: null,
+            payload: { reason: msg.reason ?? null },
+            createdAt: msg.createdAt,
+          };
+          setEvents((prev) => mergeBySeq(prev, [e]));
+          return;
+        }
+        if (msg.type === "session_event_v2") {
+          const e: AgentSessionEvent = {
+            id: `${msg.sessionId}:${msg.seq}`,
+            organizationId: scopedOrgId ?? "",
+            sessionId: msg.sessionId,
+            seq: msg.seq,
+            eventType: msg.eventType,
+            level: msg.level,
+            handoffFromAgentId: null,
+            handoffToAgentId: null,
+            idempotencyKey: null,
+            payload: msg.payload ?? null,
+            createdAt: msg.createdAt,
+          };
+          setEvents((prev) => mergeBySeq(prev, [e]));
+          return;
+        }
       };
     } catch (err) {
       setWsError(err instanceof Error ? err.message : String(err));
@@ -360,7 +458,8 @@ export default function ConversationDetailPage() {
   }
 
   const session = sessionQuery.data?.session ?? null;
-  const pinnedAgentId = session?.pinnedAgentId ?? null;
+  const pinnedExecutorId = session?.pinnedExecutorId ?? session?.pinnedAgentId ?? null;
+  const pinnedExecutorPool = session?.pinnedExecutorPool ?? (session?.pinnedAgentId ? "byon" : null);
   const headerTitle = session?.title?.trim().length ? session.title : t("sessions.untitled");
 
   if (!authSession.isLoading && !authSession.data?.session) {
@@ -572,10 +671,13 @@ export default function ConversationDetailPage() {
               {connected ? t("sessions.ws.connected") : t("sessions.ws.disconnected")}
             </span>
             {wsError ? <span className="text-red-700">{wsError}</span> : null}
-            {pinnedAgentId ? (
+            {pinnedExecutorId ? (
               <span className="inline-flex items-center gap-2">
                 <span>{t("sessions.pinnedAgent")}</span>
-                <span className="font-mono">{pinnedAgentId.slice(0, 8)}...</span>
+                <span className="font-mono">{pinnedExecutorId.slice(0, 8)}...</span>
+                <span className="rounded border border-borderSubtle px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
+                  {pinnedExecutorPool ?? "unknown"}
+                </span>
               </span>
             ) : null}
             <Button size="sm" variant="outline" onClick={resetPin} disabled={!canConnect || !connected}>

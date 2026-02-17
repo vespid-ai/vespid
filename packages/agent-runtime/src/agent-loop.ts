@@ -87,6 +87,7 @@ export type AgentLoopInput = {
   fetchImpl: typeof fetch;
   config: AgentLoopConfig;
   llmInvoke?: (input: Omit<LlmInvokeInput, "fetchImpl">) => Promise<LlmInvokeResult>;
+  llmAuthOverride?: LlmInvokeAuth | null;
   managedCredits?: {
     ensureAvailable: (input: { minCredits: number }) => Promise<boolean>;
     charge: (input: {
@@ -112,6 +113,12 @@ export type AgentLoopInput = {
   teamMeta?: AgentTeamMeta;
   // Optional team configuration passed through to tools like team.delegate/team.map.
   teamConfig?: unknown;
+  memory?: {
+    sync: () => Promise<void>;
+    search: (input: { query: string; maxResults?: number }) => Promise<unknown[]>;
+    get: (input: { filePath: string; fromLine?: number; lineCount?: number }) => Promise<unknown>;
+    status: () => { provider: "builtin" | "qmd"; fallbackFrom?: "builtin" | "qmd"; lastError?: string | null };
+  } | null;
 };
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -389,6 +396,12 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
   const toolMode = input.config.tools.execution;
   const shellRunEnabled = parseShellRunEnabled(input.organizationSettings);
 
+  try {
+    await input.memory?.sync();
+  } catch {
+    // Non-fatal. Tool calls can still report memory-specific errors.
+  }
+
   const baseSystem = [
     input.config.prompt.system ? input.config.prompt.system : null,
     "You are a workflow agent node in Vespid.",
@@ -540,12 +553,14 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
     await persistState({ checkpoint: true });
   }
 
-  const llmAuth = await resolveLlmAuth({
-    llm: input.config.llm,
-    organizationId: input.organizationId,
-    userId: input.requestedByUserId,
-    loadSecretValue: input.loadSecretValue,
-  });
+  const llmAuth =
+    input.llmAuthOverride ??
+    (await resolveLlmAuth({
+      llm: input.config.llm,
+      organizationId: input.organizationId,
+      userId: input.requestedByUserId,
+      loadSecretValue: input.loadSecretValue,
+    }));
   if (!llmAuth) {
     return { status: "failed", error: "LLM_AUTH_NOT_CONFIGURED" };
   }
@@ -798,6 +813,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<WorkflowNodeE
       loadSecretValue: input.loadSecretValue,
       fetchImpl: input.fetchImpl,
       emitEvent: input.emitEvent,
+      memory: input.memory ?? null,
       teamConfig: input.teamConfig ?? null,
       managedCredits: input.managedCredits ?? null,
     };
