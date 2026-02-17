@@ -239,6 +239,46 @@ describe("api hardening foundation", () => {
     expect(body.channels.some((channel) => channel.id === "webchat")).toBe(true);
   });
 
+  it("rejects non-loop session engines", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `session-engine-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as { session: { token: string } });
+
+    const createOrg = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Session Engine Org", slug: `session-engine-org-${Date.now()}` },
+    });
+    expect(createOrg.statusCode).toBe(201);
+    const orgId = (createOrg.json() as { organization: { id: string } }).organization.id;
+
+    for (const engineId of ["gateway.codex.v2", "gateway.claude.v2"] as const) {
+      const createSession = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/sessions`,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          engineId,
+          prompt: { instructions: "test" },
+          tools: { allow: [] },
+        },
+      });
+      expect(createSession.statusCode).toBe(400);
+      expect((createSession.json() as { message: string }).message).toBe("Invalid session payload");
+    }
+  });
+
   it("requires service token for internal channel trigger endpoint", async () => {
     const trigger = await server.inject({
       method: "POST",

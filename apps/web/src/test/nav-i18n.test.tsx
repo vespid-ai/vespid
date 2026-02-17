@@ -34,7 +34,7 @@ describe("next-intl messages", () => {
       <NextIntlClientProvider
         locale="zh-CN"
         messages={{
-          nav: { workflows: "工作流", channels: "渠道" },
+          nav: { workflows: "工作流", channels: "聊天平台" },
         }}
       >
         <NavLabels />
@@ -42,6 +42,6 @@ describe("next-intl messages", () => {
     );
 
     expect(screen.getByText("工作流")).toBeInTheDocument();
-    expect(screen.getByText("渠道")).toBeInTheDocument();
+    expect(screen.getByText("聊天平台")).toBeInTheDocument();
   });
 });

@@ -2,9 +2,9 @@
 
 Toolsets are reusable bundles that package:
 - MCP server configurations (`mcpServers[]`)
-- Anthropic Agent Skills bundles (`agentSkills[]`, `agentskills-v1`)
+- Agent Skills bundles (`agentSkills[]`, `agentskills-v1`)
 
-They are designed to be attached to `agent.run` nodes executed by gateway brain (`engine.id="gateway.*.v2"`).
+They are designed to be attached to `agent.run` nodes executed by gateway brain (`engine.id="gateway.loop.v2"`).
 
 ## Data Model
 
@@ -67,9 +67,9 @@ This MVP is validated primarily via unit/integration tests. If you want to verif
 1. Create a toolset with an external MCP server config using placeholder values (for example `env: { TOKEN: "${ENV:MY_TOKEN}" }`).
 2. Ensure the referenced environment variables are set in the executor environment (`MY_TOKEN` in this example).
 3. Attach the toolset to an `agent.run` node via `config.toolsetId` (or set an org default toolset).
-4. Run the workflow with `execution.mode="gateway"` and `engine.id="gateway.claude.v2"` (or other `gateway.*.v2` engine).
+4. Run the workflow with `execution.mode="gateway"` and `engine.id="gateway.loop.v2"`.
 
 Expected results:
 - Node execution fails fast with `MCP_ENV_NOT_SET:VAR` when a placeholder env var is missing.
-- Enabled Agent Skills are staged to the run workdir under `.claude/skills/<skillId>/...`.
+- Enabled Agent Skills are staged to the run workdir under `skills/<skillId>/...`.
 - Enabled MCP servers are passed through toolset context and their tools become callable as `mcp__<server>__*`.

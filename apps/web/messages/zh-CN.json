@@ -16,7 +16,7 @@
     "auth": "登录",
     "org": "组织",
     "openById": "按 ID 打开",
-    "channels": "渠道"
+    "channels": "聊天平台"
   },
   "common": {
     "search": "搜索",
@@ -510,7 +510,6 @@
       "tools": "允许的工具"
     },
     "engineHint": "Balanced 适合大多数场景，Coding/Reasoning 是优化预设。",
-    "codexProviderHint": "编码引擎当前仅支持 OpenAI 模型。",
     "modelHint": "先选 Provider，再选模型。",
     "saveAsOrgDefault": "保存为组织默认",
     "toolsetPlaceholder": "uuid（可选）",
@@ -548,9 +547,7 @@
       "selector": "选择器"
     },
     "engineOptions": {
-      "loop": "vespid agent",
-      "codex": "codex agent",
-      "claude": "claude agent"
+      "loop": "vespid agent"
     }
   },
   "toolsets": {
@@ -1105,18 +1102,18 @@
     }
   },
   "channels": {
-    "title": "渠道",
-    "subtitle": "连接并管理你的消息渠道。",
+    "title": "聊天平台",
+    "subtitle": "连接并管理你的聊天平台。",
     "create": {
-      "title": "创建渠道账号",
-      "subtitle": "先创建一个渠道账号，即可开始收发消息。",
+      "title": "创建聊天平台账号",
+      "subtitle": "先创建一个聊天平台账号，即可开始收发消息。",
       "button": "创建账号",
-      "created": "渠道账号已创建。",
+      "created": "聊天平台账号已创建。",
       "dependencies": "依赖",
-      "docs": "打开渠道文档"
+      "docs": "打开聊天平台文档"
     },
     "fields": {
-      "channel": "渠道",
+      "channel": "聊天平台",
       "accountKey": "账号键",
       "displayName": "显示名称",
       "webhookUrl": "Webhook URL（可选）",
@@ -1134,9 +1131,9 @@
       "groupMentionHint": "开启后，群组消息必须提及机器人才会被路由。"
     },
     "accounts": {
-      "title": "渠道账号",
+      "title": "聊天平台账号",
       "subtitle": "当前组织下的全部账号。",
-      "empty": "暂无渠道账号。",
+      "empty": "暂无聊天平台账号。",
       "accountKey": "账号键",
       "state": "状态",
       "open": "打开"
@@ -1154,10 +1151,10 @@
       "rejected": "配对请求已拒绝。"
     },
     "detail": {
-      "title": "渠道账号",
+      "title": "聊天平台账号",
       "subtitle": "配置运行时安全策略、连接状态与运维动作。",
       "configTitle": "配置",
-      "configSubtitle": "更新渠道策略与账号元数据。",
+      "configSubtitle": "更新聊天平台策略与账号元数据。",
       "runtimeTitle": "运行状态",
       "runtimeSubtitle": "当前健康状态与运维动作。",
       "connectionsConfigured": "已配置连接数",
@@ -1172,18 +1169,18 @@
       "connectionModel": "连接模型",
       "docs": "文档",
       "testSendTitle": "测试发信",
-      "testSendSubtitle": "通过网关渠道运行时发送一条测试出站消息。",
+      "testSendSubtitle": "通过网关聊天平台运行时发送一条测试出站消息。",
       "testSendConversation": "会话 ID",
       "testSendReplyTo": "回复目标消息 ID（可选）",
       "testSendText": "消息内容",
       "testSendButton": "发送测试消息",
       "testSendDone": "测试发信完成（状态: {status}, delivered: {delivered}）。",
       "eventsTitle": "最近事件",
-      "eventsSubtitle": "最新标准化渠道运行事件。",
+      "eventsSubtitle": "最新标准化聊天平台运行事件。",
       "eventsEmpty": "暂无事件。",
-      "saved": "渠道账号已保存。",
+      "saved": "聊天平台账号已保存。",
       "actionDone": "动作已执行：{action}。",
-      "deleted": "渠道账号已删除。",
+      "deleted": "聊天平台账号已删除。",
       "allowlistTitle": "白名单",
       "allowlistSubtitle": "管理安全门控使用的 sender/group/conversation 白名单条目。",
       "allowlistScope": "范围",

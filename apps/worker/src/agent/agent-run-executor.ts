@@ -87,7 +87,7 @@ const agentRunNodeSchema = z.object({
       .default({ mode: "gateway" }),
     engine: z
       .object({
-        id: z.enum(["gateway.loop.v2", "gateway.claude.v2", "gateway.codex.v2"]).default("gateway.loop.v2"),
+        id: z.enum(["gateway.loop.v2"]).default("gateway.loop.v2"),
       })
       .optional(),
     prompt: z.object({
@@ -203,12 +203,7 @@ export function createAgentRunExecutor(input: {
         };
       }
 
-      const llmProvider =
-        (node.config.engine?.id ?? "gateway.loop.v2") === "gateway.codex.v2"
-          ? "openai"
-          : (node.config.engine?.id ?? "gateway.loop.v2") === "gateway.claude.v2"
-            ? "anthropic"
-            : node.config.llm.provider;
+      const llmProvider = node.config.llm.provider;
 
       const nodeForGateway = {
         ...node,

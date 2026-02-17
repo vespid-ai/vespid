@@ -108,7 +108,6 @@
       "tools": "Allowed tools"
     },
     "engineHint": "Balanced works for most tasks. Coding and Reasoning are optimized presets.",
-    "codexProviderHint": "Coding engine currently supports OpenAI models.",
     "modelHint": "Choose a provider first, then pick a model.",
     "saveAsOrgDefault": "Save as org default",
     "toolsetPlaceholder": "uuid (optional)",
@@ -146,9 +145,7 @@
       "selector": "Selector"
     },
     "engineOptions": {
-      "loop": "vespid agent",
-      "codex": "codex agent",
-      "claude": "claude agent"
+      "loop": "vespid agent"
     }
   },
   "commandPalette": {

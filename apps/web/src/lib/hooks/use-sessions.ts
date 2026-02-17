@@ -104,7 +104,7 @@ export function useCreateSession(orgId: string | null) {
       scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
       context?: Record<string, unknown>;
       executionMode?: "pinned-node-host";
-      engineId?: "gateway.loop.v2" | "gateway.codex.v2" | "gateway.claude.v2";
+      engineId?: "gateway.loop.v2";
       toolsetId?: string;
       llm?: { provider: LlmProviderId; model: string; auth?: { secretId?: string | null } };
       prompt: { system?: string; instructions: string };

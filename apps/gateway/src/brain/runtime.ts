@@ -674,13 +674,7 @@ export async function startGatewayBrainRuntime(input?: {
 
       const nodeAny = parsed.data.node as any;
       const cfg = nodeAny?.config as any;
-      const engineId = cfg?.engine?.id ?? "gateway.loop.v2";
-      const llmProvider =
-        engineId === "gateway.codex.v2"
-          ? "openai"
-          : engineId === "gateway.claude.v2"
-            ? "anthropic"
-            : (cfg?.llm?.provider ?? "openai");
+      const llmProvider = cfg?.llm?.provider ?? "openai";
       const effectiveToolsAllow = Array.isArray(payload?.effectiveToolsAllow) ? (payload as any).effectiveToolsAllow : (cfg?.tools?.allow ?? []);
 
       let runtime: unknown = {};
@@ -977,6 +971,14 @@ export async function startGatewayBrainRuntime(input?: {
         });
         return;
       }
+      const sessionEngineId = typeof (session as any).engineId === "string" ? ((session as any).engineId as string) : "gateway.loop.v2";
+      if (sessionEngineId !== "gateway.loop.v2") {
+        await failSession({
+          code: REMOTE_EXEC_ERROR.NodeExecutionFailed,
+          message: `UNSUPPORTED_SESSION_ENGINE:${sessionEngineId}`,
+        });
+        return;
+      }
 
       const providerRaw = typeof (session as any).llmProvider === "string" ? (session as any).llmProvider : "openai";
       const llmProvider = providerRaw === "anthropic" || providerRaw === "gemini" || providerRaw === "vertex" ? providerRaw : "openai";
@@ -1063,7 +1065,7 @@ export async function startGatewayBrainRuntime(input?: {
           routedAgentId,
           userId: msg.userId,
           sessionConfig: {
-            engineId: typeof (session as any).engineId === "string" ? (session as any).engineId : "gateway.loop.v2",
+            engineId: sessionEngineId,
             llm: {
               provider: llmProvider,
               model: typeof (session as any).llmModel === "string" ? (session as any).llmModel : "gpt-4.1-mini",
