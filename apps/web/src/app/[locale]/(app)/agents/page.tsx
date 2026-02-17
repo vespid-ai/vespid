@@ -78,8 +78,27 @@ function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingT
   return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(input.apiBase)}`;
 }
 
+function buildStartCommand(artifact: AgentInstallerArtifact): string {
+  const executable = artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
+  return `${executable} start`;
+}
+
 function buildFallbackCommand(input: { pairingToken: string; apiBase: string }): string {
   return `pnpm --filter @vespid/node-agent dev -- connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(input.apiBase)}`;
+}
+
+function triggerInstallerDownload(artifact: AgentInstallerArtifact): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = artifact.downloadUrl;
+  link.target = "_self";
+  link.rel = "noreferrer";
+  link.download = artifact.fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export default function AgentsPage() {
@@ -139,7 +158,33 @@ export default function AgentsPage() {
   const connectCommand = activeArtifact
     ? buildConnectCommand({ artifact: activeArtifact, pairingToken: resolvedPairingToken, apiBase })
     : "";
+  const startCommand = activeArtifact ? buildStartCommand(activeArtifact) : "";
   const fallbackCommand = buildFallbackCommand({ pairingToken: resolvedPairingToken, apiBase });
+  const fallbackStartCommand = "pnpm --filter @vespid/node-agent dev -- start";
+  const isZh = locale.toLowerCase().startsWith("zh");
+  const usageTitle = isZh ? "vespid-agent 使用说明" : "How to use vespid-agent";
+  const usageSteps = isZh
+    ? [
+        "1. 点击上面的平台按钮，会直接下载对应安装包。",
+        "2. 首次使用：先运行“下载并解压”命令，再运行“连接到 Vespid”命令。",
+        "3. connect 成功后会写入本地配置并保持进程运行，用于接收执行任务。",
+        "4. 后续重启同一台机器时，直接运行“后续重启命令”。",
+      ]
+    : [
+        "1. Click a platform button above to download the installer directly.",
+        "2. First-time setup: run the download command, then run the connect command.",
+        "3. A successful connect stores local config and keeps the process running for jobs.",
+        "4. For future restarts on the same machine, run the restart command.",
+      ];
+  const startCommandLabel = isZh ? "后续重启命令" : "Restart command";
+
+  function handlePlatformClick(nextPlatformId: PlatformId) {
+    setPlatformId(nextPlatformId);
+    const artifact = installerByPlatform.get(nextPlatformId);
+    if (artifact) {
+      triggerInstallerDownload(artifact);
+    }
+  }
 
   const columns = useMemo(() => {
     return [
@@ -327,9 +372,15 @@ export default function AgentsPage() {
 
             <Tabs value={platformId} onValueChange={(value) => setPlatformId(value as PlatformId)}>
               <TabsList>
-                <TabsTrigger value="darwin-arm64">{t("agents.installer.platforms.darwinArm64")}</TabsTrigger>
-                <TabsTrigger value="linux-x64">{t("agents.installer.platforms.linuxX64")}</TabsTrigger>
-                <TabsTrigger value="windows-x64">{t("agents.installer.platforms.windowsX64")}</TabsTrigger>
+                <TabsTrigger value="darwin-arm64" onClick={() => handlePlatformClick("darwin-arm64")}>
+                  {t("agents.installer.platforms.darwinArm64")}
+                </TabsTrigger>
+                <TabsTrigger value="linux-x64" onClick={() => handlePlatformClick("linux-x64")}>
+                  {t("agents.installer.platforms.linuxX64")}
+                </TabsTrigger>
+                <TabsTrigger value="windows-x64" onClick={() => handlePlatformClick("windows-x64")}>
+                  {t("agents.installer.platforms.windowsX64")}
+                </TabsTrigger>
               </TabsList>
             </Tabs>
 
@@ -365,6 +416,18 @@ export default function AgentsPage() {
                   <div className="text-xs font-medium text-muted">{t("agents.installer.connectCommand")}</div>
                   <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
                 </div>
+                <div className="grid gap-1">
+                  <div className="text-xs font-medium text-muted">{startCommandLabel}</div>
+                  <CommandBlock command={startCommand} copyLabel={startCommandLabel} />
+                </div>
+                <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
+                  <div className="text-xs font-semibold text-text">{usageTitle}</div>
+                  {usageSteps.map((step) => (
+                    <div key={step} className="text-xs text-muted">
+                      {step}
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
 
@@ -373,6 +436,8 @@ export default function AgentsPage() {
                 <div className="text-xs font-medium text-text">{t("agents.installer.fallbackTitle")}</div>
                 <div className="text-xs text-muted">{t("agents.installer.fallbackDescription")}</div>
                 <CommandBlock command={fallbackCommand} copyLabel={t("agents.installer.copyFallback")} />
+                <div className="text-xs font-medium text-muted">{startCommandLabel}</div>
+                <CommandBlock command={fallbackStartCommand} copyLabel={startCommandLabel} />
               </div>
             ) : null}
 
