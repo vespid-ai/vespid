@@ -423,7 +423,6 @@ export default function RunReplayPage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
-            <div className="mt-1 text-sm text-muted">{t("runs.detailsHint")}</div>
           </div>
           <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
             {t("common.back")}
@@ -431,7 +430,6 @@ export default function RunReplayPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -452,7 +450,6 @@ export default function RunReplayPage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">{t("runs.title")}</div>
-            <div className="mt-1 text-sm text-muted">{t("runs.detailsHint")}</div>
           </div>
           <Button variant="outline" onClick={() => router.push(`/${locale}/workflows/${workflowId}`)}>
             {t("common.back")}
@@ -669,7 +666,6 @@ export default function RunReplayPage() {
             <div className="h-full">
               <div className="border-b border-borderSubtle px-4 py-3 group-data-[density=compact]:py-2">
                 <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{t("runs.details")}</div>
-                <div className="mt-1 text-xs text-muted">{t("runs.detailsHint")}</div>
               </div>
 
               <ScrollArea className="h-[calc(100%-52px)]">
@@ -677,7 +673,6 @@ export default function RunReplayPage() {
                   <Card>
                     <CardHeader>
                       <CardTitle>{t("runs.summaryTitle")}</CardTitle>
-                      <CardDescription>{t("runs.summaryHint")}</CardDescription>
                     </CardHeader>
                     <CardContent className="grid gap-3">
                       <div className="grid grid-cols-2 gap-3 text-sm">
@@ -706,7 +701,6 @@ export default function RunReplayPage() {
                     <Card>
                       <CardHeader>
                         <CardTitle>{t("runs.runTitle")}</CardTitle>
-                        <CardDescription>{t("runs.runHint")}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         {run ? (
@@ -747,14 +741,12 @@ export default function RunReplayPage() {
             <div className="h-full">
               <div className="border-b border-borderSubtle px-4 py-3 group-data-[density=compact]:py-2">
                 <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{t("runs.inspector")}</div>
-                <div className="mt-1 text-xs text-muted">{t("runs.inspectorHint")}</div>
               </div>
               <ScrollArea className="h-[calc(100%-52px)]">
                 <div className="p-4 group-data-[density=compact]:p-3">
                   <Card>
                     <CardHeader>
                       <CardTitle>{t("runs.trustTitle")}</CardTitle>
-                      <CardDescription>{t("runs.trustHint")}</CardDescription>
                     </CardHeader>
                     <CardContent className="grid gap-3">
                       <div className="grid gap-3">
@@ -884,7 +876,6 @@ export default function RunReplayPage() {
                   <Card>
                     <CardHeader>
                       <CardTitle>{t("runs.healthTitle")}</CardTitle>
-                      <CardDescription>{t("runs.healthHint")}</CardDescription>
                     </CardHeader>
                     <CardContent>
                       {eventsQuery.isError ? (
@@ -903,7 +894,6 @@ export default function RunReplayPage() {
         </PanelGroup>
       </div>
 
-      <div className="text-xs text-muted">{t("runs.tip")}</div>
     </div>
   );
 }

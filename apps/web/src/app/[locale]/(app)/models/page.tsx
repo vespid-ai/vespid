@@ -186,7 +186,6 @@ export default function ModelConnectionsPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -621,11 +620,6 @@ export default function ModelConnectionsPage() {
               {t("common.save")}
             </Button>
           </div>
-          {providerMetaById[overrideProviderId] ? (
-            <div className="text-xs text-muted">
-              {t("models.connections.runtimeHint", { provider: providerMetaById[overrideProviderId].displayName })}
-            </div>
-          ) : null}
         </CardContent>
       </Card>
     </div>

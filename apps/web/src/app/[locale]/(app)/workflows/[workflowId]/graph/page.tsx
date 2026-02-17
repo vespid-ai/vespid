@@ -53,7 +53,6 @@ export default function WorkflowGraphEditorPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}

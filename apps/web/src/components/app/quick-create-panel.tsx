@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { cn } from "../../lib/cn";
 
 export function QuickCreatePanel(props: {
@@ -20,7 +20,6 @@ export function QuickCreatePanel(props: {
               {props.icon}
               {props.title}
             </CardTitle>
-            {props.description ? <CardDescription>{props.description}</CardDescription> : null}
           </div>
           {props.actions}
         </div>

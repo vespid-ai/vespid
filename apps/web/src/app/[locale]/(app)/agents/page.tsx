@@ -175,7 +175,6 @@ export default function AgentsPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}

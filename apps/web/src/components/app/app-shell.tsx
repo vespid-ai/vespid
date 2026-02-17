@@ -687,7 +687,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             {onboardingVisible && !onboardingCollapsed ? (
               <div className="mb-3 rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/55 px-3 py-3 shadow-elev1 md:mb-4 md:px-4">
                 <div className="grid gap-2">
-                  <div className="text-xs text-muted">{t("onboarding.subtitle")}</div>
                   <div className="flex flex-wrap gap-2">
                     {!activeOrgId ? (
                       <Button size="sm" variant="accent" asChild>

@@ -65,7 +65,6 @@ export function AdvancedSection(props: {
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-medium text-text">{props.title}</div>
-          {props.description ? <div className="mt-1 text-xs text-muted">{props.description}</div> : null}
         </div>
         <Button type="button" size="sm" variant="outline" onClick={toggle}>
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

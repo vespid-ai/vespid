@@ -156,7 +156,6 @@ export default function ChannelAccountDetailPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -564,7 +563,6 @@ export default function ChannelAccountDetailPage() {
               {(status?.secretsCount ?? 0) > 0 ? t("channels.detail.connectionConnected") : t("channels.detail.connectionNotConnected")}
             </div>
           </div>
-          <div className="text-xs text-muted">{t("channels.detail.connectionHint")}</div>
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => void onRunAction("login")}>
               login

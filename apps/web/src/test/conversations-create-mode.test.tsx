@@ -73,6 +73,12 @@ describe("Conversations create modes", () => {
       </NextIntlClientProvider>
     );
 
+    const layout = Array.from(document.querySelectorAll("div")).find((node) =>
+      node.className.includes("xl:grid-cols-[240px_minmax(0,1fr)]")
+    );
+    expect(layout).toBeTruthy();
+    expect(screen.queryByText("Default mode keeps chat creation fast. Open advanced settings only when needed.")).not.toBeInTheDocument();
+
     await user.type(screen.getByLabelText(messages.sessions.chat.message), "Ship this sprint");
     await user.click(screen.getByRole("button", { name: messages.sessions.chat.send }));
 

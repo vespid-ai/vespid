@@ -219,7 +219,6 @@ export default function ConversationsPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -261,7 +260,7 @@ export default function ConversationsPage() {
         <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
@@ -303,7 +302,6 @@ export default function ConversationsPage() {
         <div className="grid gap-4">
           <QuickCreatePanel
             title={t("sessions.create.title")}
-            description={t("sessions.create.quickHint")}
             icon={<Sparkles className="h-4 w-4 text-accent" />}
           >
             <div className="grid gap-2">
@@ -359,7 +357,6 @@ export default function ConversationsPage() {
               setAdvancedOpen(next);
             }}
             title={t("sessions.create.advancedTitle")}
-            description={t("sessions.create.advancedDescription")}
             footer={
               <div className="flex flex-wrap justify-end gap-2">
                 <Button variant="outline" onClick={() => setAdvancedOpen(false)}>
@@ -404,9 +401,7 @@ export default function ConversationsPage() {
                     placeholder={t("sessions.toolsetPlaceholder")}
                     disabled={!canOperate}
                   />
-                  <div className="text-xs text-muted">
-                    {selectedToolset ? `${t("sessions.toolsetResolved")}: ${selectedToolset.name}` : t("sessions.toolsetHint")}
-                  </div>
+                  {selectedToolset ? <div className="text-xs text-muted">{`${t("sessions.toolsetResolved")}: ${selectedToolset.name}`}</div> : null}
                 </div>
 
                 <div className="grid gap-2">
@@ -418,7 +413,6 @@ export default function ConversationsPage() {
                     placeholder={t("sessions.selectorTagPlaceholder")}
                     disabled={!canOperate}
                   />
-                  <div className="text-xs text-muted">{t("sessions.selectorHint")}</div>
                 </div>
               </div>
 
@@ -449,7 +443,6 @@ export default function ConversationsPage() {
                   placeholder={t("sessions.extraToolsPlaceholder")}
                   disabled={!canOperate}
                 />
-                <div className="text-xs text-muted">{t("sessions.toolsHint", { count: toolAllow.length })}</div>
               </div>
 
               {canEditOrgSettings ? (

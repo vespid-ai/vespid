@@ -69,6 +69,7 @@ describe("Workflows quick create", () => {
     expect(screen.getByLabelText(messages.workflows.quickInstructions)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: messages.workflows.customizeAdvanced })).toBeInTheDocument();
     expect(screen.queryByText(messages.workflows.addAgentNode)).not.toBeInTheDocument();
+    expect(screen.queryByText("Create and define your workflow first. Advanced access is available from More actions.")).not.toBeInTheDocument();
   });
 
   it("does not render a persistent open-by-id card", () => {

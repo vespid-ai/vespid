@@ -91,7 +91,6 @@ function SecretsPageContent() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -118,7 +117,7 @@ function SecretsPageContent() {
     <div className="grid gap-4">
       <div>
         <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("secrets.title")}</div>
-        <div className="mt-1 text-sm text-muted">{t("secrets.internalOnlyHint")}</div>
+        <div className="mt-1 text-sm text-muted">{t("secrets.warning")}</div>
       </div>
 
       <Card>

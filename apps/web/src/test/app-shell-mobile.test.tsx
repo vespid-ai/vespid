@@ -81,19 +81,20 @@ describe("AppShell mobile rendering", () => {
 
   it("keeps onboarding collapsed by default and persists expanded state", async () => {
     const user = userEvent.setup();
+    const messages = readMessages("en");
 
     const view = renderShell();
 
-    await screen.findByText("Quick start guide");
-    expect(screen.queryByText("Only essential steps are shown here.")).not.toBeInTheDocument();
+    await screen.findByText(messages.onboarding.title);
 
     await user.click(screen.getByRole("button", { name: "Show" }));
-    await screen.findByText("Only essential steps are shown here.");
+    await screen.findByRole("link", { name: messages.onboarding.goOrg });
+    expect(screen.queryByText("Only essential steps are shown here.")).not.toBeInTheDocument();
 
     view.unmount();
     renderShell();
 
-    await screen.findByText("Only essential steps are shown here.");
+    await screen.findByRole("link", { name: messages.onboarding.goOrg });
     expect(window.localStorage.getItem("vespid.ui.onboarding-collapsed")).toBe("0");
   });
 });

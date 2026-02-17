@@ -264,7 +264,6 @@ export default function WorkflowDetailPage() {
         </div>
         <EmptyState
           title={t("org.requireActive")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -394,7 +393,6 @@ export default function WorkflowDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{t("workflows.detail.runsTitle")}</CardTitle>
-                <CardDescription>{runsQuery.isFetching ? t("common.loading") : t("workflows.detail.runsHint")}</CardDescription>
               </CardHeader>
               <CardContent>
                 {runsQuery.isLoading ? (
@@ -404,7 +402,7 @@ export default function WorkflowDetailPage() {
                     <Skeleton className="h-10" />
                   </div>
                 ) : runs.length === 0 ? (
-                  <EmptyState title={t("workflows.detail.noRunsTitle")} description={t("workflows.detail.noRunsHint")} />
+                  <EmptyState title={t("workflows.detail.noRunsTitle")} />
                 ) : (
                   <DataTable<WorkflowRun> data={runs} columns={columns as any} />
                 )}
@@ -427,7 +425,6 @@ export default function WorkflowDetailPage() {
             <Card>
               <CardHeader>
                 <CardTitle>{t("workflows.detail.queueRunTitle")}</CardTitle>
-                <CardDescription>{t("workflows.detail.queueRunHint")}</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3">
                 <div className="grid gap-1.5">

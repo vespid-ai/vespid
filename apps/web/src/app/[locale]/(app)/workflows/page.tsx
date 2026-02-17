@@ -732,7 +732,6 @@ export default function WorkflowsPage() {
         </div>
         <EmptyState
           title={t("workflows.errors.orgRequired")}
-          description={t("onboarding.subtitle")}
           action={
             <Button variant="accent" onClick={() => router.push(`/${locale}/org`)}>
               {t("onboarding.goOrg")}
@@ -801,7 +800,6 @@ export default function WorkflowsPage() {
             builderFocusedPulse ? "border-accent/60 shadow-[0_0_0_1px_var(--color-accent)]" : ""
           )}
           title={t("workflows.builderTitle")}
-          description={t("workflows.builderHint")}
           actions={<div className="text-xs text-muted">{t("workflows.nodesConfigured", { count: agentNodes.length })}</div>}
           contentClassName="gap-3"
         >
@@ -846,7 +844,6 @@ export default function WorkflowsPage() {
               open={workflowAdvancedOpen}
               onOpenChange={setWorkflowAdvancedOpen}
               title={t("workflows.advancedTitle")}
-              description={t("workflows.advancedDescription")}
               footer={
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button variant="outline" onClick={() => setWorkflowAdvancedOpen(false)}>
@@ -1567,9 +1564,6 @@ export default function WorkflowsPage() {
         <Card>
           <CardHeader>
             <CardTitle>{t("workflows.list.title")}</CardTitle>
-            <CardDescription>
-              {orgId ? t("workflows.list.hint") : t("workflows.createWizardHint")}
-            </CardDescription>
           </CardHeader>
           <CardContent>
             {!orgId ? (

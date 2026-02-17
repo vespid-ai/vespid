@@ -23,6 +23,7 @@ export function AdvancedConfigSheet(props: {
           "w-[min(96vw,780px)] rounded-none border-l border-borderSubtle bg-surface1/98 p-0 backdrop-blur supports-[backdrop-filter]:bg-surface1/94",
           props.className
         )}
+        aria-describedby={undefined}
         title={props.title}
         {...(props.description ? { description: props.description } : {})}
       >
@@ -31,7 +32,6 @@ export function AdvancedConfigSheet(props: {
             <div className="flex items-start gap-3">
               <div className="min-w-0 flex-1">
                 <div className="font-[var(--font-display)] text-base font-semibold tracking-tight text-text">{props.title}</div>
-                {props.description ? <div className="mt-1 text-sm text-muted">{props.description}</div> : null}
               </div>
               <SheetClose asChild>
                 <Button variant="outline" size="icon" aria-label="Close advanced settings">
