@@ -37,6 +37,12 @@ export type AgentToolContext = {
     message?: string | null;
     payload?: unknown;
   }) => Promise<void>;
+  memory?: {
+    sync: () => Promise<void>;
+    search: (input: { query: string; maxResults?: number }) => Promise<unknown[]>;
+    get: (input: { filePath: string; fromLine?: number; lineCount?: number }) => Promise<unknown>;
+    status: () => { provider: "builtin" | "qmd"; fallbackFrom?: "builtin" | "qmd"; lastError?: string | null };
+  } | null;
   // Internal-only: provides access to team configuration for tools like team.delegate/team.map.
   teamConfig?: unknown;
 };

@@ -17,6 +17,7 @@
     "test": "vitest run --exclude 'dist/**' --passWithNoTests"
   },
   "dependencies": {
+    "@vespid/agent-runtime": "workspace:*",
     "@vespid/connectors": "workspace:*",
     "@vespid/shared": "workspace:*",
     "@vespid/workflow": "workspace:*",

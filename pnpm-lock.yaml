@@ -160,6 +160,9 @@ importers:
 
   apps/node-agent:
     dependencies:
+      '@vespid/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime
       '@vespid/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors

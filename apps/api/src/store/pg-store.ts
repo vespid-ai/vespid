@@ -35,9 +35,11 @@ import {
   getExecutorPairingTokenByHash as dbGetExecutorPairingTokenByHash,
   consumeExecutorPairingToken as dbConsumeExecutorPairingToken,
   createOrganizationExecutor as dbCreateOrganizationExecutor,
+  createManagedExecutor as dbCreateManagedExecutor,
   listOrganizationExecutors as dbListOrganizationExecutors,
   setOrganizationExecutorLabels as dbSetOrganizationExecutorLabels,
   revokeOrganizationExecutor as dbRevokeOrganizationExecutor,
+  revokeManagedExecutor as dbRevokeManagedExecutor,
   createAgentToolset as dbCreateAgentToolset,
   listAgentToolsetsByOrg as dbListAgentToolsetsByOrg,
   getAgentToolsetById as dbGetAgentToolsetById,
@@ -51,8 +53,18 @@ import {
   createAgentSession as dbCreateAgentSession,
   getAgentSessionById as dbGetAgentSessionById,
   listAgentSessions as dbListAgentSessions,
+  setAgentSessionPinnedAgent as dbSetAgentSessionPinnedAgent,
+  setAgentSessionRoute as dbSetAgentSessionRoute,
   appendAgentSessionEvent as dbAppendAgentSessionEvent,
   listAgentSessionEvents as dbListAgentSessionEvents,
+  createAgentBinding as dbCreateAgentBinding,
+  listAgentBindings as dbListAgentBindings,
+  patchAgentBinding as dbPatchAgentBinding,
+  deleteAgentBinding as dbDeleteAgentBinding,
+  createAgentMemorySyncJob as dbCreateAgentMemorySyncJob,
+  listAgentMemoryDocuments as dbListAgentMemoryDocuments,
+  getAgentMemoryDocumentById as dbGetAgentMemoryDocumentById,
+  listAgentMemoryChunksByDocument as dbListAgentMemoryChunksByDocument,
   createToolsetBuilderSession as dbCreateToolsetBuilderSession,
   appendToolsetBuilderTurn as dbAppendToolsetBuilderTurn,
   getToolsetBuilderSessionById as dbGetToolsetBuilderSessionById,
@@ -103,6 +115,10 @@ import {
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
 import type {
+  AgentBindingRecord,
+  AgentMemoryChunkRecord,
+  AgentMemoryDocumentRecord,
+  AgentMemorySyncJobRecord,
   AgentSessionEventRecord,
   AgentSessionRecord,
   AgentToolsetRecord,
@@ -117,6 +133,7 @@ import type {
   OrganizationCreditsRecord,
   OrganizationExecutorRecord,
   OrganizationSettings,
+  ManagedExecutorRecord,
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
   UserOrgSummaryRecord,
@@ -209,9 +226,16 @@ export class PgAppStore implements AppStore {
       id: row.id,
       organizationId: row.organizationId,
       createdByUserId: row.createdByUserId,
+      sessionKey: row.sessionKey ?? "",
+      scope: row.scope ?? "main",
       title: row.title ?? "",
       status: row.status === "archived" ? "archived" : "active",
+      pinnedExecutorId: row.pinnedExecutorId ?? null,
+      pinnedExecutorPool: row.pinnedExecutorPool ?? null,
       pinnedAgentId: row.pinnedAgentId ?? null,
+      routedAgentId: row.routedAgentId ?? null,
+      bindingId: row.bindingId ?? null,
+      executionMode: "pinned-node-host",
       executorSelector: (row.executorSelector as any) ?? null,
       selectorTag: row.selectorTag ?? null,
       selectorGroup: row.selectorGroup ?? null,
@@ -224,6 +248,7 @@ export class PgAppStore implements AppStore {
       limits: row.limits ?? {},
       promptSystem: row.promptSystem ?? null,
       promptInstructions: row.promptInstructions ?? "",
+      resetPolicySnapshot: row.resetPolicySnapshot ?? {},
       createdAt: toIso(row.createdAt),
       updatedAt: toIso(row.updatedAt),
       lastActivityAt: toIso(row.lastActivityAt),
@@ -238,8 +263,74 @@ export class PgAppStore implements AppStore {
       seq: row.seq,
       eventType: row.eventType,
       level: row.level,
+      handoffFromAgentId: row.handoffFromAgentId ?? null,
+      handoffToAgentId: row.handoffToAgentId ?? null,
+      idempotencyKey: row.idempotencyKey ?? null,
       payload: row.payload ?? null,
       createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toAgentBindingRecord(row: any): AgentBindingRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      agentId: row.agentId,
+      priority: row.priority ?? 0,
+      dimension: row.dimension,
+      match: row.match ?? {},
+      metadata: row.metadata ?? null,
+      createdByUserId: row.createdByUserId,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toAgentMemoryDocumentRecord(row: any): AgentMemoryDocumentRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      sessionId: row.sessionId ?? null,
+      sessionKey: row.sessionKey ?? "",
+      provider: row.provider ?? "builtin",
+      docPath: row.docPath,
+      contentHash: row.contentHash,
+      lineCount: row.lineCount ?? 0,
+      metadata: row.metadata ?? {},
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toAgentMemoryChunkRecord(row: any): AgentMemoryChunkRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      documentId: row.documentId,
+      chunkIndex: row.chunkIndex,
+      text: row.text,
+      tokenCount: row.tokenCount ?? 0,
+      embedding: row.embedding ?? null,
+      metadata: row.metadata ?? {},
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toAgentMemorySyncJobRecord(row: any): AgentMemorySyncJobRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      sessionId: row.sessionId ?? null,
+      sessionKey: row.sessionKey ?? "",
+      provider: row.provider ?? "builtin",
+      status: row.status ?? "queued",
+      reason: row.reason ?? null,
+      details: row.details ?? {},
+      startedAt: row.startedAt ? toIso(row.startedAt) : null,
+      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+      createdByUserId: row.createdByUserId ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
     };
   }
 
@@ -1854,6 +1945,49 @@ export class PgAppStore implements AppStore {
     return Boolean(row);
   }
 
+  async createManagedExecutor(input: {
+    name: string;
+    tokenHash: string;
+    maxInFlight?: number;
+    labels?: string[];
+    capabilities?: unknown;
+    enabled?: boolean;
+    drain?: boolean;
+    runtimeClass?: string;
+    region?: string | null;
+  }): Promise<ManagedExecutorRecord> {
+    const row = await dbCreateManagedExecutor(this.db(), {
+      name: input.name,
+      tokenHash: input.tokenHash,
+      ...(typeof input.maxInFlight === "number" ? { maxInFlight: input.maxInFlight } : {}),
+      ...(Array.isArray(input.labels) ? { labels: input.labels } : {}),
+      ...(input.capabilities !== undefined ? { capabilities: input.capabilities } : {}),
+      ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
+      ...(typeof input.drain === "boolean" ? { drain: input.drain } : {}),
+      ...(typeof input.runtimeClass === "string" ? { runtimeClass: input.runtimeClass } : {}),
+      ...(input.region !== undefined ? { region: input.region } : {}),
+    });
+    return {
+      id: row.id,
+      name: row.name,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      lastSeenAt: row.lastSeenAt ? toIso(row.lastSeenAt) : null,
+      maxInFlight: row.maxInFlight ?? 50,
+      enabled: row.enabled ?? true,
+      drain: row.drain ?? false,
+      runtimeClass: row.runtimeClass ?? "container",
+      region: row.region ?? null,
+      capabilities: row.capabilities,
+      labels: (row.labels ?? []) as any,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async revokeManagedExecutor(input: { executorId: string }): Promise<boolean> {
+    const row = await dbRevokeManagedExecutor(this.db(), { executorId: input.executorId });
+    return Boolean(row);
+  }
+
   async listAgentToolsetsByOrg(input: { organizationId: string; actorUserId: string }) {
     const rows = await this.withOrgContext(
       { userId: input.actorUserId, organizationId: input.organizationId },
@@ -2106,6 +2240,10 @@ export class PgAppStore implements AppStore {
   async createAgentSession(input: {
     organizationId: string;
     actorUserId: string;
+    sessionKey?: string;
+    scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+    routedAgentId?: string | null;
+    bindingId?: string | null;
     title?: string | null;
     engineId: string;
     toolsetId?: string | null;
@@ -2113,6 +2251,7 @@ export class PgAppStore implements AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
+    resetPolicySnapshot?: unknown;
     executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   }): Promise<AgentSessionRecord> {
     const row = await this.withOrgContext(
@@ -2121,6 +2260,10 @@ export class PgAppStore implements AppStore {
         dbCreateAgentSession(db, {
           organizationId: input.organizationId,
           createdByUserId: input.actorUserId,
+          ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
+          ...(input.scope ? { scope: input.scope } : {}),
+          ...(input.routedAgentId !== undefined ? { routedAgentId: input.routedAgentId } : {}),
+          ...(input.bindingId !== undefined ? { bindingId: input.bindingId } : {}),
           title: input.title ?? "",
           status: "active",
           selectorTag: input.executorSelector?.tag ?? null,
@@ -2135,6 +2278,7 @@ export class PgAppStore implements AppStore {
           limits: input.limits ?? {},
           promptSystem: input.prompt.system ?? null,
           promptInstructions: input.prompt.instructions,
+          resetPolicySnapshot: input.resetPolicySnapshot ?? {},
         })
     );
     return this.toAgentSessionRecord(row);
@@ -2175,6 +2319,9 @@ export class PgAppStore implements AppStore {
     sessionId: string;
     eventType: string;
     level: "info" | "warn" | "error";
+    handoffFromAgentId?: string | null;
+    handoffToAgentId?: string | null;
+    idempotencyKey?: string | null;
     payload: unknown;
   }): Promise<AgentSessionEventRecord> {
     const row = await this.withOrgContext(
@@ -2185,6 +2332,9 @@ export class PgAppStore implements AppStore {
           sessionId: input.sessionId,
           eventType: input.eventType,
           level: input.level,
+          ...(input.handoffFromAgentId !== undefined ? { handoffFromAgentId: input.handoffFromAgentId } : {}),
+          ...(input.handoffToAgentId !== undefined ? { handoffToAgentId: input.handoffToAgentId } : {}),
+          ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}),
           payload: input.payload ?? null,
         })
     );
@@ -2212,6 +2362,202 @@ export class PgAppStore implements AppStore {
       events: out.events.map((r) => this.toAgentSessionEventRecord(r)),
       nextCursor: out.nextCursor,
     };
+  }
+
+  async setAgentSessionPinnedAgent(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    pinnedAgentId?: string | null;
+    pinnedExecutorId?: string | null;
+    pinnedExecutorPool?: "managed" | "byon" | null;
+  }): Promise<AgentSessionRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbSetAgentSessionPinnedAgent(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+          ...(input.pinnedAgentId !== undefined ? { pinnedAgentId: input.pinnedAgentId } : {}),
+          ...(input.pinnedExecutorId !== undefined ? { pinnedExecutorId: input.pinnedExecutorId } : {}),
+          ...(input.pinnedExecutorPool !== undefined ? { pinnedExecutorPool: input.pinnedExecutorPool } : {}),
+        })
+    );
+    return row ? this.toAgentSessionRecord(row) : null;
+  }
+
+  async setAgentSessionRoute(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+    routedAgentId: string | null;
+    bindingId?: string | null;
+    sessionKey?: string;
+    scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  }): Promise<AgentSessionRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbSetAgentSessionRoute(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+          routedAgentId: input.routedAgentId,
+          ...(input.bindingId !== undefined ? { bindingId: input.bindingId } : {}),
+          ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
+          ...(input.scope ? { scope: input.scope } : {}),
+        })
+    );
+    return row ? this.toAgentSessionRecord(row) : null;
+  }
+
+  async createAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    agentId: string;
+    priority: number;
+    dimension: string;
+    match: unknown;
+    metadata?: unknown;
+  }): Promise<AgentBindingRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateAgentBinding(db, {
+          organizationId: input.organizationId,
+          agentId: input.agentId,
+          priority: input.priority,
+          dimension: input.dimension,
+          match: input.match,
+          metadata: input.metadata ?? null,
+          createdByUserId: input.actorUserId,
+        })
+    );
+    return this.toAgentBindingRecord(row);
+  }
+
+  async listAgentBindings(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<AgentBindingRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbListAgentBindings(db, { organizationId: input.organizationId })
+    );
+    return rows.map((row) => this.toAgentBindingRecord(row));
+  }
+
+  async patchAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    bindingId: string;
+    patch: {
+      agentId?: string;
+      priority?: number;
+      dimension?: string;
+      match?: unknown;
+      metadata?: unknown;
+    };
+  }): Promise<AgentBindingRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbPatchAgentBinding(db, {
+          organizationId: input.organizationId,
+          bindingId: input.bindingId,
+          patch: input.patch,
+        })
+    );
+    return row ? this.toAgentBindingRecord(row) : null;
+  }
+
+  async deleteAgentBinding(input: {
+    organizationId: string;
+    actorUserId: string;
+    bindingId: string;
+  }): Promise<boolean> {
+    return await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbDeleteAgentBinding(db, { organizationId: input.organizationId, bindingId: input.bindingId })
+    );
+  }
+
+  async createAgentMemorySyncJob(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId?: string | null;
+    sessionKey: string;
+    provider: "builtin" | "qmd";
+    status?: "queued" | "running" | "succeeded" | "failed";
+    reason?: string | null;
+    details?: unknown;
+  }): Promise<AgentMemorySyncJobRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateAgentMemorySyncJob(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId ?? null,
+          sessionKey: input.sessionKey,
+          provider: input.provider,
+          status: input.status ?? "queued",
+          reason: input.reason ?? null,
+          details: input.details ?? {},
+          createdByUserId: input.actorUserId,
+        })
+    );
+    return this.toAgentMemorySyncJobRecord(row);
+  }
+
+  async listAgentMemoryDocuments(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionKey?: string;
+    limit?: number;
+  }): Promise<AgentMemoryDocumentRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListAgentMemoryDocuments(db, {
+          organizationId: input.organizationId,
+          ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((row) => this.toAgentMemoryDocumentRecord(row));
+  }
+
+  async getAgentMemoryDocumentById(input: {
+    organizationId: string;
+    actorUserId: string;
+    documentId: string;
+  }): Promise<AgentMemoryDocumentRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbGetAgentMemoryDocumentById(db, {
+          organizationId: input.organizationId,
+          documentId: input.documentId,
+        })
+    );
+    return row ? this.toAgentMemoryDocumentRecord(row) : null;
+  }
+
+  async listAgentMemoryChunksByDocument(input: {
+    organizationId: string;
+    actorUserId: string;
+    documentId: string;
+    limit?: number;
+  }): Promise<AgentMemoryChunkRecord[]> {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListAgentMemoryChunksByDocument(db, {
+          organizationId: input.organizationId,
+          documentId: input.documentId,
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((row) => this.toAgentMemoryChunkRecord(row));
   }
 
   async listChannelAccounts(input: {

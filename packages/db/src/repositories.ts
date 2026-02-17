@@ -2,8 +2,13 @@ import crypto from "node:crypto";
 import { and, asc, desc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
+  agentBindings,
+  agentMemoryChunks,
+  agentMemoryDocuments,
+  agentMemorySyncJobs,
   authSessions,
   agentPairingTokens,
+  agentResetPolicies,
   agentSessionEvents,
   agentSessions,
   agentToolsets,
@@ -1690,6 +1695,44 @@ export async function getManagedExecutorByTokenHash(db: Db, input: { tokenHash: 
   return row ?? null;
 }
 
+export async function createManagedExecutor(
+  db: Db,
+  input: {
+    id?: string;
+    name: string;
+    tokenHash: string;
+    maxInFlight?: number;
+    labels?: string[];
+    capabilities?: unknown;
+    enabled?: boolean;
+    drain?: boolean;
+    runtimeClass?: string;
+    region?: string | null;
+  }
+) {
+  const [row] = await db
+    .insert(managedExecutors)
+    .values({
+      ...(input.id ? { id: input.id } : {}),
+      name: input.name,
+      tokenHash: input.tokenHash,
+      maxInFlight: Math.max(1, Math.floor(input.maxInFlight ?? 50)),
+      labels: input.labels ?? [],
+      capabilities: (input.capabilities ?? null) as any,
+      enabled: input.enabled ?? true,
+      drain: input.drain ?? false,
+      runtimeClass: input.runtimeClass ?? "container",
+      region: input.region ?? null,
+      revokedAt: null,
+      lastSeenAt: null,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create managed executor");
+  }
+  return row;
+}
+
 export async function listManagedExecutors(db: Db) {
   const rows = await db.select().from(managedExecutors).orderBy(desc(managedExecutors.createdAt));
   return rows;
@@ -2111,8 +2154,12 @@ export async function createAgentSession(
   input: {
     organizationId: string;
     createdByUserId: string;
+    sessionKey?: string;
+    scope?: string;
     title?: string | null;
     status?: "active" | "archived";
+    routedAgentId?: string | null;
+    bindingId?: string | null;
     selectorTag?: string | null;
     selectorGroup?: string | null;
     executorSelector?: unknown;
@@ -2125,6 +2172,7 @@ export async function createAgentSession(
     limits: unknown;
     promptSystem?: string | null;
     promptInstructions: string;
+    resetPolicySnapshot?: unknown;
   }
 ) {
   const [row] = await db
@@ -2132,8 +2180,12 @@ export async function createAgentSession(
     .values({
       organizationId: input.organizationId,
       createdByUserId: input.createdByUserId,
+      sessionKey: input.sessionKey ?? `session:${crypto.randomUUID()}`,
+      scope: input.scope ?? "main",
       title: input.title ?? "",
       status: input.status ?? "active",
+      routedAgentId: input.routedAgentId ?? null,
+      bindingId: input.bindingId ?? null,
       selectorTag: input.selectorTag ?? ((input.executorSelector as any)?.tag ?? null),
       selectorGroup: input.selectorGroup ?? ((input.executorSelector as any)?.group ?? null),
       executorSelector: (input.executorSelector ?? null) as any,
@@ -2146,6 +2198,7 @@ export async function createAgentSession(
       limits: input.limits as any,
       promptSystem: input.promptSystem ?? null,
       promptInstructions: input.promptInstructions,
+      resetPolicySnapshot: (input.resetPolicySnapshot ?? {}) as any,
       lastActivityAt: new Date(),
       updatedAt: new Date(),
     })
@@ -2200,11 +2253,64 @@ export async function listAgentSessions(
 
 export async function setAgentSessionPinnedAgent(
   db: Db,
-  input: { organizationId: string; sessionId: string; pinnedAgentId: string | null }
+  input: {
+    organizationId: string;
+    sessionId: string;
+    pinnedAgentId?: string | null;
+    pinnedExecutorId?: string | null;
+    pinnedExecutorPool?: "managed" | "byon" | null;
+  }
+) {
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (input.pinnedAgentId !== undefined) {
+    patch.pinnedAgentId = input.pinnedAgentId;
+  }
+  if (input.pinnedExecutorId !== undefined) {
+    patch.pinnedExecutorId = input.pinnedExecutorId;
+  }
+  if (input.pinnedExecutorPool !== undefined) {
+    patch.pinnedExecutorPool = input.pinnedExecutorPool;
+  }
+  const [row] = await db
+    .update(agentSessions)
+    .set(patch as any)
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function setAgentSessionRoute(
+  db: Db,
+  input: {
+    organizationId: string;
+    sessionId: string;
+    routedAgentId: string | null;
+    bindingId?: string | null;
+    sessionKey?: string;
+    scope?: string;
+  }
 ) {
   const [row] = await db
     .update(agentSessions)
-    .set({ pinnedAgentId: input.pinnedAgentId, updatedAt: new Date() })
+    .set({
+      routedAgentId: input.routedAgentId,
+      ...(input.bindingId !== undefined ? { bindingId: input.bindingId } : {}),
+      ...(typeof input.sessionKey === "string" ? { sessionKey: input.sessionKey } : {}),
+      ...(typeof input.scope === "string" ? { scope: input.scope } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function setAgentSessionResetPolicySnapshot(
+  db: Db,
+  input: { organizationId: string; sessionId: string; resetPolicySnapshot: unknown }
+) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ resetPolicySnapshot: input.resetPolicySnapshot as any, updatedAt: new Date() })
     .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
     .returning();
   return row ?? null;
@@ -2250,10 +2356,30 @@ export async function appendAgentSessionEvent(
     sessionId: string;
     eventType: string;
     level?: "info" | "warn" | "error";
+    handoffFromAgentId?: string | null;
+    handoffToAgentId?: string | null;
+    idempotencyKey?: string | null;
     payload?: unknown;
   }
 ) {
   return await db.transaction(async (tx) => {
+    if (input.idempotencyKey && input.idempotencyKey.trim().length > 0) {
+      const [existing] = await tx
+        .select()
+        .from(agentSessionEvents)
+        .where(
+          and(
+            eq(agentSessionEvents.organizationId, input.organizationId),
+            eq(agentSessionEvents.sessionId, input.sessionId),
+            eq(agentSessionEvents.idempotencyKey, input.idempotencyKey)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        return existing;
+      }
+    }
+
     // Serialize seq allocation per session.
     const [locked] = await tx
       .select({ id: agentSessions.id })
@@ -2281,6 +2407,9 @@ export async function appendAgentSessionEvent(
         seq: nextSeq,
         eventType: input.eventType,
         level: input.level ?? "info",
+        handoffFromAgentId: input.handoffFromAgentId ?? null,
+        handoffToAgentId: input.handoffToAgentId ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
         payload: input.payload as any,
       })
       .returning();
@@ -2339,6 +2468,288 @@ export async function listAgentSessionEventsTail(
     .limit(limit);
   // Return ascending (seq) for client playback.
   return [...rows].reverse();
+}
+
+export async function createAgentBinding(
+  db: Db,
+  input: {
+    organizationId: string;
+    agentId: string;
+    priority: number;
+    dimension: string;
+    match: unknown;
+    metadata?: unknown;
+    createdByUserId: string;
+  }
+) {
+  const [row] = await db
+    .insert(agentBindings)
+    .values({
+      organizationId: input.organizationId,
+      agentId: input.agentId,
+      priority: input.priority,
+      dimension: input.dimension,
+      match: input.match as any,
+      metadata: (input.metadata ?? null) as any,
+      createdByUserId: input.createdByUserId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create agent binding");
+  }
+  return row;
+}
+
+export async function listAgentBindings(db: Db, input: { organizationId: string }) {
+  return await db
+    .select()
+    .from(agentBindings)
+    .where(eq(agentBindings.organizationId, input.organizationId))
+    .orderBy(asc(agentBindings.dimension), desc(agentBindings.priority), asc(agentBindings.id));
+}
+
+export async function getAgentBindingById(db: Db, input: { organizationId: string; bindingId: string }) {
+  const [row] = await db
+    .select()
+    .from(agentBindings)
+    .where(and(eq(agentBindings.organizationId, input.organizationId), eq(agentBindings.id, input.bindingId)));
+  return row ?? null;
+}
+
+export async function patchAgentBinding(
+  db: Db,
+  input: {
+    organizationId: string;
+    bindingId: string;
+    patch: {
+      agentId?: string;
+      priority?: number;
+      dimension?: string;
+      match?: unknown;
+      metadata?: unknown;
+    };
+  }
+) {
+  const [row] = await db
+    .update(agentBindings)
+    .set({
+      ...(input.patch.agentId !== undefined ? { agentId: input.patch.agentId } : {}),
+      ...(input.patch.priority !== undefined ? { priority: input.patch.priority } : {}),
+      ...(input.patch.dimension !== undefined ? { dimension: input.patch.dimension } : {}),
+      ...(input.patch.match !== undefined ? { match: input.patch.match as any } : {}),
+      ...(input.patch.metadata !== undefined ? { metadata: input.patch.metadata as any } : {}),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(agentBindings.organizationId, input.organizationId), eq(agentBindings.id, input.bindingId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function deleteAgentBinding(db: Db, input: { organizationId: string; bindingId: string }) {
+  const [row] = await db
+    .delete(agentBindings)
+    .where(and(eq(agentBindings.organizationId, input.organizationId), eq(agentBindings.id, input.bindingId)))
+    .returning({ id: agentBindings.id });
+  return Boolean(row);
+}
+
+export async function upsertAgentResetPolicy(
+  db: Db,
+  input: {
+    organizationId: string;
+    policyId?: string;
+    agentId?: string | null;
+    name: string;
+    policy: unknown;
+    active?: boolean;
+    createdByUserId: string;
+  }
+) {
+  if (input.policyId) {
+    const [updated] = await db
+      .update(agentResetPolicies)
+      .set({
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+        name: input.name,
+        policy: input.policy as any,
+        active: input.active ?? true,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(agentResetPolicies.organizationId, input.organizationId), eq(agentResetPolicies.id, input.policyId)))
+      .returning();
+    return updated ?? null;
+  }
+
+  const [created] = await db
+    .insert(agentResetPolicies)
+    .values({
+      organizationId: input.organizationId,
+      agentId: input.agentId ?? null,
+      name: input.name,
+      policy: input.policy as any,
+      active: input.active ?? true,
+      createdByUserId: input.createdByUserId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  return created ?? null;
+}
+
+export async function listAgentResetPolicies(db: Db, input: { organizationId: string; activeOnly?: boolean }) {
+  const where = input.activeOnly
+    ? and(eq(agentResetPolicies.organizationId, input.organizationId), eq(agentResetPolicies.active, true))
+    : eq(agentResetPolicies.organizationId, input.organizationId);
+  return await db
+    .select()
+    .from(agentResetPolicies)
+    .where(where)
+    .orderBy(desc(agentResetPolicies.updatedAt), desc(agentResetPolicies.id));
+}
+
+export async function createAgentMemoryDocument(
+  db: Db,
+  input: {
+    organizationId: string;
+    sessionId?: string | null;
+    sessionKey: string;
+    provider: "builtin" | "qmd";
+    docPath: string;
+    contentHash: string;
+    lineCount: number;
+    metadata?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(agentMemoryDocuments)
+    .values({
+      organizationId: input.organizationId,
+      sessionId: input.sessionId ?? null,
+      sessionKey: input.sessionKey,
+      provider: input.provider,
+      docPath: input.docPath,
+      contentHash: input.contentHash,
+      lineCount: input.lineCount,
+      metadata: (input.metadata ?? {}) as any,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create agent memory document");
+  }
+  return row;
+}
+
+export async function replaceAgentMemoryChunks(
+  db: Db,
+  input: {
+    organizationId: string;
+    documentId: string;
+    chunks: Array<{ chunkIndex: number; text: string; tokenCount?: number; embedding?: unknown; metadata?: unknown }>;
+  }
+) {
+  await db
+    .delete(agentMemoryChunks)
+    .where(and(eq(agentMemoryChunks.organizationId, input.organizationId), eq(agentMemoryChunks.documentId, input.documentId)));
+
+  if (input.chunks.length === 0) {
+    return [];
+  }
+
+  return await db
+    .insert(agentMemoryChunks)
+    .values(
+      input.chunks.map((chunk) => ({
+        organizationId: input.organizationId,
+        documentId: input.documentId,
+        chunkIndex: chunk.chunkIndex,
+        text: chunk.text,
+        tokenCount: chunk.tokenCount ?? 0,
+        embedding: (chunk.embedding ?? null) as any,
+        metadata: (chunk.metadata ?? {}) as any,
+      }))
+    )
+    .returning();
+}
+
+export async function createAgentMemorySyncJob(
+  db: Db,
+  input: {
+    organizationId: string;
+    sessionId?: string | null;
+    sessionKey: string;
+    provider: "builtin" | "qmd";
+    status?: "queued" | "running" | "succeeded" | "failed";
+    reason?: string | null;
+    details?: unknown;
+    createdByUserId?: string | null;
+  }
+) {
+  const [row] = await db
+    .insert(agentMemorySyncJobs)
+    .values({
+      organizationId: input.organizationId,
+      sessionId: input.sessionId ?? null,
+      sessionKey: input.sessionKey,
+      provider: input.provider,
+      status: input.status ?? "queued",
+      reason: input.reason ?? null,
+      details: (input.details ?? {}) as any,
+      ...(input.status === "running" ? { startedAt: new Date() } : {}),
+      ...(input.status === "succeeded" || input.status === "failed" ? { finishedAt: new Date() } : {}),
+      createdByUserId: input.createdByUserId ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create agent memory sync job");
+  }
+  return row;
+}
+
+export async function listAgentMemoryDocuments(
+  db: Db,
+  input: {
+    organizationId: string;
+    sessionKey?: string;
+    limit?: number;
+  }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 200)));
+  const where = input.sessionKey
+    ? and(eq(agentMemoryDocuments.organizationId, input.organizationId), eq(agentMemoryDocuments.sessionKey, input.sessionKey))
+    : eq(agentMemoryDocuments.organizationId, input.organizationId);
+  return await db
+    .select()
+    .from(agentMemoryDocuments)
+    .where(where)
+    .orderBy(desc(agentMemoryDocuments.updatedAt), desc(agentMemoryDocuments.id))
+    .limit(limit);
+}
+
+export async function getAgentMemoryDocumentById(db: Db, input: { organizationId: string; documentId: string }) {
+  const [row] = await db
+    .select()
+    .from(agentMemoryDocuments)
+    .where(and(eq(agentMemoryDocuments.organizationId, input.organizationId), eq(agentMemoryDocuments.id, input.documentId)));
+  return row ?? null;
+}
+
+export async function listAgentMemoryChunksByDocument(
+  db: Db,
+  input: { organizationId: string; documentId: string; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(1000, Math.floor(input.limit ?? 400)));
+  return await db
+    .select()
+    .from(agentMemoryChunks)
+    .where(and(eq(agentMemoryChunks.organizationId, input.organizationId), eq(agentMemoryChunks.documentId, input.documentId)))
+    .orderBy(asc(agentMemoryChunks.chunkIndex))
+    .limit(limit);
 }
 
 export async function createChannelAccount(

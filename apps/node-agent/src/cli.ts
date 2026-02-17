@@ -151,8 +151,8 @@ async function pairAgent(input: {
         pairingToken: input.pairingToken,
         name: input.name,
         agentVersion: input.agentVersion,
-        capabilities: {
-          kinds: ["connector.action", "agent.execute"],
+          capabilities: {
+          kinds: ["connector.action", "agent.execute", "agent.run"],
           ...(input.tags && input.tags.length > 0 ? { labels: input.tags } : {}),
         },
       }),
@@ -199,7 +199,7 @@ async function main(): Promise<void> {
       executorName: name,
       executorVersion: agentVersion,
       capabilities: {
-        kinds: ["connector.action", "agent.execute"],
+        kinds: ["connector.action", "agent.execute", "agent.run"],
         ...(parsed.tags && parsed.tags.length > 0 ? { labels: parsed.tags } : {}),
       },
     };
@@ -223,7 +223,7 @@ async function main(): Promise<void> {
           executorName: parsed.name ?? os.hostname() ?? `executor-${crypto.randomBytes(4).toString("hex")}`,
           executorVersion: await readPackageVersion(),
           capabilities: {
-            kinds: ["connector.action", "agent.execute"],
+            kinds: ["connector.action", "agent.execute", "agent.run"],
             ...(parsed.labels && parsed.labels.length > 0 ? { labels: parsed.labels } : {}),
             ...(typeof parsed.maxInFlight === "number" && Number.isFinite(parsed.maxInFlight)
               ? { maxInFlight: Math.max(1, Math.floor(parsed.maxInFlight)) }

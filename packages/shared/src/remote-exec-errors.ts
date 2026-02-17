@@ -1,5 +1,6 @@
 export const REMOTE_EXEC_ERROR = {
   NoAgentAvailable: "NO_AGENT_AVAILABLE",
+  PinnedAgentOffline: "PINNED_AGENT_OFFLINE",
   NodeExecutionFailed: "NODE_EXECUTION_FAILED",
   NodeExecutionTimeout: "NODE_EXECUTION_TIMEOUT",
   AgentDisconnected: "AGENT_DISCONNECTED",

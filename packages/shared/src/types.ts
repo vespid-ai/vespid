@@ -213,8 +213,8 @@ export type GatewayExecutorHelloV2 = {
   name?: string | null;
   labels: string[];
   maxInFlight: number;
-  // Executors only run tool workloads, never agent brains.
-  kinds: GatewayToolKind[];
+  // Interactive sessions may pin a host that can run agent turns end-to-end.
+  kinds: GatewayExecutionKind[];
   resourceHints?: { cpu?: number; memoryMb?: number };
 };
 
@@ -348,3 +348,315 @@ export type ChannelSessionSource = {
   mentionMatched: boolean;
   event: ChannelMessageEventType;
 };
+
+export type SessionScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+
+export type BindingDimension =
+  | "peer"
+  | "parent_peer"
+  | "org_roles"
+  | "organization"
+  | "team"
+  | "account"
+  | "channel"
+  | "default";
+
+export type SessionEventType =
+  | "user_message"
+  | "agent_message"
+  | "tool_call"
+  | "tool_result"
+  | "agent_handoff"
+  | "agent_final"
+  | "error"
+  | "system";
+
+export type MemoryProvider = "builtin" | "qmd";
+
+export type ExecutionMode = "pinned-node-host";
+
+export type AgentBindingMatch = {
+  peer?: string | null;
+  parentPeer?: string | null;
+  orgRoles?: string[] | null;
+  organizationId?: string | null;
+  teamId?: string | null;
+  accountId?: string | null;
+  channelId?: string | null;
+};
+
+export type AgentBindingRecord = {
+  id: string;
+  organizationId: string;
+  agentId: string;
+  priority: number;
+  dimension: BindingDimension;
+  match: AgentBindingMatch;
+  metadata?: Record<string, unknown> | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SessionRouteContext = {
+  organizationId: string;
+  actorUserId: string;
+  channel?: string | null;
+  account?: string | null;
+  peer?: string | null;
+  parentPeer?: string | null;
+  orgRoles?: string[];
+  team?: string | null;
+  scope: SessionScope;
+};
+
+export type SessionRouteResolved = {
+  routedAgentId: string;
+  sessionKey: string;
+  bindingId?: string | null;
+};
+
+export type SessionAttachmentV2 = {
+  name: string;
+  mimeType: string;
+  contentUrl?: string | null;
+  contentText?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type SessionClientJoinMessageV2 = {
+  type: "session_join";
+  sessionId: string;
+};
+
+export type SessionClientSendMessageV2 = {
+  type: "session_send";
+  sessionId: string;
+  message: string;
+  attachments?: SessionAttachmentV2[];
+  idempotencyKey?: string;
+};
+
+export type SessionClientResetAgentMessageV2 = {
+  type: "session_reset_agent";
+  sessionId: string;
+  mode?: "keep_history" | "clear_history";
+};
+
+export type SessionClientLeaveMessageV2 = {
+  type: "session_leave";
+  sessionId: string;
+};
+
+export type SessionClientHelloMessageV2 = {
+  type: "client_hello";
+  clientVersion?: string;
+};
+
+export type SessionClientToGatewayMessageV2 =
+  | SessionClientHelloMessageV2
+  | SessionClientJoinMessageV2
+  | SessionClientSendMessageV2
+  | SessionClientResetAgentMessageV2
+  | SessionClientLeaveMessageV2;
+
+export type SessionGatewayAckMessageV2 = {
+  type: "session_ack";
+  sessionId: string;
+};
+
+export type SessionGatewayDeltaMessageV2 = {
+  type: "agent_delta";
+  sessionId: string;
+  seq: number;
+  content: string;
+  createdAt: string;
+};
+
+export type SessionGatewayFinalMessageV2 = {
+  type: "agent_final";
+  sessionId: string;
+  seq: number;
+  content: string;
+  payload?: unknown;
+  createdAt: string;
+};
+
+export type SessionGatewayHandoffMessageV2 = {
+  type: "agent_handoff";
+  sessionId: string;
+  seq: number;
+  fromAgentId: string | null;
+  toAgentId: string;
+  reason?: string | null;
+  createdAt: string;
+};
+
+export type SessionGatewayStateMessageV2 = {
+  type: "session_state";
+  sessionId: string;
+  pinnedExecutorId: string | null;
+  pinnedExecutorPool: ExecutorPool | null;
+  pinnedAgentId: string | null;
+  routedAgentId: string | null;
+  scope: SessionScope;
+  executionMode: ExecutionMode;
+};
+
+export type SessionGatewayErrorMessageV2 = {
+  type: "session_error";
+  sessionId?: string;
+  code: string;
+  message: string;
+};
+
+export type SessionGatewayToClientMessageV2 =
+  | SessionGatewayAckMessageV2
+  | SessionGatewayDeltaMessageV2
+  | SessionGatewayFinalMessageV2
+  | SessionGatewayHandoffMessageV2
+  | SessionGatewayStateMessageV2
+  | SessionGatewayErrorMessageV2;
+
+export type GatewaySessionOpenV2 = {
+  type: "session_open";
+  requestId: string;
+  organizationId: string;
+  sessionId: string;
+  sessionKey: string;
+  routedAgentId: string;
+  userId: string;
+  sessionConfig: {
+    engineId: string;
+    llm: {
+      provider: "openai" | "anthropic" | "gemini" | "vertex";
+      model: string;
+      authMode: "env" | "inline_api_key" | "inline_vertex_oauth";
+      auth?:
+        | {
+            kind: "api_key";
+            apiKey: string;
+          }
+        | {
+            kind: "vertex_oauth";
+            refreshToken: string;
+            projectId: string;
+            location: string;
+          };
+    };
+    prompt: {
+      system?: string | null;
+      instructions: string;
+    };
+    toolsAllow: string[];
+    limits: {
+      maxTurns: number;
+      maxToolCalls: number;
+      timeoutMs: number;
+      maxOutputChars: number;
+      maxRuntimeChars: number;
+    };
+    memoryProvider: MemoryProvider;
+  };
+};
+
+export type GatewaySessionTurnV2 = {
+  type: "session_turn";
+  requestId: string;
+  organizationId: string;
+  sessionId: string;
+  sessionKey: string;
+  userId: string;
+  eventSeq: number;
+  message: string;
+  attachments?: SessionAttachmentV2[];
+};
+
+export type GatewaySessionCancelV2 = {
+  type: "session_cancel";
+  requestId: string;
+  organizationId: string;
+  sessionId: string;
+};
+
+export type GatewayMemorySyncV2 = {
+  type: "memory_sync";
+  requestId: string;
+  organizationId: string;
+  sessionId: string;
+  sessionKey: string;
+  provider: MemoryProvider;
+  workspaceDir: string;
+};
+
+export type GatewayMemoryQueryV2 = {
+  type: "memory_query";
+  requestId: string;
+  organizationId: string;
+  sessionId: string;
+  sessionKey: string;
+  provider: MemoryProvider;
+  query: string;
+  limit?: number;
+};
+
+export type GatewaySessionToExecutorMessageV2 =
+  | GatewaySessionOpenV2
+  | GatewaySessionTurnV2
+  | GatewaySessionCancelV2
+  | GatewayMemorySyncV2
+  | GatewayMemoryQueryV2;
+
+export type ExecutorSessionOpenedV2 = {
+  type: "session_opened";
+  requestId: string;
+  sessionId: string;
+};
+
+export type ExecutorTurnDeltaV2 = {
+  type: "turn_delta";
+  requestId: string;
+  sessionId: string;
+  content: string;
+};
+
+export type ExecutorTurnFinalV2 = {
+  type: "turn_final";
+  requestId: string;
+  sessionId: string;
+  content: string;
+  payload?: unknown;
+};
+
+export type ExecutorTurnErrorV2 = {
+  type: "turn_error";
+  requestId: string;
+  sessionId: string;
+  code: string;
+  message: string;
+};
+
+export type ExecutorMemorySyncResultV2 = {
+  type: "memory_sync_result";
+  requestId: string;
+  sessionId: string;
+  status: "ok" | "failed";
+  details?: unknown;
+};
+
+export type ExecutorMemoryQueryResultV2 = {
+  type: "memory_query_result";
+  requestId: string;
+  sessionId: string;
+  status: "ok" | "failed";
+  results?: unknown[];
+  error?: string;
+};
+
+export type ExecutorToGatewaySessionMessageV2 =
+  | ExecutorSessionOpenedV2
+  | ExecutorTurnDeltaV2
+  | ExecutorTurnFinalV2
+  | ExecutorTurnErrorV2
+  | ExecutorMemorySyncResultV2
+  | ExecutorMemoryQueryResultV2;

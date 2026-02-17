@@ -1,11 +1,13 @@
-# Node-Agent + Gateway (MVP) Runbook
+# Node-Agent + Gateway (Runtime v2) Runbook
 
-This runbook documents the MVP remote execution stack:
-- `apps/gateway`: runs the agent brain loop and routes tool invocations to connected executors.
-- `apps/node-agent`: connects to gateway over WebSocket and executes only tool workloads (`connector.action`, `agent.execute`) in sandbox.
+This runbook documents the runtime v2 execution stack:
+- `apps/gateway`: performs session routing and dispatches workflow/session execution to connected executors.
+- `apps/node-agent`: connects to gateway over WebSocket and executes workloads (`connector.action`, `agent.execute`, `agent.run`) on pinned hosts.
 - `apps/engine-runner`: isolated internal HTTP service for LLM inference used by gateway brain.
 
 The goal is to support private-network or customer-controlled runtime execution while keeping tenancy strict and secrets safe.
+
+For interactive sessions, gateway dispatches turns only to pinned node-hosts. Default policy is BYON-first with managed fallback and re-pin; managed-only is available via explicit selector.
 
 ## Prerequisites
 - Postgres is running and `DATABASE_URL` is set.
@@ -26,6 +28,7 @@ Gateway:
 - `GATEWAY_WS_URL` (default `ws://localhost:3002/ws/executor`)
 - `GATEWAY_RESULTS_TTL_SEC` (default `900`; stores execution results for recovery across gateway restarts)
 - `GATEWAY_ORG_MAX_INFLIGHT` (default per-org executor tool-call quota)
+- `SESSION_MEMORY_ROOT` (optional, default `/tmp/vespid-memory`; markdown memory workspace root)
 
 Engine runner:
 - `ENGINE_RUNNER_BASE_URL` (required in production; e.g. `http://engine-runner:3003`)
@@ -58,6 +61,22 @@ Notes:
 - The `/agents` API reports `online/offline` by comparing `last_seen_at` to `GATEWAY_AGENT_STALE_MS` (clamped).
 - Agent-reported tags (from the WS `hello.capabilities.tags` field) are surfaced as `reportedTags` and are not used for routing.
 
+## Managed Pool Bootstrap (Internal)
+1. Issue a managed executor token (service-to-service):
+   - `POST /internal/v1/managed-executors/issue`
+   - Header: `X-Service-Token: <internal service token>`
+2. Start node-agent using issued credentials:
+```bash
+pnpm --filter @vespid/node-agent dev -- start \
+  --pool managed \
+  --executor-id <executorId> \
+  --executor-token <executorToken> \
+  --gateway-ws-url <gatewayWsUrl> \
+  --api-base http://localhost:3001
+```
+3. Revoke on drain/retire:
+   - `POST /internal/v1/managed-executors/:executorId/revoke`
+
 ## Verifying Remote Execution
 1. Create a workflow containing a `connector.action` node with:
 ```json
@@ -66,6 +85,22 @@ Notes:
 2. Publish and run the workflow.
 3. The worker dispatches the node asynchronously and persists a blocked run cursor until results arrive.
 4. Confirm `workflow_run_events` contains `node_dispatched`, followed by `node_succeeded` (or `node_failed`) for that node.
+
+## Verifying Interactive Session v2
+1. Start gateway, one BYON node-agent, and one managed node-agent connected to `/ws/executor`.
+2. Create a session:
+   - `POST /v1/orgs/:orgId/sessions` with `scope`, `peer`, `channel`, `executionMode: "pinned-node-host"`.
+3. Send a turn:
+   - `POST /v1/orgs/:orgId/sessions/:sessionId/messages`.
+4. Confirm client stream receives:
+   - `session_ack`
+   - `agent_delta`
+   - `agent_final`
+5. Disconnect the pinned BYON node-agent and send another turn:
+   - Confirm the session auto failovers to managed and continues without message-chain interruption.
+   - Confirm a `system` event with `action: "session_executor_failover"` is persisted/broadcast.
+6. If both BYON and managed pools are unavailable, confirm deterministic failure:
+   - `NO_AGENT_AVAILABLE`
 
 Streaming notes:
 - When `GATEWAY_CONTINUATION_PUSH=1` and `REDIS_URL` is configured, node-agents may stream remote execution events while a run is blocked.

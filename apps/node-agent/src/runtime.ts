@@ -1,9 +1,22 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import WebSocket from "ws";
 import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
-import type { GatewayInvokeToolV2, GatewayToolResultV2, ToolPolicyV1 } from "@vespid/shared";
+import { createMemoryManager, runAgentLoop, runLlmInference } from "@vespid/agent-runtime";
+import type { LlmInvokeInput } from "@vespid/agent-runtime";
+import type {
+  GatewayInvokeToolV2,
+  GatewayMemoryQueryV2,
+  GatewayMemorySyncV2,
+  MemoryProvider,
+  GatewaySessionOpenV2,
+  GatewaySessionTurnV2,
+  GatewayToolResultV2,
+  WorkflowNodeExecutorResult,
+  ToolPolicyV1,
+} from "@vespid/shared";
 import { REMOTE_EXEC_ERROR } from "@vespid/shared";
 import { resolveSandboxBackend, type SandboxBackend } from "./sandbox/index.js";
 import { ensureWorkspaceExtracted, snapshotAndUploadWorkspace, verifyWorkspaceDependencies } from "./workspaces/snapshot-cache.js";
@@ -105,6 +118,80 @@ const invokeToolSchema = z.object({
     }),
   }),
   idempotencyKey: z.string().min(1).optional(),
+});
+
+const sessionOpenSchema = z.object({
+  type: z.literal("session_open"),
+  requestId: z.string().min(1),
+  organizationId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  sessionKey: z.string().min(1),
+  routedAgentId: z.string().min(1),
+  userId: z.string().uuid(),
+  sessionConfig: z.object({
+    engineId: z.string().min(1),
+    llm: z.object({
+      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]),
+      model: z.string().min(1),
+      authMode: z.enum(["env", "inline_api_key", "inline_vertex_oauth"]),
+      auth: z
+        .discriminatedUnion("kind", [
+          z.object({
+            kind: z.literal("api_key"),
+            apiKey: z.string().min(1),
+          }),
+          z.object({
+            kind: z.literal("vertex_oauth"),
+            refreshToken: z.string().min(1),
+            projectId: z.string().min(1),
+            location: z.string().min(1),
+          }),
+        ])
+        .optional(),
+    }),
+    prompt: z.object({
+      system: z.string().optional().nullable(),
+      instructions: z.string().min(1),
+    }),
+    toolsAllow: z.array(z.string().min(1)).max(200),
+    limits: z.object({
+      maxTurns: z.number().int().min(1).max(200),
+      maxToolCalls: z.number().int().min(0).max(1000),
+      timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000),
+      maxOutputChars: z.number().int().min(256).max(2_000_000),
+      maxRuntimeChars: z.number().int().min(10_000).max(5_000_000),
+    }),
+    memoryProvider: z.enum(["builtin", "qmd"]),
+  }),
+});
+
+const sessionTurnSchema = z.object({
+  type: z.literal("session_turn"),
+  requestId: z.string().min(1),
+  organizationId: z.string().uuid(),
+  sessionId: z.string().uuid(),
+  sessionKey: z.string().min(1),
+  userId: z.string().uuid(),
+  eventSeq: z.number().int().min(0),
+  message: z.string().min(1),
+  attachments: z.array(z.unknown()).optional(),
+});
+
+const memorySyncSchema = z.object({
+  type: z.literal("memory_sync"),
+  requestId: z.string().min(1),
+  sessionId: z.string().uuid(),
+  provider: z.enum(["builtin", "qmd"]),
+  workspaceDir: z.string().min(1),
+});
+
+const memoryQuerySchema = z.object({
+  type: z.literal("memory_query"),
+  requestId: z.string().min(1),
+  sessionId: z.string().uuid(),
+  provider: z.enum(["builtin", "qmd"]),
+  query: z.string().min(1),
+  limit: z.number().int().min(1).max(50).optional(),
 });
 
 function normalizeWorkspacePointer(pointer: z.infer<typeof invokeToolSchema>["workspace"]) {
@@ -210,6 +297,239 @@ function normalizeConfig(config: NodeAgentConfig): {
     executorName,
     executorVersion,
     capabilities: config.capabilities ?? {},
+  };
+}
+
+type SessionContext = {
+  opened: z.infer<typeof sessionOpenSchema>;
+  memory: ReturnType<typeof createMemoryManager>;
+  runtime: WorkflowNodeExecutorResult["runtime"];
+  workspaceDir: string;
+};
+
+function normalizePathPart(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "unknown";
+  return trimmed.replace(/[^a-z0-9._-]+/g, "-");
+}
+
+function toTextOutput(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+async function buildSessionRuntimeManager(input: {
+  pool: "managed" | "byon";
+}): Promise<{
+  openSession: (open: z.infer<typeof sessionOpenSchema>) => Promise<{ ok: true } | { ok: false; code: string; message: string }>;
+  runTurn: (turn: z.infer<typeof sessionTurnSchema>) => Promise<
+    | { ok: true; content: string; payload?: unknown }
+    | { ok: false; code: string; message: string }
+  >;
+  syncMemory: (sync: z.infer<typeof memorySyncSchema>) => Promise<{ ok: true; details: unknown } | { ok: false; error: string }>;
+  queryMemory: (query: z.infer<typeof memoryQuerySchema>) => Promise<{ ok: true; results: unknown[] } | { ok: false; error: string }>;
+}> {
+  const sessions = new Map<string, SessionContext>();
+  const memoryRoot = process.env.SESSION_MEMORY_ROOT ?? "/tmp/vespid-memory";
+  const managedSafeTools = new Set(["memory.search", "memory.get", "memory_search", "memory_get"]);
+
+  async function openSession(open: z.infer<typeof sessionOpenSchema>) {
+    const workspaceDir = path.join(
+      memoryRoot,
+      normalizePathPart(open.organizationId),
+      normalizePathPart(open.sessionKey)
+    );
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const memory = createMemoryManager({
+      provider: open.sessionConfig.memoryProvider,
+      workspaceDir,
+    });
+    sessions.set(open.sessionId, {
+      opened: open,
+      memory,
+      runtime: {},
+      workspaceDir,
+    });
+    return { ok: true } as const;
+  }
+
+  async function runTurn(turn: z.infer<typeof sessionTurnSchema>) {
+    const ctx = sessions.get(turn.sessionId) ?? null;
+    if (!ctx) {
+      return { ok: false as const, code: "SESSION_NOT_OPEN", message: "Session has not been opened on this executor." };
+    }
+
+    if (input.pool === "managed") {
+      const disallowed = ctx.opened.sessionConfig.toolsAllow.filter((toolId) => !managedSafeTools.has(toolId));
+      if (disallowed.length > 0) {
+        return {
+          ok: false as const,
+          code: "MANAGED_TOOL_NOT_ALLOWED",
+          message: `Managed pool only allows memory tools in v1: ${disallowed.join(", ")}`,
+        };
+      }
+    }
+
+    let llmAuthOverride:
+      | {
+          kind: "api_key";
+          apiKey: string;
+        }
+      | {
+          kind: "vertex_oauth";
+          refreshToken: string;
+          projectId: string;
+          location: string;
+        }
+      | null = null;
+    if (ctx.opened.sessionConfig.llm.authMode === "inline_api_key" && ctx.opened.sessionConfig.llm.auth?.kind === "api_key") {
+      llmAuthOverride = {
+        kind: "api_key",
+        apiKey: ctx.opened.sessionConfig.llm.auth.apiKey,
+      };
+    } else if (
+      ctx.opened.sessionConfig.llm.authMode === "inline_vertex_oauth" &&
+      ctx.opened.sessionConfig.llm.auth?.kind === "vertex_oauth"
+    ) {
+      llmAuthOverride = {
+        kind: "vertex_oauth",
+        refreshToken: ctx.opened.sessionConfig.llm.auth.refreshToken,
+        projectId: ctx.opened.sessionConfig.llm.auth.projectId,
+        location: ctx.opened.sessionConfig.llm.auth.location,
+      };
+    }
+
+    let llmResponsePreview = "";
+    const result = await runAgentLoop({
+      organizationId: turn.organizationId,
+      workflowId: `session:${turn.sessionId}`,
+      runId: turn.sessionId,
+      attemptCount: 1,
+      requestedByUserId: turn.userId,
+      nodeId: `session:${turn.sessionId}`,
+      nodeType: "agent.run.session",
+      runInput: {
+        message: turn.message,
+        attachments: turn.attachments ?? [],
+      },
+      steps: [],
+      organizationSettings: {},
+      runtime: ctx.runtime,
+      pendingRemoteResult: null,
+      githubApiBaseUrl: "https://api.github.com",
+      loadSecretValue: async () => "",
+      fetchImpl: fetch,
+      llmInvoke: async (invokeInput: Omit<LlmInvokeInput, "fetchImpl">) =>
+        await runLlmInference({
+          ...invokeInput,
+          fetchImpl: fetch,
+        }),
+      llmAuthOverride,
+      config: {
+        llm: {
+          provider: ctx.opened.sessionConfig.llm.provider,
+          model: ctx.opened.sessionConfig.llm.model,
+          auth: { fallbackToEnv: true },
+        },
+        prompt: {
+          ...(ctx.opened.sessionConfig.prompt.system ? { system: ctx.opened.sessionConfig.prompt.system } : {}),
+          instructions: ctx.opened.sessionConfig.prompt.instructions,
+        },
+        tools: {
+          allow: ctx.opened.sessionConfig.toolsAllow,
+          execution: "cloud",
+        },
+        limits: {
+          maxTurns: ctx.opened.sessionConfig.limits.maxTurns,
+          maxToolCalls: ctx.opened.sessionConfig.limits.maxToolCalls,
+          timeoutMs: ctx.opened.sessionConfig.limits.timeoutMs,
+          maxOutputChars: ctx.opened.sessionConfig.limits.maxOutputChars,
+          maxRuntimeChars: ctx.opened.sessionConfig.limits.maxRuntimeChars,
+        },
+        output: { mode: "text" },
+      },
+      allowRemoteBlocked: false,
+      persistNodeId: `session:${turn.sessionId}`,
+      memory: {
+        sync: async () => {
+          await ctx.memory.sync();
+        },
+        search: async (params: { query: string; maxResults?: number }) => await ctx.memory.search(params),
+        get: async (params: { filePath: string; fromLine?: number; lineCount?: number }) => await ctx.memory.get(params),
+        status: () => ctx.memory.status(),
+      },
+      emitEvent: async (event: { eventType: string; level: "info" | "warn" | "error"; message?: string | null; payload?: unknown }) => {
+        if (event.eventType === "agent_llm_response") {
+          const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : null;
+          const content = payload && typeof payload.content === "string" ? payload.content : "";
+          if (content.length > 0) {
+            llmResponsePreview = content;
+          }
+        }
+      },
+    });
+    ctx.runtime = result.runtime ?? ctx.runtime;
+
+    if (result.status === "blocked") {
+      return { ok: false as const, code: "NODE_EXECUTION_BLOCKED", message: "Blocked tool execution is disabled for interactive turns." };
+    }
+    if (result.status === "failed") {
+      return { ok: false as const, code: result.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed, message: result.error ?? "Turn failed." };
+    }
+
+    const payload = result.output ?? null;
+    const content = toTextOutput(payload);
+    return { ok: true as const, content: content.length > 0 ? content : llmResponsePreview || "ok", ...(payload !== null ? { payload } : {}) };
+  }
+
+  async function syncMemory(sync: z.infer<typeof memorySyncSchema>) {
+    const ctx = sessions.get(sync.sessionId) ?? null;
+    const manager = ctx?.memory ?? createMemoryManager({ provider: sync.provider as MemoryProvider, workspaceDir: sync.workspaceDir });
+    try {
+      await manager.sync();
+      return {
+        ok: true as const,
+        details: {
+          provider: manager.status().provider,
+          fallbackFrom: manager.status().fallbackFrom ?? null,
+          workspaceDir: ctx?.workspaceDir ?? sync.workspaceDir,
+        },
+      };
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : "MEMORY_SYNC_FAILED" };
+    }
+  }
+
+  async function queryMemory(query: z.infer<typeof memoryQuerySchema>) {
+    const ctx = sessions.get(query.sessionId) ?? null;
+    const manager =
+      ctx?.memory ??
+      createMemoryManager({
+        provider: query.provider as MemoryProvider,
+        workspaceDir: path.join(memoryRoot, "ephemeral", normalizePathPart(query.sessionId)),
+      });
+    try {
+      const results = await manager.search({
+        query: query.query,
+        ...(typeof query.limit === "number" ? { maxResults: query.limit } : {}),
+      });
+      return { ok: true as const, results };
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : "MEMORY_QUERY_FAILED" };
+    }
+  }
+
+  return {
+    openSession,
+    runTurn,
+    syncMemory,
+    queryMemory,
   };
 }
 
@@ -378,6 +698,10 @@ function reconnectDelayMs(attempt: number): number {
 export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNodeAgent> {
   verifyWorkspaceDependencies();
   const normalized = normalizeConfig(config);
+  const execBackend = (process.env.VESPID_AGENT_EXEC_BACKEND ?? "host").trim().toLowerCase();
+  if (normalized.pool === "managed" && execBackend !== "docker" && execBackend !== "provider") {
+    throw new Error("MANAGED_POOL_REQUIRES_CONTAINER_SANDBOX");
+  }
 
   const labelsRaw = (normalized.capabilities as any)?.labels ?? (normalized.capabilities as any)?.tags;
   const labels =
@@ -391,7 +715,7 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
     name: normalized.executorName,
     labels,
     maxInFlight: Number((normalized.capabilities as any)?.maxInFlight ?? 10),
-    kinds: ["connector.action", "agent.execute"] as const,
+    kinds: ["connector.action", "agent.execute", "agent.run"] as const,
   };
 
   const pingIntervalMs = 15_000;
@@ -404,6 +728,7 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
   });
 
   const sandbox = resolveSandboxBackend();
+  const sessionRuntime = await buildSessionRuntimeManager({ pool: normalized.pool });
   const tlsCa = await loadTlsCaFromEnv(normalized.gatewayWsUrl);
 
   const loop = (async () => {
@@ -446,24 +771,124 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
 
       ws.on("message", async (data) => {
         const raw = typeof data === "string" ? data : data.toString("utf8");
-        const parsed = invokeToolSchema.safeParse(safeJsonParse(raw));
-        if (!parsed.success) {
+        const parsedJson = safeJsonParse(raw);
+        const parsedTool = invokeToolSchema.safeParse(parsedJson);
+        if (parsedTool.success) {
+          const incoming = parsedTool.data;
+          let result: GatewayToolResultV2;
+          try {
+            result = await executeTool({ incoming, sandbox });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
+            result = {
+              type: "tool_result_v2",
+              requestId: incoming.requestId,
+              status: "failed",
+              error: message || REMOTE_EXEC_ERROR.NodeExecutionFailed,
+            };
+          }
+          safeSend(ws, result);
           return;
         }
-        const incoming = parsed.data;
-        let result: GatewayToolResultV2;
-        try {
-          result = await executeTool({ incoming, sandbox });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
-          result = {
-            type: "tool_result_v2",
+
+        const parsedOpen = sessionOpenSchema.safeParse(parsedJson);
+        if (parsedOpen.success) {
+          const incoming = parsedOpen.data as GatewaySessionOpenV2;
+          const opened = await sessionRuntime.openSession(incoming as any);
+          if (!opened.ok) {
+            safeSend(ws, {
+              type: "turn_error",
+              requestId: incoming.requestId,
+              sessionId: incoming.sessionId,
+              code: opened.code,
+              message: opened.message,
+            });
+            return;
+          }
+          safeSend(ws, {
+            type: "session_opened",
             requestId: incoming.requestId,
-            status: "failed",
-            error: message || REMOTE_EXEC_ERROR.NodeExecutionFailed,
-          };
+            sessionId: incoming.sessionId,
+          });
+          return;
         }
-        safeSend(ws, result);
+
+        const parsedTurn = sessionTurnSchema.safeParse(parsedJson);
+        if (parsedTurn.success) {
+          const incoming = parsedTurn.data as GatewaySessionTurnV2;
+          safeSend(ws, {
+            type: "turn_delta",
+            requestId: incoming.requestId,
+            sessionId: incoming.sessionId,
+            content: "processing...",
+          });
+          const turn = await sessionRuntime.runTurn(incoming as any);
+          if (!turn.ok) {
+            safeSend(ws, {
+              type: "turn_error",
+              requestId: incoming.requestId,
+              sessionId: incoming.sessionId,
+              code: turn.code,
+              message: turn.message,
+            });
+            return;
+          }
+          safeSend(ws, {
+            type: "turn_final",
+            requestId: incoming.requestId,
+            sessionId: incoming.sessionId,
+            content: turn.content,
+            ...(turn.payload !== undefined ? { payload: turn.payload } : {}),
+          });
+          return;
+        }
+
+        const parsedSync = memorySyncSchema.safeParse(parsedJson);
+        if (parsedSync.success) {
+          const incoming = parsedSync.data as GatewayMemorySyncV2;
+          const result = await sessionRuntime.syncMemory(incoming as any);
+          if (!result.ok) {
+            safeSend(ws, {
+              type: "memory_sync_result",
+              requestId: incoming.requestId,
+              sessionId: incoming.sessionId,
+              status: "failed",
+              details: { error: result.error },
+            });
+            return;
+          }
+          safeSend(ws, {
+            type: "memory_sync_result",
+            requestId: incoming.requestId,
+            sessionId: incoming.sessionId,
+            status: "ok",
+            details: result.details,
+          });
+          return;
+        }
+
+        const parsedQuery = memoryQuerySchema.safeParse(parsedJson);
+        if (parsedQuery.success) {
+          const incoming = parsedQuery.data as GatewayMemoryQueryV2;
+          const result = await sessionRuntime.queryMemory(incoming as any);
+          if (!result.ok) {
+            safeSend(ws, {
+              type: "memory_query_result",
+              requestId: incoming.requestId,
+              sessionId: incoming.sessionId,
+              status: "failed",
+              error: result.error,
+            });
+            return;
+          }
+          safeSend(ws, {
+            type: "memory_query_result",
+            requestId: incoming.requestId,
+            sessionId: incoming.sessionId,
+            status: "ok",
+            results: result.results,
+          });
+        }
       });
 
       await Promise.race([

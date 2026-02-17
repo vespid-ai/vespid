@@ -1765,6 +1765,63 @@ export async function buildServer(input?: {
     };
   });
 
+  server.post("/internal/v1/managed-executors/issue", async (request, reply) => {
+    requireInternalServiceToken(request);
+
+    const parsed = z
+      .object({
+        name: z.string().min(1).max(120).default("managed-executor"),
+        maxInFlight: z.number().int().min(1).max(200).optional(),
+        labels: z.array(z.string().min(1).max(64)).max(50).optional(),
+        capabilities: z.record(z.string(), z.unknown()).optional(),
+        runtimeClass: z.string().min(1).max(64).optional(),
+        region: z.string().min(1).max(64).nullable().optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid managed executor issue payload", parsed.error.flatten());
+    }
+
+    const executorId = crypto.randomUUID();
+    const executorToken = `${executorId}.${crypto.randomBytes(32).toString("base64url")}`;
+    const created = await store.createManagedExecutor({
+      name: parsed.data.name,
+      tokenHash: sha256Hex(executorToken),
+      ...(typeof parsed.data.maxInFlight === "number" ? { maxInFlight: parsed.data.maxInFlight } : {}),
+      ...(Array.isArray(parsed.data.labels) ? { labels: parsed.data.labels } : {}),
+      ...(parsed.data.capabilities ? { capabilities: parsed.data.capabilities } : {}),
+      ...(typeof parsed.data.runtimeClass === "string" ? { runtimeClass: parsed.data.runtimeClass } : {}),
+      ...(parsed.data.region !== undefined ? { region: parsed.data.region } : {}),
+    });
+
+    const gatewayWsUrl = process.env.GATEWAY_WS_URL ?? "ws://localhost:3002/ws/executor";
+    return reply.status(201).send({
+      executorId: created.id,
+      executorToken,
+      gatewayWsUrl,
+    });
+  });
+
+  server.post("/internal/v1/managed-executors/:executorId/revoke", async (request) => {
+    requireInternalServiceToken(request);
+    const params = z
+      .object({
+        executorId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid managed executor revoke path", params.error.flatten());
+    }
+
+    const ok = await store.revokeManagedExecutor({
+      executorId: params.data.executorId,
+    });
+    if (!ok) {
+      throw notFound("Managed executor not found");
+    }
+    return { ok: true };
+  });
+
   server.post("/internal/v1/channels/trigger-run", async (request, reply) => {
     requireInternalServiceToken(request);
 
@@ -3116,6 +3173,12 @@ export async function buildServer(input?: {
     const body = z
       .object({
         title: z.string().max(200).optional(),
+        actor: z.string().uuid().optional(),
+        channel: z.string().min(1).max(120).optional(),
+        peer: z.string().min(1).max(240).optional(),
+        scope: z.enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"]).default("main"),
+        context: z.record(z.string().min(1), z.unknown()).optional(),
+        executionMode: z.enum(["pinned-node-host"]).default("pinned-node-host"),
         engineId: z.enum(["gateway.loop.v2", "gateway.codex.v2", "gateway.claude.v2"]).optional(),
         toolsetId: z.string().uuid().optional(),
         llm: z
@@ -3147,9 +3210,10 @@ export async function buildServer(input?: {
           allow: z.array(z.string().min(1).max(120)).max(200).default([]),
         }),
         limits: z.unknown().optional(),
+        resetPolicy: z.unknown().optional(),
         executorSelector: z
           .object({
-            pool: z.enum(["managed", "byon"]).default("managed"),
+            pool: z.enum(["managed", "byon"]).default("byon"),
             labels: z.array(z.string().min(1).max(64)).max(50).optional(),
             group: z.string().min(1).max(64).optional(),
             tag: z.string().min(1).max(64).optional(),
@@ -3209,9 +3273,89 @@ export async function buildServer(input?: {
       throw badRequest("Provider requires llm.auth.secretId for sessions.");
     }
 
+    const bindings = await store.listAgentBindings({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+
+    const dimensionOrder = [
+      "peer",
+      "parent_peer",
+      "org_roles",
+      "organization",
+      "team",
+      "account",
+      "channel",
+      "default",
+    ] as const;
+    const matchBinding = (binding: any) => {
+      const match = (binding.match ?? {}) as Record<string, unknown>;
+      if (binding.dimension === "peer") {
+        return typeof match.peer === "string" && match.peer === body.data.peer;
+      }
+      if (binding.dimension === "parent_peer") {
+        return false;
+      }
+      if (binding.dimension === "org_roles") {
+        const roleSet = new Set([orgContext.membership.roleKey]);
+        const needed = Array.isArray(match.orgRoles) ? match.orgRoles.filter((x): x is string => typeof x === "string") : [];
+        return needed.some((role) => roleSet.has(role as any));
+      }
+      if (binding.dimension === "organization") {
+        return !match.organizationId || match.organizationId === orgContext.organizationId;
+      }
+      if (binding.dimension === "team") {
+        const team = typeof body.data.context?.team === "string" ? body.data.context.team : null;
+        return typeof match.teamId === "string" && match.teamId === team;
+      }
+      if (binding.dimension === "account") {
+        const account = typeof body.data.context?.account === "string" ? body.data.context.account : null;
+        return typeof match.accountId === "string" && match.accountId === account;
+      }
+      if (binding.dimension === "channel") {
+        return typeof match.channelId === "string" && match.channelId === body.data.channel;
+      }
+      return binding.dimension === "default";
+    };
+    const matched = bindings
+      .filter((binding: any) => matchBinding(binding))
+      .sort((left: any, right: any) => {
+        const leftRank = dimensionOrder.indexOf(left.dimension as any);
+        const rightRank = dimensionOrder.indexOf(right.dimension as any);
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        if ((left.priority ?? 0) !== (right.priority ?? 0)) {
+          return (right.priority ?? 0) - (left.priority ?? 0);
+        }
+        return String(left.id).localeCompare(String(right.id));
+      })[0] ?? null;
+
+    const routedAgentId = matched?.agentId ?? null;
+    const normalizedPart = (value: string | null | undefined, fallback: string) => {
+      if (!value || value.trim().length === 0) return fallback;
+      return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+    };
+    const sessionKeyBase = `agent:${normalizedPart(routedAgentId ?? "main", "main")}:org:${normalizedPart(
+      orgContext.organizationId,
+      "unknown-org"
+    )}:scope:${normalizedPart(body.data.scope, "main")}`;
+    const sessionKey =
+      body.data.scope === "per-peer"
+        ? `${sessionKeyBase}:peer:${normalizedPart(body.data.peer ?? body.data.actor ?? auth.userId, "anonymous")}`
+        : body.data.scope === "per-channel-peer"
+          ? `${sessionKeyBase}:channel:${normalizedPart(body.data.channel, "unknown-channel")}:peer:${normalizedPart(body.data.peer ?? body.data.actor ?? auth.userId, "anonymous")}`
+          : body.data.scope === "per-account-channel-peer"
+            ? `${sessionKeyBase}:account:${normalizedPart(typeof body.data.context?.account === "string" ? body.data.context.account : null, "unknown-account")}:channel:${normalizedPart(body.data.channel, "unknown-channel")}:peer:${normalizedPart(body.data.peer ?? body.data.actor ?? auth.userId, "anonymous")}`
+            : sessionKeyBase;
+
     const session = await store.createAgentSession({
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
+      sessionKey,
+      scope: body.data.scope,
+      routedAgentId,
+      ...(matched ? { bindingId: matched.id } : {}),
       title: body.data.title ?? "",
       engineId,
       toolsetId: body.data.toolsetId ?? null,
@@ -3223,7 +3367,8 @@ export async function buildServer(input?: {
       prompt: { system: body.data.prompt.system ?? null, instructions: body.data.prompt.instructions },
       tools: body.data.tools,
       limits: body.data.limits ?? {},
-      executorSelector: body.data.executorSelector ?? { pool: "managed" },
+      resetPolicySnapshot: body.data.resetPolicy ?? {},
+      executorSelector: body.data.executorSelector ?? { pool: "byon" },
     });
 
     await store.appendAgentSessionEvent({
@@ -3232,10 +3377,138 @@ export async function buildServer(input?: {
       sessionId: session.id,
       eventType: "session_created",
       level: "info",
-      payload: { engineId, llm: resolvedLlm, enforcedOrgDefault: isMember },
+      payload: {
+        engineId,
+        llm: resolvedLlm,
+        enforcedOrgDefault: isMember,
+        route: {
+          sessionKey,
+          scope: body.data.scope,
+          routedAgentId,
+          bindingId: matched?.id ?? null,
+        },
+        executionMode: body.data.executionMode,
+      },
     });
 
     return reply.status(201).send({ session });
+  });
+
+  server.post("/v1/orgs/:orgId/sessions/:sessionId/messages", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const body = z
+      .object({
+        message: z.string().min(1).max(50_000),
+        attachments: z
+          .array(
+            z.object({
+              name: z.string().min(1).max(200),
+              mimeType: z.string().min(1).max(120),
+              contentUrl: z.string().url().optional().nullable(),
+              contentText: z.string().max(100_000).optional().nullable(),
+              metadata: z.record(z.string().min(1), z.unknown()).optional(),
+            })
+          )
+          .max(32)
+          .optional(),
+        idempotencyKey: z.string().min(1).max(200).optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      throw badRequest("Invalid session message payload", body.error.flatten());
+    }
+
+    const session = await store.getAgentSessionById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+    });
+    if (!session) {
+      throw notFound("Session not found");
+    }
+
+    const userEvent = await store.appendAgentSessionEvent({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+      eventType: "user_message",
+      level: "info",
+      ...(body.data.idempotencyKey ? { idempotencyKey: body.data.idempotencyKey } : {}),
+      payload: {
+        message: body.data.message,
+        attachments: body.data.attachments ?? [],
+      },
+    });
+
+    const gatewayRes = await fetch(`${GATEWAY_HTTP_URL}/internal/v1/sessions/send`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gateway-token": GATEWAY_INTERNAL_SERVICE_TOKEN,
+      },
+      body: JSON.stringify({
+        organizationId: orgContext.organizationId,
+        userId: auth.userId,
+        sessionId: params.sessionId,
+        userEventSeq: userEvent.seq,
+        message: body.data.message,
+        attachments: body.data.attachments ?? [],
+        idempotencyKey: body.data.idempotencyKey ?? null,
+      }),
+    });
+    if (!gatewayRes.ok) {
+      throw new AppError(503, {
+        code: "QUEUE_UNAVAILABLE",
+        message: "Failed to enqueue session turn",
+      });
+    }
+
+    return reply.status(202).send({ accepted: true, event: userEvent });
+  });
+
+  server.post("/v1/orgs/:orgId/sessions/:sessionId/reset", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const body = z
+      .object({
+        mode: z.enum(["keep_history", "clear_history"]).default("keep_history"),
+      })
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      throw badRequest("Invalid reset payload", body.error.flatten());
+    }
+
+    const session = await store.setAgentSessionPinnedAgent({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+      pinnedAgentId: null,
+      pinnedExecutorId: null,
+      pinnedExecutorPool: null,
+    });
+    if (!session) {
+      throw notFound("Session not found");
+    }
+
+    await store.appendAgentSessionEvent({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+      eventType: "system",
+      level: "info",
+      payload: { action: "session_reset_agent", mode: body.data.mode },
+    });
+
+    return { ok: true, session };
   });
 
   server.get("/v1/orgs/:orgId/sessions", async (request) => {
@@ -3312,6 +3585,212 @@ export async function buildServer(input?: {
       events: out.events,
       nextCursor: out.nextCursor ? encodeCursor(out.nextCursor) : null,
     };
+  });
+
+  server.get("/v1/orgs/:orgId/agent-bindings", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const bindings = await store.listAgentBindings({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+    return { bindings };
+  });
+
+  server.post("/v1/orgs/:orgId/agent-bindings", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage bindings");
+    }
+    const body = z
+      .object({
+        agentId: z.string().uuid(),
+        priority: z.number().int().min(-1000).max(1000).default(0),
+        dimension: z.enum(["peer", "parent_peer", "org_roles", "organization", "team", "account", "channel", "default"]),
+        match: z.record(z.string().min(1), z.unknown()).default({}),
+        metadata: z.record(z.string().min(1), z.unknown()).optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      throw badRequest("Invalid binding payload", body.error.flatten());
+    }
+    const binding = await store.createAgentBinding({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      agentId: body.data.agentId,
+      priority: body.data.priority,
+      dimension: body.data.dimension,
+      match: body.data.match,
+      metadata: body.data.metadata ?? null,
+    });
+    return reply.status(201).send({ binding });
+  });
+
+  server.patch("/v1/orgs/:orgId/agent-bindings/:bindingId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; bindingId?: string };
+    if (!params.orgId || !params.bindingId) {
+      throw badRequest("Missing orgId or bindingId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage bindings");
+    }
+    const body = z
+      .object({
+        agentId: z.string().uuid().optional(),
+        priority: z.number().int().min(-1000).max(1000).optional(),
+        dimension: z.enum(["peer", "parent_peer", "org_roles", "organization", "team", "account", "channel", "default"]).optional(),
+        match: z.record(z.string().min(1), z.unknown()).optional(),
+        metadata: z.record(z.string().min(1), z.unknown()).optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      throw badRequest("Invalid binding patch payload", body.error.flatten());
+    }
+    const patch: {
+      agentId?: string;
+      priority?: number;
+      dimension?: "peer" | "parent_peer" | "org_roles" | "organization" | "team" | "account" | "channel" | "default";
+      match?: Record<string, unknown>;
+      metadata?: Record<string, unknown>;
+    } = {
+      ...(body.data.agentId !== undefined ? { agentId: body.data.agentId } : {}),
+      ...(body.data.priority !== undefined ? { priority: body.data.priority } : {}),
+      ...(body.data.dimension !== undefined ? { dimension: body.data.dimension } : {}),
+      ...(body.data.match !== undefined ? { match: body.data.match } : {}),
+      ...(body.data.metadata !== undefined ? { metadata: body.data.metadata } : {}),
+    };
+    const binding = await store.patchAgentBinding({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      bindingId: params.bindingId,
+      patch,
+    });
+    if (!binding) {
+      throw notFound("Binding not found");
+    }
+    return { binding };
+  });
+
+  server.delete("/v1/orgs/:orgId/agent-bindings/:bindingId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; bindingId?: string };
+    if (!params.orgId || !params.bindingId) {
+      throw badRequest("Missing orgId or bindingId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage bindings");
+    }
+    const ok = await store.deleteAgentBinding({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      bindingId: params.bindingId,
+    });
+    if (!ok) {
+      throw notFound("Binding not found");
+    }
+    return { ok: true };
+  });
+
+  server.post("/v1/orgs/:orgId/memory/sync", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const body = z
+      .object({
+        sessionId: z.string().uuid().optional(),
+        sessionKey: z.string().min(1).max(400).optional(),
+        provider: z.enum(["builtin", "qmd"]).default("builtin"),
+        reason: z.string().min(1).max(300).optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      throw badRequest("Invalid memory sync payload", body.error.flatten());
+    }
+
+    const sessionKey = body.data.sessionKey ?? (body.data.sessionId ? `session:${body.data.sessionId}` : "session:main");
+    const job = await store.createAgentMemorySyncJob({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: body.data.sessionId ?? null,
+      sessionKey,
+      provider: body.data.provider,
+      status: "queued",
+      reason: body.data.reason ?? null,
+      details: { source: "api" },
+    });
+
+    return reply.status(202).send({ accepted: true, job });
+  });
+
+  server.get("/v1/orgs/:orgId/memory/search", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const query = z
+      .object({
+        q: z.string().min(1).max(500),
+        sessionKey: z.string().min(1).max(400).optional(),
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+      })
+      .safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("Invalid memory search query", query.error.flatten());
+    }
+
+    const docs = await store.listAgentMemoryDocuments({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      ...(query.data.sessionKey ? { sessionKey: query.data.sessionKey } : {}),
+      limit: Math.max((query.data.limit ?? 30) * 2, 20),
+    });
+    const needle = query.data.q.trim().toLowerCase();
+    const matches = docs
+      .filter((doc) => doc.docPath.toLowerCase().includes(needle) || doc.contentHash.toLowerCase().includes(needle))
+      .slice(0, query.data.limit ?? 30);
+
+    return { results: matches };
+  });
+
+  server.get("/v1/orgs/:orgId/memory/docs/:docId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; docId?: string };
+    if (!params.orgId || !params.docId) {
+      throw badRequest("Missing orgId or docId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const doc = await store.getAgentMemoryDocumentById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      documentId: params.docId,
+    });
+    if (!doc) {
+      throw notFound("Memory document not found");
+    }
+    const chunks = await store.listAgentMemoryChunksByDocument({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      documentId: doc.id,
+      limit: 1000,
+    });
+    return { document: doc, chunks };
   });
 
   server.get("/v1/orgs/:orgId/channels/accounts", async (request) => {

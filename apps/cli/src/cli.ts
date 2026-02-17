@@ -93,7 +93,20 @@ async function cmdSessionList(args: string[]) {
   const token = argValue(args, "--token");
   if (!apiBase || !orgId || !token) usage();
 
-  const out = await apiFetchJson<{ sessions: Array<{ id: string; title: string; engineId: string; llmProvider: string; llmModel: string; status: string; updatedAt: string }>; nextCursor: string | null }>({
+  const out = await apiFetchJson<{
+    sessions: Array<{
+      id: string;
+      title: string;
+      engineId: string;
+      llmProvider: string;
+      llmModel: string;
+      status: string;
+      updatedAt: string;
+      pinnedExecutorId?: string | null;
+      pinnedExecutorPool?: "managed" | "byon" | null;
+    }>;
+    nextCursor: string | null;
+  }>({
     apiBase,
     orgId,
     token,
@@ -102,8 +115,9 @@ async function cmdSessionList(args: string[]) {
   });
 
   for (const s of out.sessions ?? []) {
+    const pinned = s.pinnedExecutorId ? `${s.pinnedExecutorPool ?? "unknown"}:${s.pinnedExecutorId.slice(0, 8)}` : "-";
     // eslint-disable-next-line no-console
-    console.log(`${s.id}  ${s.status}  ${s.engineId}  ${s.llmProvider}:${s.llmModel}  ${s.title || ""}`);
+    console.log(`${s.id}  ${s.status}  ${s.engineId}  ${s.llmProvider}:${s.llmModel}  pin=${pinned}  ${s.title || ""}`);
   }
 }
 
@@ -171,10 +185,32 @@ async function cmdSessionSend(args: string[]) {
     payload: z.unknown().optional(),
     createdAt: z.string(),
   });
+  const deltaSchema = z.object({
+    type: z.literal("agent_delta"),
+    sessionId: z.string(),
+    seq: z.number().int(),
+    content: z.string(),
+    createdAt: z.string(),
+  });
+  const finalSchema = z.object({
+    type: z.literal("agent_final"),
+    sessionId: z.string(),
+    seq: z.number().int(),
+    content: z.string(),
+    payload: z.unknown().optional(),
+    createdAt: z.string(),
+  });
   const errorSchema = z.object({
     type: z.literal("session_error"),
     code: z.string(),
     message: z.string(),
+  });
+  const stateSchema = z.object({
+    type: z.literal("session_state"),
+    sessionId: z.string(),
+    pinnedExecutorId: z.string().uuid().nullable().optional(),
+    pinnedExecutorPool: z.enum(["managed", "byon"]).nullable().optional(),
+    pinnedAgentId: z.string().uuid().nullable().optional(),
   });
 
   let done = false;
@@ -222,25 +258,84 @@ async function cmdSessionSend(args: string[]) {
       return;
     }
 
-    const ev = eventSchema.safeParse(parsed);
-    if (!ev.success) return;
-    if (ev.data.sessionId !== sessionId) return;
-    // eslint-disable-next-line no-console
-    console.log(
-      JSON.stringify(
-        {
-          seq: ev.data.seq,
-          eventType: ev.data.eventType,
-          level: ev.data.level,
-          createdAt: ev.data.createdAt,
-          payload: ev.data.payload ?? null,
-        },
-        null,
-        2
-      )
-    );
+    const state = stateSchema.safeParse(parsed);
+    if (state.success) {
+      if (state.data.sessionId !== sessionId) return;
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          {
+            eventType: "session_state",
+            pinnedExecutorId: state.data.pinnedExecutorId ?? state.data.pinnedAgentId ?? null,
+            pinnedExecutorPool: state.data.pinnedExecutorPool ?? null,
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
 
-    if (ev.data.eventType === "agent_final" || ev.data.eventType === "error") {
+    const ev = eventSchema.safeParse(parsed);
+    if (ev.success) {
+      if (ev.data.sessionId !== sessionId) return;
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          {
+            seq: ev.data.seq,
+            eventType: ev.data.eventType,
+            level: ev.data.level,
+            createdAt: ev.data.createdAt,
+            payload: ev.data.payload ?? null,
+          },
+          null,
+          2
+        )
+      );
+      if (ev.data.eventType !== "agent_final" && ev.data.eventType !== "error") {
+        return;
+      }
+    } else {
+      const delta = deltaSchema.safeParse(parsed);
+      if (delta.success) {
+        if (delta.data.sessionId !== sessionId) return;
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify(
+            {
+              seq: delta.data.seq,
+              eventType: "agent_delta",
+              level: "info",
+              createdAt: delta.data.createdAt,
+              payload: { content: delta.data.content },
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
+      const fin = finalSchema.safeParse(parsed);
+      if (!fin.success) return;
+      if (fin.data.sessionId !== sessionId) return;
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          {
+            seq: fin.data.seq,
+            eventType: "agent_final",
+            level: "info",
+            createdAt: fin.data.createdAt,
+            payload: { content: fin.data.content, payload: fin.data.payload ?? null },
+          },
+          null,
+          2
+        )
+      );
+    }
+
+    {
       if (done) return;
       done = true;
       clearTimeout(timeout);

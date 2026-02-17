@@ -43,11 +43,17 @@
 - Node-agent sandbox backends:
   - Community edition supports a Docker backend for `agent.execute` shell tasks (hardened container, strict limits).
   - A provider backend hook is reserved for enterprise to integrate fast-start sandboxes (e.g. e2b.dev-style), loaded dynamically at runtime.
-- Session connectivity (gateway brain, MVP):
+- Session runtime v2 (OpenClaw-aligned hard cutover):
   - Interactive sessions are stored in PostgreSQL (`agent_sessions`, `agent_session_events`) and are tenant-scoped under RLS.
-  - Control clients connect to the gateway (WS) to stream session events and send messages.
-  - Session brains run in gateway; tool calls route to managed/BYON executors via selector and quota policy.
-  - LLM inference is delegated to `apps/engine-runner`; provider credentials are never sent to shell tools.
+  - Canonical WS endpoints are `/ws/client` (control clients) and `/ws/executor` (node hosts).
+  - Interactive turns execute only on pinned node-hosts (`executionMode="pinned-node-host"`); gateway never falls back to in-process execution.
+  - Session executor routing policy is BYON-first with managed fallback by default; explicit `executorSelector.pool="managed"` is managed-only.
+  - Pin metadata is persisted as `pinned_executor_id` and `pinned_executor_pool` (`byon|managed`) with compatibility mirror `pinned_agent_id`.
+  - If a pinned executor goes offline, gateway auto re-pins and emits a system event (`session_executor_failover`); if no pool is available, errors are deterministic (`PINNED_AGENT_OFFLINE`, `NO_AGENT_AVAILABLE`).
+  - Managed pool sessions run with a restricted toolset (safe minimum: conversation + memory tools) and container-oriented runtime class (`runtime_class="container"`).
+  - Session routing is binding-first and deterministic (`peer -> parent_peer -> org_roles -> organization -> team -> account -> channel -> default`) and persists `session_key`, `routed_agent_id`, `binding_id`.
+  - Memory source of truth is markdown (`MEMORY.md`, `memory/YYYY-MM-DD.md`) with provider strategy `qmd -> builtin` fallback.
+  - Multi-agent handoff is represented as first-class session events (`agent_handoff`) and exposed to clients.
 - Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
 - See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
 - See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
@@ -91,6 +97,17 @@
   - `GET /v1/orgs/:orgId/sessions` (`X-Org-Id` required)
   - `GET /v1/orgs/:orgId/sessions/:sessionId` (`X-Org-Id` required)
   - `GET /v1/orgs/:orgId/sessions/:sessionId/events` (`X-Org-Id` required)
+  - `POST /v1/orgs/:orgId/sessions/:sessionId/messages` (`X-Org-Id` required)
+  - `POST /v1/orgs/:orgId/sessions/:sessionId/reset` (`X-Org-Id` required)
+- Agent bindings:
+  - `GET /v1/orgs/:orgId/agent-bindings` (`X-Org-Id` required, owner/admin)
+  - `POST /v1/orgs/:orgId/agent-bindings` (`X-Org-Id` required, owner/admin)
+  - `PATCH /v1/orgs/:orgId/agent-bindings/:bindingId` (`X-Org-Id` required, owner/admin)
+  - `DELETE /v1/orgs/:orgId/agent-bindings/:bindingId` (`X-Org-Id` required, owner/admin)
+- Session memory admin:
+  - `POST /v1/orgs/:orgId/memory/sync` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/memory/search` (`X-Org-Id` required)
+  - `GET /v1/orgs/:orgId/memory/docs/:docId` (`X-Org-Id` required)
 - Metadata:
   - `GET /v1/meta/capabilities`
   - `GET /v1/meta/connectors`

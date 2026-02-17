@@ -31,29 +31,52 @@ async function canConnectRedis(url: string): Promise<boolean> {
   });
 }
 
-async function startStubAgent(input: {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) {
+      return true;
+    }
+    await sleep(25);
+  }
+  return false;
+}
+
+async function startStubExecutor(input: {
   gatewayWsUrl: string;
-  agentToken: string;
-  capabilities?: Record<string, unknown>;
+  executorToken: string;
+  executorId: string;
+  pool: "byon" | "managed";
+  organizationId?: string;
+  name: string;
 }) {
   const ws = new WebSocket(input.gatewayWsUrl, {
     headers: {
-      authorization: `Bearer ${input.agentToken}`,
+      authorization: `Bearer ${input.executorToken}`,
     },
   });
 
   ws.on("open", () => {
     ws.send(
       JSON.stringify({
-        type: "hello",
-        agentVersion: "test-agent",
-        name: "stub-session-agent",
-        capabilities: input.capabilities ?? { kinds: ["agent.run"] },
+        type: "executor_hello_v2",
+        executorVersion: "test-executor",
+        executorId: input.executorId,
+        pool: input.pool,
+        ...(input.pool === "byon" && input.organizationId ? { organizationId: input.organizationId } : {}),
+        name: input.name,
+        labels: [],
+        maxInFlight: 10,
+        kinds: ["agent.run"],
       })
     );
   });
 
-  ws.on("message", async (data) => {
+  ws.on("message", (data) => {
     const raw = typeof data === "string" ? data : data.toString("utf8");
     let msg: any = null;
     try {
@@ -61,54 +84,40 @@ async function startStubAgent(input: {
     } catch {
       return;
     }
-    if (!msg || msg.type !== "execute") {
+    if (!msg || typeof msg !== "object") {
       return;
     }
 
-    const requestId = msg.requestId;
-    const kind = msg.kind;
-    if (kind !== "agent.run") {
-      ws.send(JSON.stringify({ type: "execute_result", requestId, status: "failed", error: "KIND_NOT_SUPPORTED" }));
-      return;
-    }
-
-    const toolset = msg.payload?.toolset ?? null;
-    if (toolset && typeof toolset === "object" && typeof toolset.id === "string") {
+    if (msg.type === "session_open") {
       ws.send(
         JSON.stringify({
-          type: "execute_event",
-          requestId,
-          event: {
-            ts: Date.now(),
-            kind: "toolset_skills_applied",
-            level: "info",
-            payload: { toolsetId: toolset.id, count: Array.isArray(toolset.agentSkills) ? toolset.agentSkills.length : 0 },
-          },
+          type: "session_opened",
+          requestId: msg.requestId,
+          sessionId: msg.sessionId,
+        })
+      );
+      return;
+    }
+
+    if (msg.type === "session_turn") {
+      ws.send(
+        JSON.stringify({
+          type: "turn_delta",
+          requestId: msg.requestId,
+          sessionId: msg.sessionId,
+          content: `(${input.pool})`,
+        })
+      );
+      ws.send(
+        JSON.stringify({
+          type: "turn_final",
+          requestId: msg.requestId,
+          sessionId: msg.sessionId,
+          content: `reply-from-${input.pool}`,
+          payload: { pool: input.pool },
         })
       );
     }
-
-    ws.send(
-      JSON.stringify({
-        type: "execute_event",
-        requestId,
-        event: {
-          ts: Date.now(),
-          kind: "agent.assistant_message",
-          level: "info",
-          payload: { text: "ok" },
-        },
-      })
-    );
-
-    ws.send(
-      JSON.stringify({
-        type: "execute_result",
-        requestId,
-        status: "succeeded",
-        output: { ok: true },
-      })
-    );
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -139,7 +148,10 @@ describe("sessions node-host connectivity (integration)", () => {
   let gatewayWsUrl: string | null = null;
   let orgId: string | null = null;
   let token: string | null = null;
-  let stubAgent: Awaited<ReturnType<typeof startStubAgent>> | null = null;
+  let byonExecutor: Awaited<ReturnType<typeof startStubExecutor>> | null = null;
+  let byonExecutorId: string | null = null;
+  let managedExecutor: Awaited<ReturnType<typeof startStubExecutor>> | null = null;
+  let managedExecutorId: string | null = null;
 
   beforeAll(async () => {
     if (!databaseUrl || !redisUrl) return;
@@ -154,7 +166,7 @@ describe("sessions node-host connectivity (integration)", () => {
     gateway = await buildGatewayServer();
     const address = await gateway.listen({ port: 0, host: "127.0.0.1" });
     const parsed = new URL(address);
-    gatewayWsUrl = `ws://${parsed.hostname}:${parsed.port}/ws`;
+    gatewayWsUrl = `ws://${parsed.hostname}:${parsed.port}/ws/executor`;
 
     process.env.GATEWAY_HTTP_URL = `${parsed.protocol}//${parsed.hostname}:${parsed.port}`;
     process.env.GATEWAY_WS_URL = gatewayWsUrl;
@@ -181,7 +193,7 @@ describe("sessions node-host connectivity (integration)", () => {
 
     const pairing = await api.inject({
       method: "POST",
-      url: `/v1/orgs/${orgId}/agents/pairing-tokens`,
+      url: `/v1/orgs/${orgId}/executors/pairing-tokens`,
       headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
       payload: {},
     });
@@ -190,64 +202,74 @@ describe("sessions node-host connectivity (integration)", () => {
 
     const paired = await api.inject({
       method: "POST",
-      url: "/v1/agents/pair",
-      payload: { pairingToken, name: "stub", agentVersion: "test", capabilities: { kinds: ["agent.run"] } },
+      url: "/v1/executors/pair",
+      payload: { pairingToken, name: "stub-byon", capabilities: { kinds: ["agent.run"] } },
     });
     expect(paired.statusCode).toBe(201);
-    const agentToken = (paired.json() as any).agentToken as string;
+    const pairedBody = paired.json() as {
+      executorId: string;
+      executorToken: string;
+      organizationId: string;
+    };
 
-    if (!gatewayWsUrl) {
-      throw new Error("missing gateway ws url");
-    }
-    stubAgent = await startStubAgent({
-      gatewayWsUrl,
-      agentToken,
-      capabilities: { kinds: ["agent.run"] },
+    byonExecutorId = pairedBody.executorId;
+    byonExecutor = await startStubExecutor({
+      gatewayWsUrl: gatewayWsUrl!,
+      executorToken: pairedBody.executorToken,
+      executorId: pairedBody.executorId,
+      pool: "byon",
+      organizationId: pairedBody.organizationId,
+      name: "stub-byon",
+    });
+
+    const issued = await api.inject({
+      method: "POST",
+      url: "/internal/v1/managed-executors/issue",
+      headers: { "x-service-token": "ci-gateway-token" },
+      payload: {
+        name: "stub-managed",
+        maxInFlight: 10,
+        capabilities: { kinds: ["agent.run"] },
+        runtimeClass: "container",
+      },
+    });
+    expect(issued.statusCode).toBe(201);
+    const issuedBody = issued.json() as {
+      executorId: string;
+      executorToken: string;
+    };
+
+    managedExecutorId = issuedBody.executorId;
+    managedExecutor = await startStubExecutor({
+      gatewayWsUrl: gatewayWsUrl!,
+      executorToken: issuedBody.executorToken,
+      executorId: issuedBody.executorId,
+      pool: "managed",
+      name: "stub-managed",
     });
   });
 
   afterAll(async () => {
-    if (stubAgent) await stubAgent.close();
+    if (byonExecutor) await byonExecutor.close();
+    if (managedExecutor) await managedExecutor.close();
     if (api) await api.close();
     if (gateway) await gateway.close();
   });
 
-  it("creates a session, pins an agent on first send, streams and persists events, and rejects sends when pinned agent is offline", async () => {
-    if (!available || !api || !gatewayWsUrl || !orgId || !token) return;
-
-    const toolsetCreate = await api.inject({
-      method: "POST",
-      url: `/v1/orgs/${orgId}/toolsets`,
-      headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
-      payload: {
-        name: "Session Toolset",
-        visibility: "private",
-        mcpServers: [],
-        agentSkills: [
-          {
-            format: "agentskills-v1",
-            id: "hello",
-            name: "Hello",
-            entry: "SKILL.md",
-            files: [{ path: "SKILL.md", content: "# Hello Skill" }],
-          },
-        ],
-      },
-    });
-    expect(toolsetCreate.statusCode).toBe(201);
-    const toolsetId = (toolsetCreate.json() as any).toolset.id as string;
+  it("pins BYON first and automatically fails over to managed pool when BYON goes offline", async () => {
+    if (!available || !api || !gatewayWsUrl || !orgId || !token || !byonExecutorId || !managedExecutorId) return;
 
     const create = await api.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/sessions`,
       headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
       payload: {
-        title: "Test session",
+        title: "Managed failover session",
         engineId: "gateway.loop.v2",
-        toolsetId,
         llm: { provider: "openai", model: "gpt-4.1-mini" },
         prompt: { instructions: "Say ok." },
         tools: { allow: [] },
+        executorSelector: { pool: "byon" },
       },
     });
     expect(create.statusCode).toBe(201);
@@ -274,18 +296,47 @@ describe("sessions node-host connectivity (integration)", () => {
 
     client.send(JSON.stringify({ type: "client_hello", clientVersion: "test" }));
     client.send(JSON.stringify({ type: "session_join", sessionId }));
+
     client.send(JSON.stringify({ type: "session_send", sessionId, message: "hi", idempotencyKey: "k1" }));
+    expect(await waitFor(() => received.some((m) => m?.type === "agent_final"), 5000)).toBe(true);
 
-    await new Promise((r) => setTimeout(r, 200));
-
-    const get1 = await api.inject({
+    const afterFirst = await api.inject({
       method: "GET",
       url: `/v1/orgs/${orgId}/sessions/${sessionId}`,
       headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
     });
-    expect(get1.statusCode).toBe(200);
-    const pinned = (get1.json() as any).session.pinnedAgentId as string | null;
-    expect(typeof pinned === "string").toBe(true);
+    expect(afterFirst.statusCode).toBe(200);
+    const firstSession = (afterFirst.json() as any).session;
+    expect(firstSession.pinnedExecutorPool).toBe("byon");
+    expect(firstSession.pinnedExecutorId).toBe(byonExecutorId);
+
+    if (byonExecutor) {
+      await byonExecutor.close();
+      byonExecutor = null;
+    }
+
+    const countBeforeSecond = received.length;
+    const finalsBeforeSecond = received.filter((m) => m?.type === "agent_final").length;
+
+    client.send(JSON.stringify({ type: "session_send", sessionId, message: "second", idempotencyKey: "k2" }));
+
+    expect(await waitFor(() => received.filter((m) => m?.type === "agent_final").length > finalsBeforeSecond, 5000)).toBe(true);
+
+    const secondWave = received.slice(countBeforeSecond);
+    const secondErrors = secondWave.filter((m) => m?.type === "session_error");
+    expect(secondErrors.length).toBe(0);
+    expect(secondWave.some((m) => m?.type === "agent_final" && typeof m.content === "string" && m.content.includes("managed"))).toBe(true);
+    expect(secondWave.some((m) => m?.type === "session_state" && m.pinnedExecutorPool === "managed")).toBe(true);
+
+    const afterSecond = await api.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/sessions/${sessionId}`,
+      headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
+    });
+    expect(afterSecond.statusCode).toBe(200);
+    const secondSession = (afterSecond.json() as any).session;
+    expect(secondSession.pinnedExecutorPool).toBe("managed");
+    expect(secondSession.pinnedExecutorId).toBe(managedExecutorId);
 
     const events = await api.inject({
       method: "GET",
@@ -294,31 +345,16 @@ describe("sessions node-host connectivity (integration)", () => {
     });
     expect(events.statusCode).toBe(200);
     const rows = (events.json() as any).events as any[];
-    expect(rows.some((e) => e.eventType === "user_message")).toBe(true);
-    expect(rows.some((e) => e.eventType === "agent_message")).toBe(true);
-    expect(rows.some((e) => e.eventType === "agent_final")).toBe(true);
     expect(
       rows.some(
         (e) =>
+          e.eventType === "system" &&
           e.payload &&
           typeof e.payload === "object" &&
-          (e.payload as any).payload &&
-          typeof (e.payload as any).payload === "object" &&
-          (e.payload as any).payload.toolsetId === toolsetId
+          (e.payload as any).action === "session_executor_failover" &&
+          (e.payload as any).to?.pool === "managed"
       )
     ).toBe(true);
-
-    // Simulate pinned agent going offline and ensure gateway errors deterministically.
-    if (stubAgent) {
-      await stubAgent.close();
-      stubAgent = null;
-    }
-
-    client.send(JSON.stringify({ type: "session_send", sessionId, message: "second", idempotencyKey: "k2" }));
-    await new Promise((r) => setTimeout(r, 200));
-
-    const errors = received.filter((m) => m && m.type === "session_error");
-    expect(errors.some((e) => e.code === "PINNED_AGENT_OFFLINE" || e.code === "NO_AGENT_AVAILABLE")).toBe(true);
 
     await new Promise<void>((resolve) => {
       client.close();
