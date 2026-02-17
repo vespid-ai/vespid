@@ -14,7 +14,7 @@ import { Input } from "../../../../components/ui/input";
 import { Separator } from "../../../../components/ui/separator";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
-import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useAgents, useCreatePairingToken, useRevokeAgent, useUpdateAgentTags } from "../../../../lib/hooks/use-agents";
 import { isUnauthorizedError } from "../../../../lib/api";
@@ -32,7 +32,7 @@ export default function AgentsPage() {
   const router = useRouter();
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
-  const orgId = useActiveOrgId();
+  const { orgId, orgName } = useActiveOrgName();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
 
@@ -230,7 +230,7 @@ export default function AgentsPage() {
       <Card>
         <CardHeader>
           <CardTitle>{t("common.list")}</CardTitle>
-          <CardDescription>{orgId ? `Org: ${orgId}` : t("org.requireActive")}</CardDescription>
+          <CardDescription>{orgName ?? t("org.requireActive")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">

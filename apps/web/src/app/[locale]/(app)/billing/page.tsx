@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Separator } from "../../../../components/ui/separator";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
-import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useCheckoutCredits, useCreditLedger, useCreditPacks, useCreditsBalance } from "../../../../lib/hooks/use-billing";
 import { isUnauthorizedError } from "../../../../lib/api";
@@ -27,7 +27,7 @@ function BillingPageContent() {
   const router = useRouter();
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
-  const orgId = useActiveOrgId();
+  const { orgId, orgName } = useActiveOrgName();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
   const searchParams = useSearchParams();
@@ -154,7 +154,7 @@ function BillingPageContent() {
         <Card className="lg:col-span-1">
           <CardHeader>
             <CardTitle>{t("billing.balance.title")}</CardTitle>
-            <CardDescription>{orgId ? `Org: ${orgId}` : t("org.requireActive")}</CardDescription>
+            <CardDescription>{orgName ?? t("org.requireActive")}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-4xl font-semibold tracking-tight text-text">{balanceLabel}</div>

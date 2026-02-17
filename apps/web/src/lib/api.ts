@@ -1,4 +1,4 @@
-import { getActiveOrgId } from "./org-context";
+import { clearActiveOrgId, getActiveOrgId, setActiveOrgId } from "./org-context";
 import { markApiReachable, markApiUnreachable } from "./api-reachability";
 
 export function getApiBase(): string {
@@ -7,6 +7,7 @@ export function getApiBase(): string {
 
 type ApiFetchOptions = {
   orgScoped?: boolean;
+  skipOrgRecovery?: boolean;
 };
 
 type NetworkErrorPayload = {
@@ -59,6 +60,64 @@ export type ApiJsonError = {
   details?: unknown;
 };
 
+let orgRecoveryInFlight: Promise<string | null> | null = null;
+
+function parseJsonSafe<T>(text: string): T | null {
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isRecoverableOrgError(status: number, payload: ApiJsonError | null): boolean {
+  if (![400, 403].includes(status)) {
+    return false;
+  }
+  const code = payload?.code ?? "";
+  if (code === "INVALID_ORG_CONTEXT" || code === "ORG_CONTEXT_REQUIRED" || code === "ORG_ACCESS_DENIED") {
+    return true;
+  }
+  const message = (payload?.message ?? "").toLowerCase();
+  return message.includes("x-org-id") || message.includes("organization context");
+}
+
+async function recoverDefaultOrgId(): Promise<string | null> {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  if (orgRecoveryInFlight) {
+    return orgRecoveryInFlight;
+  }
+  orgRecoveryInFlight = (async () => {
+    try {
+      const response = await fetch("/api/proxy/v1/me", {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const payload = parseJsonSafe<{ defaultOrgId?: string | null }>(await response.text());
+      const defaultOrgId = typeof payload?.defaultOrgId === "string" ? payload.defaultOrgId : null;
+      if (defaultOrgId) {
+        setActiveOrgId(defaultOrgId);
+        return defaultOrgId;
+      }
+      clearActiveOrgId();
+      return null;
+    } catch {
+      return null;
+    } finally {
+      orgRecoveryInFlight = null;
+    }
+  })();
+  return orgRecoveryInFlight;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly payload: ApiJsonError | null;
@@ -97,7 +156,19 @@ export async function apiFetchJson<T>(path: string, init?: RequestInit, options?
     }
   }
   if (!response.ok) {
-    throw new ApiError(response.status, (payload as ApiJsonError | null) ?? null);
+    const apiPayload = (payload as ApiJsonError | null) ?? null;
+    if (options?.orgScoped && !options?.skipOrgRecovery && isRecoverableOrgError(response.status, apiPayload)) {
+      const previousOrgId = getActiveOrgId();
+      const recoveredOrgId = await recoverDefaultOrgId();
+      if (recoveredOrgId && recoveredOrgId !== previousOrgId) {
+        return apiFetchJson<T>(path, init, { ...options, skipOrgRecovery: true });
+      }
+      throw new ApiError(response.status, {
+        code: apiPayload?.code ?? "ORG_CONTEXT_INVALID",
+        message: "Organization context is out of date. Please try again.",
+      });
+    }
+    throw new ApiError(response.status, apiPayload);
   }
   return payload as T;
 }

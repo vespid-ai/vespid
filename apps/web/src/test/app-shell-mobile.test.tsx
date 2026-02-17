@@ -61,7 +61,31 @@ describe("AppShell mobile rendering", () => {
         dispatchEvent: () => false,
       }));
 
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/v1/me")) {
+          return new Response(
+            JSON.stringify({
+              user: { id: "u_1", email: "ops@vespid.ai" },
+              account: { tier: "paid", isSystemAdmin: false },
+              orgPolicy: { canManageOrganizations: true, maxOrganizations: 5, currentOrganizations: 0 },
+              orgs: [],
+              defaultOrgId: null,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (url.includes("/sessions") || url.includes("/workflows")) {
+          return new Response(JSON.stringify({ sessions: [], workflows: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      })
+    );
     window.localStorage.clear();
   });
 
@@ -96,5 +120,62 @@ describe("AppShell mobile rendering", () => {
 
     await screen.findByRole("link", { name: messages.onboarding.goOrg });
     expect(window.localStorage.getItem("vespid.ui.onboarding-collapsed")).toBe("0");
+  });
+
+  it("hides organization management entry for free users", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/v1/me")) {
+          return new Response(
+            JSON.stringify({
+              user: { id: "u_1", email: "ops@vespid.ai" },
+              account: { tier: "free", isSystemAdmin: false },
+              orgPolicy: { canManageOrganizations: false, maxOrganizations: 1, currentOrganizations: 1 },
+              orgs: [{ id: "org_default", name: "Default workspace", roleKey: "owner" }],
+              defaultOrgId: "org_default",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      })
+    );
+
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+    renderShell();
+
+    const userButtons = screen.getAllByRole("button", { name: "ops@vespid.ai" });
+    await user.click(userButtons[userButtons.length - 1]!);
+    expect(screen.queryByRole("menuitem", { name: messages.nav.org })).not.toBeInTheDocument();
+  });
+
+  it("shows admin entry for system administrators", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/v1/me")) {
+          return new Response(
+            JSON.stringify({
+              user: { id: "u_1", email: "ops@vespid.ai" },
+              account: { tier: "paid", isSystemAdmin: true },
+              orgPolicy: { canManageOrganizations: true, maxOrganizations: 5, currentOrganizations: 1 },
+              orgs: [{ id: "org_default", name: "Main Org", roleKey: "owner" }],
+              defaultOrgId: "org_default",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      })
+    );
+
+    const messages = readMessages("en");
+    renderShell();
+
+    expect(await screen.findByRole("link", { name: messages.nav.admin })).toBeInTheDocument();
   });
 });

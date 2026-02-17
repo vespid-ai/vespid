@@ -46,7 +46,7 @@ import { z } from "zod";
 import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
 import { createVertexOAuthServiceFromEnv, type VertexOAuthService } from "./vertex-oauth.js";
 import { createStore } from "./store/index.js";
-import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
+import type { AccountTier, AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
 import { workflowDslAnySchema, validateV3GraphConstraints } from "@vespid/workflow";
 import { getToolsetCatalog } from "./toolsets/catalog.js";
@@ -134,6 +134,41 @@ const GATEWAY_HTTP_URL = process.env.GATEWAY_HTTP_URL ?? "http://localhost:3002"
 const GATEWAY_INTERNAL_SERVICE_TOKEN =
   process.env.GATEWAY_SERVICE_TOKEN ?? process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? "dev-gateway-token";
 
+function readSystemAdminEmailAllowlist(): Set<string> {
+  return new Set(
+    (process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST ?? process.env.SYSTEM_ADMIN_BOOTSTRAP_EMAILS ?? process.env.SYSTEM_ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter((email) => email.length > 0)
+  );
+}
+
+type TierOrgPolicy = {
+  canManageOrg: boolean;
+  maxOrgs: number | null;
+};
+
+type OrgPolicy = {
+  free: TierOrgPolicy;
+  paid: TierOrgPolicy;
+  enterprise: TierOrgPolicy;
+};
+
+type MeOrgPolicy = {
+  canManageOrganizations: boolean;
+  maxOrganizations: number | null;
+  currentOrganizations: number;
+};
+
+const DEFAULT_ORG_POLICY: OrgPolicy = {
+  free: { canManageOrg: false, maxOrgs: 1 },
+  paid: { canManageOrg: true, maxOrgs: 5 },
+  enterprise: { canManageOrg: true, maxOrgs: null },
+};
+
+const SUPPORTED_PAYMENT_PROVIDERS = ["stripe", "creem", "paypal", "crypto"] as const;
+type SupportedPaymentProvider = (typeof SUPPORTED_PAYMENT_PROVIDERS)[number];
+
 const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
@@ -148,6 +183,67 @@ const loginSchema = z.object({
 const createOrgSchema = z.object({
   name: z.string().min(2).max(120),
   slug: z.string().regex(/^[a-z0-9-]{3,50}$/),
+});
+
+const paymentProviderParamSchema = z.object({
+  provider: z.enum(SUPPORTED_PAYMENT_PROVIDERS),
+});
+
+const adminSystemAdminMutationSchema = z
+  .object({
+    userId: z.string().uuid().optional(),
+    email: z.string().email().optional(),
+  })
+  .refine((value) => Boolean(value.userId || value.email), {
+    message: "Either userId or email is required",
+    path: ["userId"],
+  });
+
+const adminPlatformSettingUpdateSchema = z.object({
+  key: z.string().min(1).max(120),
+  value: z.unknown(),
+});
+
+const adminUserTierUpdateSchema = z.object({
+  tier: z.enum(["free", "paid"]),
+});
+
+const adminPaymentEventsQuerySchema = z.object({
+  provider: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const adminPaymentsProviderUpdateSchema = z.object({
+  enabled: z.boolean(),
+});
+
+const adminSupportTicketsQuerySchema = z.object({
+  status: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const adminSupportTicketCreateSchema = z.object({
+  requesterUserId: z.string().uuid().optional(),
+  organizationId: z.string().uuid().optional(),
+  category: z.string().min(1).max(120).optional(),
+  priority: z.string().min(1).max(40).optional(),
+  status: z.string().min(1).max(40).optional(),
+  subject: z.string().min(1).max(200),
+  content: z.string().min(1).max(20_000),
+  assigneeUserId: z.string().uuid().nullable().optional(),
+});
+
+const adminSupportTicketPatchSchema = z
+  .object({
+    status: z.string().min(1).max(40).optional(),
+    priority: z.string().min(1).max(40).optional(),
+    assigneeUserId: z.string().uuid().nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: "At least one field is required" });
+
+const adminSupportTicketEventCreateSchema = z.object({
+  eventType: z.string().min(1).max(80),
+  payload: z.unknown().optional(),
 });
 
 const inviteSchema = z.object({
@@ -653,6 +749,14 @@ function orgAccessDenied(message = "You are not a member of this organization"):
   return new AppError(403, { code: "ORG_ACCESS_DENIED", message });
 }
 
+function orgPlanUpgradeRequired(message = "Your current plan does not allow this organization action"): AppError {
+  return new AppError(403, { code: "ORG_PLAN_UPGRADE_REQUIRED", message });
+}
+
+function orgLimitReached(message = "You have reached your organization limit"): AppError {
+  return new AppError(409, { code: "ORG_LIMIT_REACHED", message });
+}
+
 function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
   return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
 }
@@ -915,7 +1019,7 @@ function parseOrgHeaderValue(value: unknown): string {
   }
   const parsed = z.string().uuid().safeParse(raw);
   if (!parsed.success) {
-    throw orgContextInvalid("X-Org-Id must be a valid UUID");
+    throw orgContextInvalid("Organization context is invalid");
   }
   return parsed.data;
 }
@@ -982,6 +1086,62 @@ function invitationErrorToAppError(error: Error): AppError {
     code: "INVITATION_ACCEPT_FAILED",
     message: "Invitation accept failed",
   });
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = Math.floor(value);
+  if (normalized <= 0) {
+    return null;
+  }
+  return normalized;
+}
+
+function parseTierOrgPolicy(value: unknown, fallback: TierOrgPolicy): TierOrgPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const obj = value as Record<string, unknown>;
+  const canManageRaw = obj.canManageOrg;
+  const maxOrgsRaw = obj.maxOrgs;
+  const canManageOrg = typeof canManageRaw === "boolean" ? canManageRaw : fallback.canManageOrg;
+  const maxOrgs =
+    maxOrgsRaw === null
+      ? null
+      : parsePositiveInt(maxOrgsRaw) ??
+        (fallback.maxOrgs === null ? null : Math.max(1, Math.floor(fallback.maxOrgs)));
+  return { canManageOrg, maxOrgs };
+}
+
+function normalizeOrgPolicy(value: unknown): OrgPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return DEFAULT_ORG_POLICY;
+  }
+  const obj = value as Record<string, unknown>;
+  return {
+    free: parseTierOrgPolicy(obj.free, DEFAULT_ORG_POLICY.free),
+    paid: parseTierOrgPolicy(obj.paid, DEFAULT_ORG_POLICY.paid),
+    enterprise: parseTierOrgPolicy(obj.enterprise, DEFAULT_ORG_POLICY.enterprise),
+  };
+}
+
+function normalizeEnabledPaymentProviders(value: unknown): SupportedPaymentProvider[] {
+  const fallback: SupportedPaymentProvider[] = ["stripe"];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const enabled = (value as Record<string, unknown>).enabled;
+  if (!Array.isArray(enabled)) {
+    return fallback;
+  }
+  const filtered = enabled
+    .map((provider) => (typeof provider === "string" ? provider.toLowerCase() : ""))
+    .filter((provider): provider is SupportedPaymentProvider =>
+      SUPPORTED_PAYMENT_PROVIDERS.includes(provider as SupportedPaymentProvider)
+    );
+  return filtered.length > 0 ? [...new Set(filtered)] : fallback;
 }
 
 export async function buildServer(input?: {
@@ -1296,6 +1456,82 @@ export async function buildServer(input?: {
   async function ensurePersonalWorkspace(user: UserRecord): Promise<void> {
     const credits = Number.isFinite(PERSONAL_TRIAL_CREDITS) ? Math.max(0, Math.floor(PERSONAL_TRIAL_CREDITS)) : 0;
     await store.ensurePersonalOrganizationForUser({ actorUserId: user.id, trialCredits: credits });
+  }
+
+  function isEnterpriseEdition(): boolean {
+    return String(enterpriseProvider.edition).toLowerCase() === "enterprise";
+  }
+
+  function isBootstrapSystemAdminEmail(email: string | null | undefined): boolean {
+    if (!email) {
+      return false;
+    }
+    return readSystemAdminEmailAllowlist().has(email.trim().toLowerCase());
+  }
+
+  async function ensureSystemAdminBootstrap(input: { userId: string; email?: string | null }): Promise<void> {
+    if (!isBootstrapSystemAdminEmail(input.email ?? null)) {
+      return;
+    }
+    await store.createPlatformUserRole({
+      userId: input.userId,
+      roleKey: "system_admin",
+      grantedByUserId: null,
+    });
+  }
+
+  async function getOrgPolicy(): Promise<OrgPolicy> {
+    const setting = await store.getPlatformSetting({ key: "org_policy" });
+    return normalizeOrgPolicy(setting?.value);
+  }
+
+  async function getEnabledPaymentProviders(): Promise<SupportedPaymentProvider[]> {
+    const setting = await store.getPlatformSetting({ key: "payments.providers" });
+    return normalizeEnabledPaymentProviders(setting?.value);
+  }
+
+  async function resolveAccountTier(userId: string): Promise<AccountTier> {
+    if (isEnterpriseEdition()) {
+      return "enterprise";
+    }
+    const entitlements = await store.listUserEntitlements({ userId, activeOnly: true });
+    const hasPaid = entitlements.some((entitlement) => entitlement.tier === "paid" && entitlement.active);
+    return hasPaid ? "paid" : "free";
+  }
+
+  async function resolveUserCapabilities(input: { userId: string; email?: string | null }): Promise<{
+    tier: AccountTier;
+    isSystemAdmin: boolean;
+    orgPolicy: MeOrgPolicy;
+  }> {
+    await ensureSystemAdminBootstrap({ userId: input.userId, email: input.email ?? null });
+    const [tier, roleRows, orgs, orgPolicy] = await Promise.all([
+      resolveAccountTier(input.userId),
+      store.listPlatformUserRoles({ userId: input.userId, roleKey: "system_admin" }),
+      store.listOrganizationsForUser({ actorUserId: input.userId }),
+      getOrgPolicy(),
+    ]);
+
+    const tierPolicy = tier === "enterprise" ? orgPolicy.enterprise : tier === "paid" ? orgPolicy.paid : orgPolicy.free;
+    return {
+      tier,
+      isSystemAdmin: roleRows.length > 0,
+      orgPolicy: {
+        canManageOrganizations: tierPolicy.canManageOrg,
+        maxOrganizations: tierPolicy.maxOrgs,
+        currentOrganizations: orgs.length,
+      },
+    };
+  }
+
+  async function requireSystemAdmin(request: { auth?: AuthContext }): Promise<AuthContext> {
+    const auth = requireAuth(request);
+    await ensureSystemAdminBootstrap({ userId: auth.userId, email: auth.email });
+    const roles = await store.listPlatformUserRoles({ userId: auth.userId, roleKey: "system_admin" });
+    if (roles.length === 0) {
+      throw forbidden("System administrator role is required");
+    }
+    return auth;
   }
 
   async function authenticateFromBearerToken(token: string): Promise<AuthContext | null> {
@@ -1642,11 +1878,19 @@ export async function buildServer(input?: {
     }
 
     await ensurePersonalWorkspace(user);
-    const orgs = await store.listOrganizationsForUser({ actorUserId: auth.userId });
+    const [orgs, capabilities] = await Promise.all([
+      store.listOrganizationsForUser({ actorUserId: auth.userId }),
+      resolveUserCapabilities({ userId: auth.userId, email: user.email }),
+    ]);
     const defaultOrgId = orgs.length > 0 ? orgs[0]!.organization.id : null;
 
     return {
       user: toPublicUser(user),
+      account: {
+        tier: capabilities.tier,
+        isSystemAdmin: capabilities.isSystemAdmin,
+      },
+      orgPolicy: capabilities.orgPolicy,
       orgs: orgs.map((row) => ({
         id: row.organization.id,
         slug: row.organization.slug,
@@ -1961,6 +2205,17 @@ export async function buildServer(input?: {
       throw badRequest("Invalid organization payload", parsed.error.flatten());
     }
 
+    const capabilities = await resolveUserCapabilities({ userId: auth.userId, email: auth.email });
+    if (!capabilities.orgPolicy.canManageOrganizations) {
+      throw orgPlanUpgradeRequired("Upgrade required to create additional organizations.");
+    }
+    if (
+      capabilities.orgPolicy.maxOrganizations !== null &&
+      capabilities.orgPolicy.currentOrganizations >= capabilities.orgPolicy.maxOrganizations
+    ) {
+      throw orgLimitReached("Organization limit reached for your account.");
+    }
+
     const created = await store.createOrganizationWithOwner({
       name: parsed.data.name,
       slug: parsed.data.slug,
@@ -2109,6 +2364,8 @@ export async function buildServer(input?: {
         organizationId: orgContext.organizationId,
         packId: parsed.data.packId,
         credits: String(pack.credits),
+        payerUserId: auth.userId,
+        payerEmail: auth.email,
       },
     });
 
@@ -2119,45 +2376,71 @@ export async function buildServer(input?: {
     return { checkoutUrl: session.url };
   });
 
-  server.post(
-    "/v1/billing/stripe/webhook",
-    { config: { rawBody: true } as any },
-    async (request, reply) => {
-      if (!stripe || !stripeWebhookSecret) {
-        throw new AppError(500, { code: "STRIPE_NOT_CONFIGURED", message: "Stripe webhook is not configured" });
+  async function handleStripePaymentWebhook(request: { headers: Record<string, unknown>; rawBody?: Buffer }, reply: { status: (code: number) => any }) {
+    if (!stripe || !stripeWebhookSecret) {
+      throw new AppError(500, { code: "STRIPE_NOT_CONFIGURED", message: "Stripe webhook is not configured" });
+    }
+
+    const signature = request.headers["stripe-signature"];
+    if (typeof signature !== "string" || signature.trim().length === 0) {
+      throw badRequest("Missing Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
+    }
+
+    const raw = request.rawBody;
+    if (!raw || !Buffer.isBuffer(raw)) {
+      throw badRequest("Missing raw body", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(raw, signature, stripeWebhookSecret);
+    } catch {
+      throw badRequest("Invalid Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
+    }
+
+    const toStringOrNull = (value: unknown): string | null => (typeof value === "string" && value.trim().length > 0 ? value : null);
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const payerUserIdRaw = toStringOrNull(session.metadata?.payerUserId);
+      const payerUserId = payerUserIdRaw && z.string().uuid().safeParse(payerUserIdRaw).success ? payerUserIdRaw : null;
+      const payerEmail =
+        toStringOrNull(session.metadata?.payerEmail) ??
+        toStringOrNull(session.customer_details?.email) ??
+        toStringOrNull(session.customer_email);
+
+      const inferredUserId =
+        payerUserId ??
+        (payerEmail ? (await store.getUserByEmail(payerEmail.toLowerCase()))?.id ?? null : null);
+      const paymentStatus = session.payment_status === "paid" ? "paid" : "pending";
+
+      await store.createUserPaymentEvent({
+        provider: "stripe",
+        providerEventId: event.id,
+        payerUserId: inferredUserId,
+        payerEmail,
+        status: paymentStatus,
+        amount: typeof session.amount_total === "number" ? session.amount_total : null,
+        currency: toStringOrNull(session.currency),
+        rawPayload: event,
+      });
+
+      if (paymentStatus === "paid" && inferredUserId) {
+        await store.upsertUserEntitlement({
+          userId: inferredUserId,
+          tier: "paid",
+          sourceProvider: "stripe",
+          sourceEventId: event.id,
+          validFrom: new Date(),
+          validUntil: null,
+          active: true,
+        });
       }
 
-      const signature = request.headers["stripe-signature"];
-      if (typeof signature !== "string" || signature.trim().length === 0) {
-        throw badRequest("Missing Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
-      }
-
-      const raw = (request as any).rawBody as Buffer | undefined;
-      if (!raw || !Buffer.isBuffer(raw)) {
-        throw badRequest("Missing raw body", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
-      }
-
-      let event: Stripe.Event;
-      try {
-        event = stripe.webhooks.constructEvent(raw, signature, stripeWebhookSecret);
-      } catch {
-        throw badRequest("Invalid Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
-      }
-
-      if (event.type === "checkout.session.completed") {
-        const session = event.data.object as Stripe.Checkout.Session;
-        const organizationId = typeof session.metadata?.organizationId === "string" ? session.metadata.organizationId : null;
-        const creditsRaw = typeof session.metadata?.credits === "string" ? session.metadata.credits : null;
-        const credits = creditsRaw ? Number(creditsRaw) : NaN;
-
-        if (!organizationId || !Number.isFinite(credits) || credits <= 0) {
-          throw badRequest("Invalid session metadata", { code: "STRIPE_WEBHOOK_INVALID_METADATA" });
-        }
-
-        if (session.payment_status !== "paid") {
-          return reply.status(200).send({ ok: true, ignored: true });
-        }
-
+      const organizationId = toStringOrNull(session.metadata?.organizationId);
+      const creditsRaw = toStringOrNull(session.metadata?.credits);
+      const credits = creditsRaw ? Number(creditsRaw) : NaN;
+      if (organizationId && Number.isFinite(credits) && credits > 0 && paymentStatus === "paid") {
         const result = await store.creditOrganizationFromStripeEvent({
           organizationId,
           stripeEventId: event.id,
@@ -2168,15 +2451,52 @@ export async function buildServer(input?: {
             packId: session.metadata?.packId ?? null,
             amountTotal: session.amount_total ?? null,
             currency: session.currency ?? null,
+            payerUserId: inferredUserId,
           },
         });
-
-        return reply.status(200).send({ ok: true, applied: result.applied });
+        return reply.status(200).send({ ok: true, applied: result.applied, provider: "stripe" });
       }
 
-      return reply.status(200).send({ ok: true });
+      return reply.status(200).send({ ok: true, provider: "stripe", applied: false });
     }
-  );
+
+    await store.createUserPaymentEvent({
+      provider: "stripe",
+      providerEventId: event.id,
+      status: "pending",
+      rawPayload: event,
+    });
+
+    return reply.status(200).send({ ok: true, provider: "stripe", ignored: true });
+  }
+
+  server.post("/v1/billing/payments/:provider/webhook", { config: { rawBody: true } as any }, async (request, reply) => {
+    const parsed = paymentProviderParamSchema.safeParse(request.params ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid payment provider", parsed.error.flatten());
+    }
+
+    const enabledProviders = await getEnabledPaymentProviders();
+    if (!enabledProviders.includes(parsed.data.provider)) {
+      throw new AppError(503, {
+        code: "PAYMENT_PROVIDER_DISABLED",
+        message: `Payment provider ${parsed.data.provider} is disabled`,
+      });
+    }
+
+    if (parsed.data.provider === "stripe") {
+      return handleStripePaymentWebhook(request as any, reply as any);
+    }
+
+    throw new AppError(501, {
+      code: "PAYMENT_PROVIDER_NOT_IMPLEMENTED",
+      message: `Payment provider ${parsed.data.provider} is not implemented`,
+    });
+  });
+
+  server.post("/v1/billing/stripe/webhook", { config: { rawBody: true } as any }, async (request, reply) => {
+    return handleStripePaymentWebhook(request as any, reply as any);
+  });
 
   server.post("/v1/orgs/:orgId/invitations", async (request, reply) => {
     const auth = requireAuth(request);
@@ -5579,6 +5899,392 @@ export async function buildServer(input?: {
     };
   });
 
+  server.get("/v1/admin/platform/settings", async (request) => {
+    await requireSystemAdmin(request);
+    const settings = await store.listPlatformSettings();
+    return { settings };
+  });
+
+  server.put("/v1/admin/platform/settings", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const parsed = adminPlatformSettingUpdateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid platform setting payload", parsed.error.flatten());
+    }
+    const setting = await store.upsertPlatformSetting({
+      key: parsed.data.key,
+      value: parsed.data.value,
+      updatedByUserId: auth.userId,
+    });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "platform_settings.updated",
+      targetType: "platform_setting",
+      targetId: setting.key,
+      metadata: { key: setting.key },
+    });
+    return { setting };
+  });
+
+  server.get("/v1/admin/system-admins", async (request) => {
+    await requireSystemAdmin(request);
+    const rows = await store.listPlatformUserRoles({ roleKey: "system_admin" });
+    const items = await Promise.all(
+      rows.map(async (row) => {
+        const user = await store.getUserById(row.userId);
+        return {
+          ...row,
+          user: user ? toPublicUser(user) : null,
+        };
+      })
+    );
+    return { systemAdmins: items };
+  });
+
+  server.post("/v1/admin/system-admins", async (request, reply) => {
+    const auth = await requireSystemAdmin(request);
+    const parsed = adminSystemAdminMutationSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid system admin payload", parsed.error.flatten());
+    }
+
+    let userId = parsed.data.userId ?? null;
+    if (!userId && parsed.data.email) {
+      const user = await store.getUserByEmail(parsed.data.email.toLowerCase());
+      if (!user) {
+        throw notFound("User not found");
+      }
+      userId = user.id;
+    }
+    if (!userId) {
+      throw badRequest("Missing userId");
+    }
+
+    const created = await store.createPlatformUserRole({
+      userId,
+      roleKey: "system_admin",
+      grantedByUserId: auth.userId,
+    });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "system_admin.granted",
+      targetType: "user",
+      targetId: userId,
+      metadata: { roleKey: "system_admin" },
+    });
+    return reply.status(201).send({ role: created });
+  });
+
+  server.delete("/v1/admin/system-admins", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const parsed = adminSystemAdminMutationSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid system admin payload", parsed.error.flatten());
+    }
+
+    let userId = parsed.data.userId ?? null;
+    if (!userId && parsed.data.email) {
+      const user = await store.getUserByEmail(parsed.data.email.toLowerCase());
+      if (!user) {
+        throw notFound("User not found");
+      }
+      userId = user.id;
+    }
+    if (!userId) {
+      throw badRequest("Missing userId");
+    }
+
+    if (userId === auth.userId) {
+      throw forbidden("Cannot remove your own system administrator role");
+    }
+
+    const deleted = await store.deletePlatformUserRole({ userId, roleKey: "system_admin" });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "system_admin.revoked",
+      targetType: "user",
+      targetId: userId,
+      metadata: { deleted },
+    });
+    return { ok: deleted };
+  });
+
+  server.get("/v1/admin/users/:userId/tier", async (request) => {
+    await requireSystemAdmin(request);
+    const params = z.object({ userId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid user id", params.error.flatten());
+    }
+    const user = await store.getUserById(params.data.userId);
+    if (!user) {
+      throw notFound("User not found");
+    }
+    const [effectiveTier, entitlements] = await Promise.all([
+      resolveAccountTier(user.id),
+      store.listUserEntitlements({ userId: user.id, activeOnly: false }),
+    ]);
+    return {
+      user: toPublicUser(user),
+      effectiveTier,
+      entitlements,
+      edition: enterpriseProvider.edition,
+    };
+  });
+
+  server.put("/v1/admin/users/:userId/tier", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const params = z.object({ userId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid user id", params.error.flatten());
+    }
+    const parsed = adminUserTierUpdateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid tier payload", parsed.error.flatten());
+    }
+    const user = await store.getUserById(params.data.userId);
+    if (!user) {
+      throw notFound("User not found");
+    }
+
+    const updated = await store.setUserEntitlementTier({
+      userId: user.id,
+      tier: parsed.data.tier,
+      sourceProvider: "admin",
+      sourceEventId: `admin:${Date.now()}`,
+      actorUserId: auth.userId,
+    });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "user_tier.updated",
+      targetType: "user",
+      targetId: user.id,
+      metadata: { tier: parsed.data.tier },
+    });
+    return { user: toPublicUser(user), tier: parsed.data.tier, entitlement: updated };
+  });
+
+  server.get("/v1/admin/payments/events", async (request) => {
+    await requireSystemAdmin(request);
+    const parsed = adminPaymentEventsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid payments query", parsed.error.flatten());
+    }
+    const events = await store.listUserPaymentEvents({
+      ...(parsed.data.provider ? { provider: parsed.data.provider } : {}),
+      ...(parsed.data.limit ? { limit: parsed.data.limit } : {}),
+    });
+    return { events };
+  });
+
+  server.get("/v1/admin/payments/providers", async (request) => {
+    await requireSystemAdmin(request);
+    const enabled = await getEnabledPaymentProviders();
+    return {
+      providers: SUPPORTED_PAYMENT_PROVIDERS.map((provider) => ({
+        provider,
+        enabled: enabled.includes(provider),
+        implemented: provider === "stripe",
+      })),
+    };
+  });
+
+  server.put("/v1/admin/payments/providers/:provider", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const params = paymentProviderParamSchema.safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid payment provider", params.error.flatten());
+    }
+    const parsed = adminPaymentsProviderUpdateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid provider payload", parsed.error.flatten());
+    }
+
+    const enabledSet = new Set(await getEnabledPaymentProviders());
+    if (parsed.data.enabled) {
+      enabledSet.add(params.data.provider);
+    } else {
+      enabledSet.delete(params.data.provider);
+    }
+    const value = { enabled: [...enabledSet] };
+    const setting = await store.upsertPlatformSetting({
+      key: "payments.providers",
+      value,
+      updatedByUserId: auth.userId,
+    });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "payments.providers.updated",
+      targetType: "platform_setting",
+      targetId: "payments.providers",
+      metadata: { provider: params.data.provider, enabled: parsed.data.enabled },
+    });
+    return { setting };
+  });
+
+  server.get("/v1/admin/risk/policies", async (request) => {
+    await requireSystemAdmin(request);
+    const setting = await store.getPlatformSetting({ key: "risk.policies" });
+    return { policy: setting?.value ?? {} };
+  });
+
+  server.put("/v1/admin/risk/policies", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const nextPolicy = request.body ?? {};
+    const setting = await store.upsertPlatformSetting({
+      key: "risk.policies",
+      value: nextPolicy,
+      updatedByUserId: auth.userId,
+    });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "risk.policies.updated",
+      targetType: "platform_setting",
+      targetId: "risk.policies",
+      metadata: {},
+    });
+    return { policy: setting.value };
+  });
+
+  server.get("/v1/admin/risk/incidents", async (request) => {
+    await requireSystemAdmin(request);
+    const setting = await store.getPlatformSetting({ key: "risk.incidents" });
+    return { incidents: setting?.value ?? { items: [] } };
+  });
+
+  server.get("/v1/admin/observability/health", async (request) => {
+    await requireSystemAdmin(request);
+    return {
+      services: [
+        { name: "api", status: "ok" },
+        { name: "gateway", status: GATEWAY_HTTP_URL ? "configured" : "unknown" },
+        { name: "redis", status: process.env.REDIS_URL ? "configured" : "in-memory" },
+        { name: "queue", status: process.env.REDIS_URL ? "configured" : "in-memory" },
+      ],
+    };
+  });
+
+  server.get("/v1/admin/observability/metrics", async (request) => {
+    await requireSystemAdmin(request);
+    const setting = await store.getPlatformSetting({ key: "observability.metrics" });
+    return { metrics: setting?.value ?? { items: [] } };
+  });
+
+  server.get("/v1/admin/observability/logs", async (request) => {
+    await requireSystemAdmin(request);
+    const setting = await store.getPlatformSetting({ key: "observability.logs" });
+    return { logs: setting?.value ?? { items: [] } };
+  });
+
+  server.get("/v1/admin/tickets", async (request) => {
+    await requireSystemAdmin(request);
+    const parsed = adminSupportTicketsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid tickets query", parsed.error.flatten());
+    }
+    const tickets = await store.listSupportTickets({
+      ...(parsed.data.status ? { status: parsed.data.status } : {}),
+      ...(parsed.data.limit ? { limit: parsed.data.limit } : {}),
+    });
+    return { tickets };
+  });
+
+  server.post("/v1/admin/tickets", async (request, reply) => {
+    const auth = await requireSystemAdmin(request);
+    const parsed = adminSupportTicketCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid ticket payload", parsed.error.flatten());
+    }
+    const ticket = await store.createSupportTicket({
+      subject: parsed.data.subject,
+      content: parsed.data.content,
+      ...(parsed.data.requesterUserId !== undefined ? { requesterUserId: parsed.data.requesterUserId } : {}),
+      ...(parsed.data.organizationId !== undefined ? { organizationId: parsed.data.organizationId } : {}),
+      ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}),
+      ...(parsed.data.priority !== undefined ? { priority: parsed.data.priority } : {}),
+      ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+      ...(parsed.data.assigneeUserId !== undefined ? { assigneeUserId: parsed.data.assigneeUserId } : {}),
+    });
+    await store.appendSupportTicketEvent({
+      ticketId: ticket.id,
+      actorUserId: auth.userId,
+      eventType: "created",
+      payload: { source: "admin" },
+    });
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "ticket.created",
+      targetType: "support_ticket",
+      targetId: ticket.id,
+      metadata: {},
+    });
+    return reply.status(201).send({ ticket });
+  });
+
+  server.get("/v1/admin/tickets/:ticketId", async (request) => {
+    await requireSystemAdmin(request);
+    const params = z.object({ ticketId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid ticket id", params.error.flatten());
+    }
+    const ticket = await store.getSupportTicketById({ ticketId: params.data.ticketId });
+    if (!ticket) {
+      throw notFound("Ticket not found");
+    }
+    const events = await store.listSupportTicketEvents({ ticketId: ticket.id, limit: 200 });
+    return { ticket, events };
+  });
+
+  server.patch("/v1/admin/tickets/:ticketId", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const params = z.object({ ticketId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid ticket id", params.error.flatten());
+    }
+    const parsed = adminSupportTicketPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid ticket patch payload", parsed.error.flatten());
+    }
+    const ticket = await store.patchSupportTicket({
+      ticketId: params.data.ticketId,
+      ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+      ...(parsed.data.priority !== undefined ? { priority: parsed.data.priority } : {}),
+      ...(parsed.data.assigneeUserId !== undefined ? { assigneeUserId: parsed.data.assigneeUserId } : {}),
+    });
+    if (!ticket) {
+      throw notFound("Ticket not found");
+    }
+    await store.appendSupportTicketEvent({
+      ticketId: ticket.id,
+      actorUserId: auth.userId,
+      eventType: "updated",
+      payload: parsed.data,
+    });
+    return { ticket };
+  });
+
+  server.post("/v1/admin/tickets/:ticketId/events", async (request, reply) => {
+    const auth = await requireSystemAdmin(request);
+    const params = z.object({ ticketId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid ticket id", params.error.flatten());
+    }
+    const parsed = adminSupportTicketEventCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid ticket event payload", parsed.error.flatten());
+    }
+    const ticket = await store.getSupportTicketById({ ticketId: params.data.ticketId });
+    if (!ticket) {
+      throw notFound("Ticket not found");
+    }
+    const event = await store.appendSupportTicketEvent({
+      ticketId: ticket.id,
+      actorUserId: auth.userId,
+      eventType: parsed.data.eventType,
+      payload: parsed.data.payload ?? {},
+    });
+    return reply.status(201).send({ event });
+  });
+
   server.post("/v1/invitations/:token/accept", async (request) => {
     const auth = requireAuth(request);
     const token = (request.params as { token?: string }).token;
@@ -5596,6 +6302,15 @@ export async function buildServer(input?: {
       const parsedHeaderOrgId = parseOrgHeaderValue(headerOrgId);
       if (parsedHeaderOrgId !== organizationId) {
         throw orgContextInvalid("X-Org-Id does not match invitation organization");
+      }
+    }
+
+    const capabilities = await resolveUserCapabilities({ userId: auth.userId, email: auth.email });
+    if (capabilities.orgPolicy.maxOrganizations !== null) {
+      const orgs = await store.listOrganizationsForUser({ actorUserId: auth.userId });
+      const alreadyMember = orgs.some((row) => row.organization.id === organizationId);
+      if (!alreadyMember && orgs.length >= capabilities.orgPolicy.maxOrganizations) {
+        throw orgPlanUpgradeRequired("Joining this organization requires a higher plan.");
       }
     }
 

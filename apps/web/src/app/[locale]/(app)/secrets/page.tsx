@@ -14,7 +14,7 @@ import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Separator } from "../../../../components/ui/separator";
-import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
 import { isUnauthorizedError } from "../../../../lib/api";
 import { useCreateSecret, useDeleteSecret, useRotateSecret, useSecrets } from "../../../../lib/hooks/use-secrets";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
@@ -25,7 +25,7 @@ function SecretsPageContent() {
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
   const router = useRouter();
 
-  const orgId = useActiveOrgId();
+  const { orgId, orgName } = useActiveOrgName();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
 
@@ -135,7 +135,7 @@ function SecretsPageContent() {
       <Card>
         <CardHeader>
           <CardTitle>{t("common.list")}</CardTitle>
-          <CardDescription>{orgId ? `Org: ${orgId}` : t("org.requireActive")}</CardDescription>
+          <CardDescription>{orgName ?? t("org.requireActive")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap items-center gap-2">

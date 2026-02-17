@@ -66,10 +66,6 @@ type NavItem = {
 const SIDEBAR_COLLAPSED_KEY = "vespid.ui.sidebarCollapsed";
 const ONBOARDING_COLLAPSED_KEY = "vespid.ui.onboarding-collapsed";
 
-function shortId(value: string): string {
-  return value.length > 10 ? `${value.slice(0, 8)}…` : value;
-}
-
 export function AppShell({ children }: { children: ReactNode }) {
   const t = useTranslations();
   const router = useRouter();
@@ -89,8 +85,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const [activeOrgId, setActiveOrgIdState] = useState<string>("");
   const [knownOrgIds, setKnownOrgIds] = useState<string[]>([]);
-  const [draftOrgId, setDraftOrgId] = useState<string>("");
   const [orgSummaries, setOrgSummaries] = useState<Array<{ id: string; name: string; roleKey: string }>>([]);
+  const [isSystemAdmin, setIsSystemAdmin] = useState(false);
+  const [canManageOrganizations, setCanManageOrganizations] = useState(false);
   const [hasStarterResource, setHasStarterResource] = useState(false);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -100,7 +97,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     const current = getActiveOrgId();
     setActiveOrgIdState(current ?? "");
     setKnownOrgIds(getKnownOrgIds());
-    setDraftOrgId(current ?? "");
 
     const rawCollapsed = window.localStorage?.getItem(SIDEBAR_COLLAPSED_KEY);
     setSidebarCollapsed(rawCollapsed === "1");
@@ -110,13 +106,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     return subscribeActiveOrg((next) => {
       setActiveOrgIdState(next ?? "");
       setKnownOrgIds(getKnownOrgIds());
-      setDraftOrgId(next ?? "");
     });
   }, []);
 
   useEffect(() => {
     if (!session.data?.session) {
       setOrgSummaries([]);
+      setCanManageOrganizations(false);
+      setIsSystemAdmin(false);
       return;
     }
 
@@ -125,11 +122,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       try {
         const me = await apiFetchJson<{
           user: { id: string; email: string };
+          account: { tier: "free" | "paid" | "enterprise"; isSystemAdmin: boolean };
+          orgPolicy: { canManageOrganizations: boolean; maxOrganizations: number | null; currentOrganizations: number };
           orgs: Array<{ id: string; name: string; roleKey: string }>;
           defaultOrgId: string | null;
         }>("/v1/me");
         if (cancelled) return;
         setOrgSummaries(Array.isArray(me.orgs) ? me.orgs : []);
+        setIsSystemAdmin(Boolean(me.account?.isSystemAdmin));
+        setCanManageOrganizations(Boolean(me.orgPolicy?.canManageOrganizations));
         const ids = Array.isArray(me.orgs) ? me.orgs.map((o) => o.id).filter(Boolean) : [];
         setKnownOrgIds((prev) => {
           const merged = [...new Set([...ids, ...prev])];
@@ -137,6 +138,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         });
         const current = getActiveOrgId();
         if (!current && me.defaultOrgId) {
+          setActiveOrgId(me.defaultOrgId);
+        } else if (current && !ids.includes(current) && me.defaultOrgId) {
           setActiveOrgId(me.defaultOrgId);
         }
       } catch {
@@ -188,18 +191,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     return subscribeApiReachability((next) => setReachability(next));
   }, []);
 
-  const nav: NavItem[] = useMemo(
-    () => [
-      { href: (l) => `/${l}/conversations`, labelKey: "nav.sessions", icon: <MessageCircle className="h-4 w-4" /> },
-      { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
-      { href: (l) => `/${l}/channels`, labelKey: "nav.channels", icon: <MessageSquare className="h-4 w-4" /> },
-      { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
-      { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },
-      { href: (l) => `/${l}/toolsets`, labelKey: "nav.toolsets", icon: <Braces className="h-4 w-4" /> },
-    ],
-    []
-  );
-
   const orgLabelById = useMemo(() => {
     const map = new Map<string, string>();
     for (const org of orgSummaries) {
@@ -208,11 +199,27 @@ export function AppShell({ children }: { children: ReactNode }) {
     return map;
   }, [orgSummaries]);
 
+  const nav: NavItem[] = useMemo(
+    () => [
+      { href: (l) => `/${l}/conversations`, labelKey: "nav.sessions", icon: <MessageCircle className="h-4 w-4" /> },
+      { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
+      { href: (l) => `/${l}/channels`, labelKey: "nav.channels", icon: <MessageSquare className="h-4 w-4" /> },
+      { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
+      { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },
+      { href: (l) => `/${l}/toolsets`, labelKey: "nav.toolsets", icon: <Braces className="h-4 w-4" /> },
+      ...(isSystemAdmin ? [{ href: (l: string) => `/${l}/admin`, labelKey: "nav.admin", icon: <ShieldCheck className="h-4 w-4" /> }] : []),
+    ],
+    [isSystemAdmin]
+  );
+
   function isActive(href: string): boolean {
     return (pathname ?? "").startsWith(href);
   }
 
   function applyOrgId(value: string) {
+    if (!canManageOrganizations) {
+      return;
+    }
     const trimmed = value.trim();
     if (!trimmed) {
       clearActiveOrgId();
@@ -246,7 +253,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     clearActiveOrgId();
     setOrgSummaries([]);
     setKnownOrgIds([]);
-    setDraftOrgId("");
+    setCanManageOrganizations(false);
+    setIsSystemAdmin(false);
     setHasStarterResource(false);
     queryClient.setQueryData(["session"], null);
     router.push(`/${locale}/auth?loggedOut=1`);
@@ -255,8 +263,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const userEmail = session.data?.user?.email;
   const userInitial = (userEmail?.trim()?.[0] ?? "U").toUpperCase();
   const hasSession = Boolean(session.data?.session);
+  const showOrgEntry = hasSession && canManageOrganizations;
   const visibleActiveOrgId = hasSession ? activeOrgId : "";
-  const visibleKnownOrgIds = hasSession ? knownOrgIds : [];
+  const visibleKnownOrgIds = hasSession ? knownOrgIds.filter((id) => orgLabelById.has(id)) : [];
+  const activeOrgLabel = visibleActiveOrgId ? orgLabelById.get(visibleActiveOrgId) ?? t("org.noActive") : "";
   const apiUnreachable =
     !hasSession &&
     typeof reachability.unreachableAt === "number" &&
@@ -357,9 +367,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           <DropdownMenuItem asChild>
             <Link href={`/${locale}/auth`}>{t("nav.auth")}</Link>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link href={`/${locale}/org`}>{t("nav.org")}</Link>
-          </DropdownMenuItem>
+          {showOrgEntry ? (
+            <DropdownMenuItem asChild>
+              <Link href={`/${locale}/org`}>{t("nav.org")}</Link>
+            </DropdownMenuItem>
+          ) : null}
+          {isSystemAdmin ? (
+            <DropdownMenuItem asChild>
+              <Link href={`/${locale}/admin`}>{t("nav.admin")}</Link>
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={logout}>
             <LogOut className="h-4 w-4" />
@@ -383,8 +400,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           { title: t("nav.billing"), href: `/${locale}/billing`, icon: CreditCard },
           { title: t("nav.agents"), href: `/${locale}/agents`, icon: Rocket },
           { title: t("nav.toolsets"), href: `/${locale}/toolsets`, icon: Braces },
+          ...(isSystemAdmin ? [{ title: t("nav.admin"), href: `/${locale}/admin`, icon: ShieldCheck }] : []),
           { title: t("nav.auth"), href: `/${locale}/auth`, icon: ShieldCheck },
-          { title: t("nav.org"), href: `/${locale}/org`, icon: Users },
+          ...(showOrgEntry ? [{ title: t("nav.org"), href: `/${locale}/org`, icon: Users }] : []),
         ]}
       />
 
@@ -456,7 +474,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Separator />
               <div className="mt-4 text-xs font-medium text-muted">{t("org.active")}</div>
               <div className="mt-2 break-all text-xs text-text">
-                {visibleActiveOrgId ? visibleActiveOrgId : <span className="text-muted">{t("org.noActive")}</span>}
+                {visibleActiveOrgId ? activeOrgLabel : <span className="text-muted">{t("org.noActive")}</span>}
               </div>
             </div>
           ) : null}
@@ -539,41 +557,29 @@ export function AppShell({ children }: { children: ReactNode }) {
 
                             <div className="mt-4">
                               <div className="text-xs font-medium text-muted">{t("org.active")}</div>
-                              <div className="mt-2 grid gap-2">
-                                <Select
-                                  value={visibleActiveOrgId || "__none__"}
-                                  onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
-                                    {visibleKnownOrgIds.map((id) => (
-                                      <SelectItem key={id} value={id}>
-                                        {orgLabelById.get(id) ? `${orgLabelById.get(id)} (${shortId(id)})` : id}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                                <input
-                                  value={draftOrgId}
-                                  onChange={(e) => setDraftOrgId(e.target.value)}
-                                  placeholder={t("org.paste")}
-                                  className="h-9 w-full rounded-[var(--radius-sm)] border border-borderSubtle/60 bg-panel/55 px-3 text-sm text-text shadow-elev1 outline-none placeholder:text-muted focus:border-accent/40 focus:ring-2 focus:ring-accent/15"
-                                />
-                                <div className="flex justify-end">
-                                  <Button
-                                    variant="accent"
-                                    onClick={() => {
-                                      applyOrgId(draftOrgId);
-                                      setMobileNavOpen(false);
-                                    }}
-                                  >
-                                    {t("org.set")}
-                                  </Button>
-                                </div>
+                              <div className="mt-2 text-sm text-text">
+                                {visibleActiveOrgId ? activeOrgLabel : t("org.noActive")}
                               </div>
+                              {showOrgEntry ? (
+                                <div className="mt-2 grid gap-2">
+                                  <Select
+                                    value={visibleActiveOrgId || "__none__"}
+                                    onValueChange={(value) => applyOrgId(value === "__none__" ? "" : value)}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="__none__">{t("org.noActive")}</SelectItem>
+                                      {visibleKnownOrgIds.map((id) => (
+                                        <SelectItem key={id} value={id}>
+                                          {orgLabelById.get(id)}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              ) : null}
                             </div>
                           </>
                         ) : null}
@@ -586,9 +592,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                           <Button asChild variant="outline" onClick={() => setMobileNavOpen(false)}>
                             <Link href={`/${locale}/auth`}>{t("nav.auth")}</Link>
                           </Button>
-                          <Button asChild variant="outline" onClick={() => setMobileNavOpen(false)}>
-                            <Link href={`/${locale}/org`}>{t("nav.org")}</Link>
-                          </Button>
+                          {showOrgEntry ? (
+                            <Button asChild variant="outline" onClick={() => setMobileNavOpen(false)}>
+                              <Link href={`/${locale}/org`}>{t("nav.org")}</Link>
+                            </Button>
+                          ) : null}
+                          {isSystemAdmin ? (
+                            <Button asChild variant="outline" onClick={() => setMobileNavOpen(false)}>
+                              <Link href={`/${locale}/admin`}>{t("nav.admin")}</Link>
+                            </Button>
+                          ) : null}
                           <Button
                             variant="danger"
                             onClick={async () => {
@@ -688,7 +701,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <div className="mb-3 rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/55 px-3 py-3 shadow-elev1 md:mb-4 md:px-4">
                 <div className="grid gap-2">
                   <div className="flex flex-wrap gap-2">
-                    {!activeOrgId ? (
+                    {!activeOrgId && showOrgEntry ? (
                       <Button size="sm" variant="accent" asChild>
                         <Link href={`/${locale}/org`}>{t("onboarding.goOrg")}</Link>
                       </Button>

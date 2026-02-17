@@ -30,10 +30,17 @@ import {
   organizationExecutors,
   memberships,
   organizationInvitations,
+  platformAuditLogs,
+  platformSettings,
+  platformUserRoles,
   organizations,
   roles,
+  supportTicketEvents,
+  supportTickets,
   toolsetBuilderSessions,
   toolsetBuilderTurns,
+  userEntitlements,
+  userPaymentEvents,
   users,
   workflowRunEvents,
   workflowRuns,
@@ -3297,4 +3304,393 @@ export async function listChannelEvents(
     .where(and(eq(channelEvents.organizationId, input.organizationId), eq(channelEvents.accountId, input.accountId)))
     .orderBy(desc(channelEvents.createdAt))
     .limit(limit);
+}
+
+export async function listPlatformUserRoles(
+  db: Db,
+  input?: { roleKey?: string; userId?: string }
+) {
+  const where: any[] = [];
+  if (input?.roleKey) {
+    where.push(eq(platformUserRoles.roleKey, input.roleKey));
+  }
+  if (input?.userId) {
+    where.push(eq(platformUserRoles.userId, input.userId));
+  }
+  const condition = where.length > 0 ? and(...where) : undefined;
+  const query = db.select().from(platformUserRoles).orderBy(desc(platformUserRoles.createdAt));
+  return condition ? await query.where(condition) : await query;
+}
+
+export async function createPlatformUserRole(
+  db: Db,
+  input: { userId: string; roleKey: string; grantedByUserId?: string | null }
+) {
+  try {
+    const [row] = await db
+      .insert(platformUserRoles)
+      .values({
+        userId: input.userId,
+        roleKey: input.roleKey,
+        grantedByUserId: input.grantedByUserId ?? null,
+      })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to create platform user role");
+    }
+    return row;
+  } catch (error) {
+    if (!isPgUniqueViolation(error)) {
+      throw error;
+    }
+    const [existing] = await db
+      .select()
+      .from(platformUserRoles)
+      .where(and(eq(platformUserRoles.userId, input.userId), eq(platformUserRoles.roleKey, input.roleKey)));
+    if (!existing) {
+      throw new Error("Failed to read existing platform user role");
+    }
+    return existing;
+  }
+}
+
+export async function deletePlatformUserRole(
+  db: Db,
+  input: { userId: string; roleKey: string }
+) {
+  const [deleted] = await db
+    .delete(platformUserRoles)
+    .where(and(eq(platformUserRoles.userId, input.userId), eq(platformUserRoles.roleKey, input.roleKey)))
+    .returning({ id: platformUserRoles.id });
+  return Boolean(deleted);
+}
+
+export async function upsertPlatformSetting(
+  db: Db,
+  input: { key: string; value: unknown; updatedByUserId?: string | null }
+) {
+  const [row] = await db
+    .insert(platformSettings)
+    .values({
+      key: input.key,
+      value: (input.value ?? {}) as any,
+      updatedByUserId: input.updatedByUserId ?? null,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: platformSettings.key,
+      set: {
+        value: (input.value ?? {}) as any,
+        updatedByUserId: input.updatedByUserId ?? null,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to upsert platform setting");
+  }
+  return row;
+}
+
+export async function getPlatformSetting(
+  db: Db,
+  input: { key: string }
+) {
+  const [row] = await db.select().from(platformSettings).where(eq(platformSettings.key, input.key));
+  return row ?? null;
+}
+
+export async function listPlatformSettings(db: Db) {
+  return await db.select().from(platformSettings).orderBy(asc(platformSettings.key));
+}
+
+export async function createUserPaymentEvent(
+  db: Db,
+  input: {
+    provider: string;
+    providerEventId: string;
+    payerUserId?: string | null;
+    payerEmail?: string | null;
+    status: string;
+    amount?: number | null;
+    currency?: string | null;
+    rawPayload?: unknown;
+  }
+) {
+  try {
+    const [row] = await db
+      .insert(userPaymentEvents)
+      .values({
+        provider: input.provider,
+        providerEventId: input.providerEventId,
+        payerUserId: input.payerUserId ?? null,
+        payerEmail: input.payerEmail ?? null,
+        status: input.status,
+        amount: input.amount ?? null,
+        currency: input.currency ?? null,
+        rawPayload: (input.rawPayload ?? {}) as any,
+      })
+      .returning();
+    if (!row) {
+      throw new Error("Failed to create user payment event");
+    }
+    return row;
+  } catch (error) {
+    if (!isPgUniqueViolation(error)) {
+      throw error;
+    }
+    const [existing] = await db
+      .select()
+      .from(userPaymentEvents)
+      .where(and(eq(userPaymentEvents.provider, input.provider), eq(userPaymentEvents.providerEventId, input.providerEventId)));
+    if (!existing) {
+      throw new Error("Failed to read existing user payment event");
+    }
+    return existing;
+  }
+}
+
+export async function listUserPaymentEvents(
+  db: Db,
+  input?: { provider?: string; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
+  const query = db.select().from(userPaymentEvents).orderBy(desc(userPaymentEvents.createdAt)).limit(limit);
+  if (input?.provider) {
+    return await query.where(eq(userPaymentEvents.provider, input.provider));
+  }
+  return await query;
+}
+
+export async function upsertUserEntitlement(
+  db: Db,
+  input: {
+    userId: string;
+    tier: string;
+    sourceProvider: string;
+    sourceEventId: string;
+    validFrom?: Date;
+    validUntil?: Date | null;
+    active?: boolean;
+  }
+) {
+  const [row] = await db
+    .insert(userEntitlements)
+    .values({
+      userId: input.userId,
+      tier: input.tier,
+      sourceProvider: input.sourceProvider,
+      sourceEventId: input.sourceEventId,
+      validFrom: input.validFrom ?? new Date(),
+      validUntil: input.validUntil ?? null,
+      active: input.active ?? true,
+    })
+    .onConflictDoUpdate({
+      target: [userEntitlements.userId, userEntitlements.sourceProvider, userEntitlements.sourceEventId],
+      set: {
+        tier: input.tier,
+        validUntil: input.validUntil ?? null,
+        active: input.active ?? true,
+      },
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to upsert user entitlement");
+  }
+  return row;
+}
+
+export async function listUserEntitlements(
+  db: Db,
+  input: { userId: string; activeOnly?: boolean }
+) {
+  const where: any[] = [eq(userEntitlements.userId, input.userId)];
+  if (input.activeOnly) {
+    where.push(eq(userEntitlements.active, true));
+    where.push(or(isNull(userEntitlements.validUntil), gt(userEntitlements.validUntil, new Date())));
+  }
+  return await db
+    .select()
+    .from(userEntitlements)
+    .where(and(...where))
+    .orderBy(desc(userEntitlements.createdAt));
+}
+
+export async function setUserEntitlementTier(
+  db: Db,
+  input: {
+    userId: string;
+    tier: "free" | "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    actorUserId?: string | null;
+  }
+) {
+  if (input.tier === "free") {
+    await db
+      .update(userEntitlements)
+      .set({ active: false, validUntil: new Date() })
+      .where(and(eq(userEntitlements.userId, input.userId), eq(userEntitlements.active, true)));
+    return null;
+  }
+  const row = await upsertUserEntitlement(db, {
+    userId: input.userId,
+    tier: "paid",
+    sourceProvider: input.sourceProvider,
+    sourceEventId: input.sourceEventId,
+    validFrom: new Date(),
+    validUntil: null,
+    active: true,
+  });
+  return row;
+}
+
+export async function createSupportTicket(
+  db: Db,
+  input: {
+    requesterUserId?: string | null;
+    organizationId?: string | null;
+    category?: string;
+    priority?: string;
+    status?: string;
+    subject: string;
+    content: string;
+    assigneeUserId?: string | null;
+  }
+) {
+  const [row] = await db
+    .insert(supportTickets)
+    .values({
+      requesterUserId: input.requesterUserId ?? null,
+      organizationId: input.organizationId ?? null,
+      category: input.category ?? "general",
+      priority: input.priority ?? "normal",
+      status: input.status ?? "open",
+      subject: input.subject,
+      content: input.content,
+      assigneeUserId: input.assigneeUserId ?? null,
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to create support ticket");
+  }
+  return row;
+}
+
+export async function listSupportTickets(
+  db: Db,
+  input?: { status?: string; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
+  const query = db.select().from(supportTickets).orderBy(desc(supportTickets.updatedAt)).limit(limit);
+  if (input?.status) {
+    return await query.where(eq(supportTickets.status, input.status));
+  }
+  return await query;
+}
+
+export async function getSupportTicketById(
+  db: Db,
+  input: { ticketId: string }
+) {
+  const [row] = await db.select().from(supportTickets).where(eq(supportTickets.id, input.ticketId));
+  return row ?? null;
+}
+
+export async function patchSupportTicket(
+  db: Db,
+  input: {
+    ticketId: string;
+    status?: string;
+    priority?: string;
+    assigneeUserId?: string | null;
+  }
+) {
+  const [row] = await db
+    .update(supportTickets)
+    .set({
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.assigneeUserId !== undefined ? { assigneeUserId: input.assigneeUserId } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(supportTickets.id, input.ticketId))
+    .returning();
+  return row ?? null;
+}
+
+export async function appendSupportTicketEvent(
+  db: Db,
+  input: {
+    ticketId: string;
+    actorUserId?: string | null;
+    eventType: string;
+    payload?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(supportTicketEvents)
+    .values({
+      ticketId: input.ticketId,
+      actorUserId: input.actorUserId ?? null,
+      eventType: input.eventType,
+      payload: (input.payload ?? {}) as any,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to append support ticket event");
+  }
+  return row;
+}
+
+export async function listSupportTicketEvents(
+  db: Db,
+  input: { ticketId: string; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+  return await db
+    .select()
+    .from(supportTicketEvents)
+    .where(eq(supportTicketEvents.ticketId, input.ticketId))
+    .orderBy(desc(supportTicketEvents.createdAt))
+    .limit(limit);
+}
+
+export async function appendPlatformAuditLog(
+  db: Db,
+  input: {
+    actorUserId?: string | null;
+    action: string;
+    targetType: string;
+    targetId?: string | null;
+    metadata?: unknown;
+  }
+) {
+  const [row] = await db
+    .insert(platformAuditLogs)
+    .values({
+      actorUserId: input.actorUserId ?? null,
+      action: input.action,
+      targetType: input.targetType,
+      targetId: input.targetId ?? null,
+      metadata: (input.metadata ?? {}) as any,
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to append platform audit log");
+  }
+  return row;
+}
+
+export async function listPlatformAuditLogs(
+  db: Db,
+  input?: { action?: string; limit?: number }
+) {
+  const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
+  const query = db.select().from(platformAuditLogs).orderBy(desc(platformAuditLogs.createdAt)).limit(limit);
+  if (input?.action) {
+    return await query.where(eq(platformAuditLogs.action, input.action));
+  }
+  return await query;
 }

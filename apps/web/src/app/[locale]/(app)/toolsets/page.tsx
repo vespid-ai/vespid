@@ -22,7 +22,7 @@ import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { LlmConfigField } from "../../../../components/app/llm/llm-config-field";
-import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
+import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useChatToolsetBuilderSession, useCreateToolsetBuilderSession, useFinalizeToolsetBuilderSession } from "../../../../lib/hooks/use-toolset-builder";
@@ -745,7 +745,7 @@ export default function ToolsetsPage() {
   const router = useRouter();
   const params = useParams<{ locale?: string | string[] }>();
   const locale = Array.isArray(params?.locale) ? params.locale[0] ?? "en" : params?.locale ?? "en";
-  const orgId = useActiveOrgId();
+  const { orgId, orgName } = useActiveOrgName();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
 
@@ -1047,7 +1047,7 @@ export default function ToolsetsPage() {
           <Card>
             <CardHeader>
               <CardTitle>{t("toolsets.tabs.library")}</CardTitle>
-              <CardDescription>{orgId ? t("toolsets.libraryOrgLabel", { orgId }) : t("org.requireActive")}</CardDescription>
+              <CardDescription>{orgName ?? t("org.requireActive")}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap items-center gap-2">

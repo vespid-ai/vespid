@@ -88,6 +88,83 @@ export const authSessions = pgTable("auth_sessions", {
   authSessionsRefreshHashUnique: uniqueIndex("auth_sessions_refresh_token_hash_unique").on(table.refreshTokenHash),
 }));
 
+export const platformUserRoles = pgTable(
+  "platform_user_roles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    roleKey: text("role_key").notNull(),
+    grantedByUserId: uuid("granted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    platformUserRolesUserRoleUnique: uniqueIndex("platform_user_roles_user_role_unique").on(table.userId, table.roleKey),
+    platformUserRolesRoleCreatedAtIdx: index("platform_user_roles_role_created_at_idx").on(table.roleKey, table.createdAt),
+  })
+);
+
+export const platformSettings = pgTable("platform_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull().default(sql`'{}'::jsonb`),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userPaymentEvents = pgTable(
+  "user_payment_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    provider: text("provider").notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    payerUserId: uuid("payer_user_id").references(() => users.id, { onDelete: "set null" }),
+    payerEmail: text("payer_email"),
+    status: text("status").notNull(),
+    amount: bigint("amount", { mode: "number" }),
+    currency: text("currency"),
+    rawPayload: jsonb("raw_payload").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userPaymentEventsProviderEventUnique: uniqueIndex("user_payment_events_provider_event_unique").on(
+      table.provider,
+      table.providerEventId
+    ),
+    userPaymentEventsPayerCreatedAtIdx: index("user_payment_events_payer_created_at_idx").on(table.payerUserId, table.createdAt),
+    userPaymentEventsProviderStatusCreatedAtIdx: index("user_payment_events_provider_status_created_at_idx").on(
+      table.provider,
+      table.status,
+      table.createdAt
+    ),
+  })
+);
+
+export const userEntitlements = pgTable(
+  "user_entitlements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tier: text("tier").notNull(),
+    sourceProvider: text("source_provider").notNull(),
+    sourceEventId: text("source_event_id").notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true }).notNull().defaultNow(),
+    validUntil: timestamp("valid_until", { withTimezone: true }),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userEntitlementsUserActiveIdx: index("user_entitlements_user_active_idx").on(table.userId, table.active, table.validUntil),
+    userEntitlementsSourceUnique: uniqueIndex("user_entitlements_source_unique").on(
+      table.userId,
+      table.sourceProvider,
+      table.sourceEventId
+    ),
+  })
+);
+
 export const workflows = pgTable("workflows", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -662,6 +739,65 @@ export const channelEvents = pgTable("channel_events", {
   channelEventsOrgAccountIdx: index("channel_events_org_account_idx").on(table.organizationId, table.accountId, table.createdAt),
   channelEventsOrgTypeIdx: index("channel_events_org_type_idx").on(table.organizationId, table.eventType, table.createdAt),
 }));
+
+export const supportTickets = pgTable(
+  "support_tickets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    requesterUserId: uuid("requester_user_id").references(() => users.id, { onDelete: "set null" }),
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "set null" }),
+    category: text("category").notNull().default("general"),
+    priority: text("priority").notNull().default("normal"),
+    status: text("status").notNull().default("open"),
+    subject: text("subject").notNull(),
+    content: text("content").notNull(),
+    assigneeUserId: uuid("assignee_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    supportTicketsStatusPriorityUpdatedAtIdx: index("support_tickets_status_priority_updated_at_idx").on(
+      table.status,
+      table.priority,
+      table.updatedAt
+    ),
+    supportTicketsRequesterCreatedAtIdx: index("support_tickets_requester_created_at_idx").on(table.requesterUserId, table.createdAt),
+  })
+);
+
+export const supportTicketEvents = pgTable(
+  "support_ticket_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => supportTickets.id, { onDelete: "cascade" }),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    eventType: text("event_type").notNull(),
+    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    supportTicketEventsTicketCreatedAtIdx: index("support_ticket_events_ticket_created_at_idx").on(table.ticketId, table.createdAt),
+  })
+);
+
+export const platformAuditLogs = pgTable(
+  "platform_audit_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    platformAuditLogsCreatedAtIdx: index("platform_audit_logs_created_at_idx").on(table.createdAt),
+    platformAuditLogsActionCreatedAtIdx: index("platform_audit_logs_action_created_at_idx").on(table.action, table.createdAt),
+  })
+);
 
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),

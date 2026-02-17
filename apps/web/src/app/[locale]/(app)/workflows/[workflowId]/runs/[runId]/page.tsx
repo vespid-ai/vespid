@@ -27,7 +27,7 @@ import { ScrollArea } from "../../../../../../../components/ui/scroll-area";
 import { Separator } from "../../../../../../../components/ui/separator";
 import { AdvancedSection } from "../../../../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../../../../components/app/auth-required-state";
-import { useActiveOrgId } from "../../../../../../../lib/hooks/use-active-org-id";
+import { useActiveOrgName } from "../../../../../../../lib/hooks/use-active-org-name";
 import { useSession as useAuthSession } from "../../../../../../../lib/hooks/use-session";
 import { useRun, useRunEvents, type WorkflowRunEvent } from "../../../../../../../lib/hooks/use-workflows";
 import { addRecentRunId } from "../../../../../../../lib/recents";
@@ -196,7 +196,7 @@ export default function RunReplayPage() {
   const workflowId = (Array.isArray(params?.workflowId) ? params.workflowId[0] : params?.workflowId) ?? "";
   const runId = (Array.isArray(params?.runId) ? params.runId[0] : params?.runId) ?? "";
 
-  const orgId = useActiveOrgId();
+  const { orgId, orgName } = useActiveOrgName();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
 
@@ -524,7 +524,7 @@ export default function RunReplayPage() {
             <Button size="sm" variant="ghost" onClick={copyRunId}>
               {t("common.copy")}
             </Button>
-            <span>{t("runs.orgLabel", { org: orgId ?? "-" })}</span>
+            <span>{t("runs.orgLabel", { org: orgName ?? "-" })}</span>
           </div>
         </div>
 

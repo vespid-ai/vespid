@@ -77,8 +77,27 @@ function createFakeQueueProducer(): FakeQueueProducer {
   };
 }
 
-describe("api hardening foundation", () => {
+function createPaidMemoryStore(): MemoryAppStore {
   const store = new MemoryAppStore();
+  const originalCreateUser = store.createUser.bind(store);
+  store.createUser = (async (input) => {
+    const user = await originalCreateUser(input);
+    await store.upsertUserEntitlement({
+      userId: user.id,
+      tier: "paid",
+      sourceProvider: "test",
+      sourceEventId: `test-bootstrap:${user.id}`,
+      validFrom: new Date(),
+      validUntil: null,
+      active: true,
+    });
+    return user;
+  }) as typeof store.createUser;
+  return store;
+}
+
+describe("api hardening foundation", () => {
+  const store = createPaidMemoryStore();
   const queueProducer = createFakeQueueProducer();
   let server: Awaited<ReturnType<typeof buildServer>>;
 
@@ -2071,7 +2090,7 @@ describe("api rbac promotion flow", () => {
 
   beforeAll(async () => {
     server = await buildServer({
-      store: new MemoryAppStore(),
+      store: createPaidMemoryStore(),
       oauthService: fakeOAuthService(),
       orgContextEnforcement: "strict",
       queueProducer,
@@ -2304,7 +2323,7 @@ describe("api rbac promotion flow", () => {
 });
 
 describe("personal billing credits (memory store + fake Stripe)", () => {
-  const store = new MemoryAppStore();
+  const store = createPaidMemoryStore();
   const queueProducer = createFakeQueueProducer();
   let organizationIdForWebhook = "org-from-test";
 
@@ -2465,7 +2484,7 @@ describe("personal billing credits (memory store + fake Stripe)", () => {
 });
 
 describe("vertex oauth advanced connection", () => {
-  const store = new MemoryAppStore();
+  const store = createPaidMemoryStore();
   const queueProducer = createFakeQueueProducer();
   let server: Awaited<ReturnType<typeof buildServer>>;
   const priorKek = process.env.SECRETS_KEK_BASE64;
@@ -2580,7 +2599,7 @@ describe("api enterprise provider integration", () => {
     };
 
     const server = await buildServer({
-      store: new MemoryAppStore(),
+      store: createPaidMemoryStore(),
       oauthService: fakeOAuthService(),
       queueProducer: createFakeQueueProducer(),
       enterpriseProvider: provider,
@@ -2618,7 +2637,7 @@ describe("api org context warn mode", () => {
 
   beforeAll(async () => {
     server = await buildServer({
-      store: new MemoryAppStore(),
+      store: createPaidMemoryStore(),
       oauthService: fakeOAuthService(),
       orgContextEnforcement: "warn",
       queueProducer,
@@ -2736,6 +2755,292 @@ describe("api org context warn mode", () => {
   });
 });
 
+describe("account tier and system admin policies", () => {
+  it("rejects free user organization creation with upgrade-required code", async () => {
+    const server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `free-user-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as any);
+
+    const createOrg = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Free Org", slug: `free-org-${Date.now()}` },
+    });
+    expect(createOrg.statusCode).toBe(403);
+    expect((createOrg.json() as { code: string }).code).toBe("ORG_PLAN_UPGRADE_REQUIRED");
+
+    await server.close();
+  });
+
+  it("enforces paid user organization limits from platform policy", async () => {
+    const store = createPaidMemoryStore();
+    await store.upsertPlatformSetting({
+      key: "org_policy",
+      value: {
+        free: { canManageOrg: false, maxOrgs: 1 },
+        paid: { canManageOrg: true, maxOrgs: 2 },
+        enterprise: { canManageOrg: true, maxOrgs: null },
+      },
+    });
+
+    const server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `paid-user-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as any);
+
+    const createOrg1 = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Paid Org 1", slug: `paid-org-a-${Date.now()}` },
+    });
+    expect(createOrg1.statusCode).toBe(201);
+
+    const createOrg2 = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Paid Org 2", slug: `paid-org-b-${Date.now()}` },
+    });
+    expect(createOrg2.statusCode).toBe(409);
+    expect((createOrg2.json() as { code: string }).code).toBe("ORG_LIMIT_REACHED");
+
+    await server.close();
+  });
+
+  it("allows multi-org creation when edition is enterprise", async () => {
+    const server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+      enterpriseProvider: {
+        edition: "enterprise",
+        name: "enterprise-inline",
+        getCapabilities() {
+          return [];
+        },
+        getEnterpriseConnectors() {
+          return [];
+        },
+      } as EnterpriseProvider,
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `enterprise-user-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as any);
+
+    const createOrg1 = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Ent Org 1", slug: `ent-org-a-${Date.now()}` },
+    });
+    const createOrg2 = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Ent Org 2", slug: `ent-org-b-${Date.now()}` },
+    });
+    expect(createOrg1.statusCode).toBe(201);
+    expect(createOrg2.statusCode).toBe(201);
+
+    await server.close();
+  });
+
+  it("blocks invitation acceptance when free user would exceed org limit", async () => {
+    const server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `owner-free-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as any);
+
+    const ownerMe = await server.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    const ownerOrgId = (ownerMe.json() as { defaultOrgId: string }).defaultOrgId;
+    expect(typeof ownerOrgId).toBe("string");
+
+    const inviteeEmail = `invitee-free-${Date.now()}@example.com`;
+    const invite = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${ownerOrgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": ownerOrgId,
+      },
+      payload: { email: inviteeEmail, roleKey: "member" },
+    });
+    expect(invite.statusCode).toBe(201);
+    const inviteToken = (invite.json() as { invitation: { token: string } }).invitation.token;
+
+    const inviteeSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: inviteeEmail, password: "Password123" },
+    });
+    const inviteeToken = bearerToken(inviteeSignup.json() as any);
+
+    const accept = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: { authorization: `Bearer ${inviteeToken}` },
+    });
+    expect(accept.statusCode).toBe(403);
+    expect((accept.json() as { code: string }).code).toBe("ORG_PLAN_UPGRADE_REQUIRED");
+
+    await server.close();
+  });
+
+  it("creates paid entitlement from stripe payment webhook", async () => {
+    const store = new MemoryAppStore();
+    const stripe = {
+      webhooks: {
+        constructEvent: vi.fn(() => ({
+          id: "evt_paid_1",
+          type: "checkout.session.completed",
+          data: {
+            object: {
+              id: "cs_paid_1",
+              payment_status: "paid",
+              metadata: {
+                payerUserId: undefined,
+                payerEmail: "webhook-paid@example.com",
+              },
+              customer_email: "webhook-paid@example.com",
+              amount_total: 1234,
+              currency: "usd",
+            },
+          },
+        })),
+      },
+    } as any;
+
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_paid";
+    const server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+      stripe,
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: "webhook-paid@example.com", password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const userId = (signup.json() as { user: { id: string } }).user.id;
+
+    const webhook = await server.inject({
+      method: "POST",
+      url: "/v1/billing/payments/stripe/webhook",
+      headers: {
+        "stripe-signature": "sig",
+        "content-type": "application/json",
+      },
+      payload: "{}",
+    });
+    expect(webhook.statusCode).toBe(200);
+
+    const entitlements = await store.listUserEntitlements({ userId, activeOnly: true });
+    expect(entitlements.some((entitlement) => entitlement.tier === "paid" && entitlement.active)).toBe(true);
+
+    await server.close();
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+  });
+
+  it("denies admin routes for non-system-admin users", async () => {
+    const server = await buildServer({
+      store: createPaidMemoryStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `non-admin-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const token = bearerToken(signup.json() as any);
+
+    const denied = await server.inject({
+      method: "GET",
+      url: "/v1/admin/platform/settings",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    await server.close();
+  });
+
+  it("bootstraps system admin via email allowlist", async () => {
+    process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST = "bootstrap-admin@example.com";
+    const server = await buildServer({
+      store: createPaidMemoryStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: "bootstrap-admin@example.com", password: "Password123" },
+    });
+    const token = bearerToken(signup.json() as any);
+
+    const me = await server.inject({
+      method: "GET",
+      url: "/v1/me",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(me.statusCode).toBe(200);
+    expect((me.json() as any).account?.isSystemAdmin).toBe(true);
+
+    const list = await server.inject({
+      method: "GET",
+      url: "/v1/admin/platform/settings",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(list.statusCode).toBe(200);
+
+    await server.close();
+    delete process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST;
+  });
+});
+
 const externalEnterpriseProviderModule = process.env.VESPID_ENTERPRISE_PROVIDER_MODULE;
 
 (externalEnterpriseProviderModule ? describe : describe.skip)(
@@ -2743,7 +3048,7 @@ const externalEnterpriseProviderModule = process.env.VESPID_ENTERPRISE_PROVIDER_
   () => {
     it("loads enterprise provider from configured module path", async () => {
       const server = await buildServer({
-        store: new MemoryAppStore(),
+        store: createPaidMemoryStore(),
         oauthService: fakeOAuthService(),
         queueProducer: createFakeQueueProducer(),
       });

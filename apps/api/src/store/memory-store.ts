@@ -31,10 +31,17 @@ import type {
   ChannelAllowlistEntryRecord,
   ChannelEventRecord,
   ChannelPairingRequestRecord,
+  PlatformAuditLogRecord,
+  PlatformSettingRecord,
+  PlatformUserRoleRecord,
+  SupportTicketEventRecord,
+  SupportTicketRecord,
   AgentBindingRecord,
   AgentMemoryChunkRecord,
   AgentMemoryDocumentRecord,
   AgentMemorySyncJobRecord,
+  UserEntitlementRecord,
+  UserPaymentEventRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -44,6 +51,13 @@ function nowIso(): string {
 export class MemoryAppStore implements AppStore {
   private users = new Map<string, UserRecord>();
   private usersByEmail = new Map<string, string>();
+  private platformUserRoles = new Map<string, PlatformUserRoleRecord>();
+  private platformSettings = new Map<string, PlatformSettingRecord>();
+  private userPaymentEvents = new Map<string, UserPaymentEventRecord>();
+  private userEntitlements = new Map<string, UserEntitlementRecord>();
+  private supportTickets = new Map<string, SupportTicketRecord>();
+  private supportTicketEventsByTicketId = new Map<string, SupportTicketEventRecord[]>();
+  private platformAuditLogs: PlatformAuditLogRecord[] = [];
   private organizations = new Map<string, OrganizationRecord>();
   private organizationSettings = new Map<string, OrganizationSettings>();
   private memberships = new Map<string, MembershipRecord>();
@@ -103,6 +117,50 @@ export class MemoryAppStore implements AppStore {
   private channelAllowlistEntries = new Map<string, ChannelAllowlistEntryRecord>();
   private channelPairingRequests = new Map<string, ChannelPairingRequestRecord>();
   private channelEvents = new Map<string, ChannelEventRecord[]>();
+
+  constructor() {
+    const now = nowIso();
+    this.platformSettings.set("org_policy", {
+      key: "org_policy",
+      value: {
+        free: { canManageOrg: false, maxOrgs: 1 },
+        paid: { canManageOrg: true, maxOrgs: 5 },
+        enterprise: { canManageOrg: true, maxOrgs: null },
+      },
+      updatedByUserId: null,
+      updatedAt: now,
+    });
+    this.platformSettings.set("payments.providers", {
+      key: "payments.providers",
+      value: { enabled: ["stripe"] },
+      updatedByUserId: null,
+      updatedAt: now,
+    });
+    this.platformSettings.set("risk.policies", {
+      key: "risk.policies",
+      value: { allowSignup: true, rateLimitMode: "default" },
+      updatedByUserId: null,
+      updatedAt: now,
+    });
+    this.platformSettings.set("risk.incidents", {
+      key: "risk.incidents",
+      value: { items: [] },
+      updatedByUserId: null,
+      updatedAt: now,
+    });
+    this.platformSettings.set("observability.logs", {
+      key: "observability.logs",
+      value: { items: [] },
+      updatedByUserId: null,
+      updatedAt: now,
+    });
+    this.platformSettings.set("observability.metrics", {
+      key: "observability.metrics",
+      value: { items: [] },
+      updatedByUserId: null,
+      updatedAt: now,
+    });
+  }
 
   async ensureDefaultRoles(): Promise<void> {
     return;
@@ -174,6 +232,289 @@ export class MemoryAppStore implements AppStore {
       updatedAt: nowIso(),
     });
     return { defaultOrgId: created.organization.id, created: true };
+  }
+
+  async listPlatformUserRoles(input?: { roleKey?: string; userId?: string }): Promise<PlatformUserRoleRecord[]> {
+    let rows = [...this.platformUserRoles.values()];
+    if (input?.roleKey) {
+      rows = rows.filter((row) => row.roleKey === input.roleKey);
+    }
+    if (input?.userId) {
+      rows = rows.filter((row) => row.userId === input.userId);
+    }
+    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return rows;
+  }
+
+  async createPlatformUserRole(input: {
+    userId: string;
+    roleKey: string;
+    grantedByUserId?: string | null;
+  }): Promise<PlatformUserRoleRecord> {
+    const key = `${input.userId}:${input.roleKey}`;
+    const existing = this.platformUserRoles.get(key);
+    if (existing) {
+      return existing;
+    }
+    const row: PlatformUserRoleRecord = {
+      id: crypto.randomUUID(),
+      userId: input.userId,
+      roleKey: input.roleKey,
+      grantedByUserId: input.grantedByUserId ?? null,
+      createdAt: nowIso(),
+    };
+    this.platformUserRoles.set(key, row);
+    return row;
+  }
+
+  async deletePlatformUserRole(input: { userId: string; roleKey: string }): Promise<boolean> {
+    return this.platformUserRoles.delete(`${input.userId}:${input.roleKey}`);
+  }
+
+  async listPlatformSettings(): Promise<PlatformSettingRecord[]> {
+    return [...this.platformSettings.values()].sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  async getPlatformSetting(input: { key: string }): Promise<PlatformSettingRecord | null> {
+    return this.platformSettings.get(input.key) ?? null;
+  }
+
+  async upsertPlatformSetting(input: {
+    key: string;
+    value: unknown;
+    updatedByUserId?: string | null;
+  }): Promise<PlatformSettingRecord> {
+    const row: PlatformSettingRecord = {
+      key: input.key,
+      value: input.value ?? {},
+      updatedByUserId: input.updatedByUserId ?? null,
+      updatedAt: nowIso(),
+    };
+    this.platformSettings.set(input.key, row);
+    return row;
+  }
+
+  async createUserPaymentEvent(input: {
+    provider: string;
+    providerEventId: string;
+    payerUserId?: string | null;
+    payerEmail?: string | null;
+    status: string;
+    amount?: number | null;
+    currency?: string | null;
+    rawPayload?: unknown;
+  }): Promise<UserPaymentEventRecord> {
+    const key = `${input.provider}:${input.providerEventId}`;
+    const existing = [...this.userPaymentEvents.values()].find((row) => `${row.provider}:${row.providerEventId}` === key);
+    if (existing) {
+      return existing;
+    }
+    const row: UserPaymentEventRecord = {
+      id: crypto.randomUUID(),
+      provider: input.provider,
+      providerEventId: input.providerEventId,
+      payerUserId: input.payerUserId ?? null,
+      payerEmail: input.payerEmail ?? null,
+      status: input.status,
+      amount: input.amount ?? null,
+      currency: input.currency ?? null,
+      rawPayload: input.rawPayload ?? {},
+      createdAt: nowIso(),
+    };
+    this.userPaymentEvents.set(row.id, row);
+    return row;
+  }
+
+  async listUserPaymentEvents(input?: { provider?: string; limit?: number }): Promise<UserPaymentEventRecord[]> {
+    const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
+    let rows = [...this.userPaymentEvents.values()];
+    if (input?.provider) {
+      rows = rows.filter((row) => row.provider === input.provider);
+    }
+    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return rows.slice(0, limit);
+  }
+
+  async upsertUserEntitlement(input: {
+    userId: string;
+    tier: "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    validFrom?: Date;
+    validUntil?: Date | null;
+    active?: boolean;
+  }): Promise<UserEntitlementRecord> {
+    const existing = [...this.userEntitlements.values()].find(
+      (row) => row.userId === input.userId && row.sourceProvider === input.sourceProvider && row.sourceEventId === input.sourceEventId
+    );
+    const row: UserEntitlementRecord = {
+      id: existing?.id ?? crypto.randomUUID(),
+      userId: input.userId,
+      tier: input.tier,
+      sourceProvider: input.sourceProvider,
+      sourceEventId: input.sourceEventId,
+      validFrom: (input.validFrom ?? new Date()).toISOString(),
+      validUntil: input.validUntil ? input.validUntil.toISOString() : null,
+      active: input.active ?? true,
+      createdAt: existing?.createdAt ?? nowIso(),
+    };
+    this.userEntitlements.set(row.id, row);
+    return row;
+  }
+
+  async listUserEntitlements(input: { userId: string; activeOnly?: boolean }): Promise<UserEntitlementRecord[]> {
+    const nowMs = Date.now();
+    let rows = [...this.userEntitlements.values()].filter((row) => row.userId === input.userId);
+    if (input.activeOnly) {
+      rows = rows.filter((row) => row.active && (!row.validUntil || Date.parse(row.validUntil) > nowMs));
+    }
+    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return rows;
+  }
+
+  async setUserEntitlementTier(input: {
+    userId: string;
+    tier: "free" | "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    actorUserId?: string | null;
+  }): Promise<UserEntitlementRecord | null> {
+    if (input.tier === "free") {
+      for (const [id, row] of this.userEntitlements.entries()) {
+        if (row.userId !== input.userId || !row.active) continue;
+        this.userEntitlements.set(id, {
+          ...row,
+          active: false,
+          validUntil: nowIso(),
+        });
+      }
+      return null;
+    }
+    return this.upsertUserEntitlement({
+      userId: input.userId,
+      tier: "paid",
+      sourceProvider: input.sourceProvider,
+      sourceEventId: input.sourceEventId,
+      validFrom: new Date(),
+      validUntil: null,
+      active: true,
+    });
+  }
+
+  async createSupportTicket(input: {
+    requesterUserId?: string | null;
+    organizationId?: string | null;
+    category?: string;
+    priority?: string;
+    status?: string;
+    subject: string;
+    content: string;
+    assigneeUserId?: string | null;
+  }): Promise<SupportTicketRecord> {
+    const row: SupportTicketRecord = {
+      id: crypto.randomUUID(),
+      requesterUserId: input.requesterUserId ?? null,
+      organizationId: input.organizationId ?? null,
+      category: input.category ?? "general",
+      priority: input.priority ?? "normal",
+      status: input.status ?? "open",
+      subject: input.subject,
+      content: input.content,
+      assigneeUserId: input.assigneeUserId ?? null,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.supportTickets.set(row.id, row);
+    return row;
+  }
+
+  async listSupportTickets(input?: { status?: string; limit?: number }): Promise<SupportTicketRecord[]> {
+    const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
+    let rows = [...this.supportTickets.values()];
+    if (input?.status) {
+      rows = rows.filter((row) => row.status === input.status);
+    }
+    rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return rows.slice(0, limit);
+  }
+
+  async getSupportTicketById(input: { ticketId: string }): Promise<SupportTicketRecord | null> {
+    return this.supportTickets.get(input.ticketId) ?? null;
+  }
+
+  async patchSupportTicket(input: {
+    ticketId: string;
+    status?: string;
+    priority?: string;
+    assigneeUserId?: string | null;
+  }): Promise<SupportTicketRecord | null> {
+    const existing = this.supportTickets.get(input.ticketId);
+    if (!existing) {
+      return null;
+    }
+    const next: SupportTicketRecord = {
+      ...existing,
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      ...(input.assigneeUserId !== undefined ? { assigneeUserId: input.assigneeUserId } : {}),
+      updatedAt: nowIso(),
+    };
+    this.supportTickets.set(next.id, next);
+    return next;
+  }
+
+  async appendSupportTicketEvent(input: {
+    ticketId: string;
+    actorUserId?: string | null;
+    eventType: string;
+    payload?: unknown;
+  }): Promise<SupportTicketEventRecord> {
+    const row: SupportTicketEventRecord = {
+      id: crypto.randomUUID(),
+      ticketId: input.ticketId,
+      actorUserId: input.actorUserId ?? null,
+      eventType: input.eventType,
+      payload: input.payload ?? {},
+      createdAt: nowIso(),
+    };
+    const list = this.supportTicketEventsByTicketId.get(input.ticketId) ?? [];
+    this.supportTicketEventsByTicketId.set(input.ticketId, [row, ...list]);
+    return row;
+  }
+
+  async listSupportTicketEvents(input: { ticketId: string; limit?: number }): Promise<SupportTicketEventRecord[]> {
+    const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)));
+    const list = this.supportTicketEventsByTicketId.get(input.ticketId) ?? [];
+    return list.slice(0, limit);
+  }
+
+  async appendPlatformAuditLog(input: {
+    actorUserId?: string | null;
+    action: string;
+    targetType: string;
+    targetId?: string | null;
+    metadata?: unknown;
+  }): Promise<PlatformAuditLogRecord> {
+    const row: PlatformAuditLogRecord = {
+      id: crypto.randomUUID(),
+      actorUserId: input.actorUserId ?? null,
+      action: input.action,
+      targetType: input.targetType,
+      targetId: input.targetId ?? null,
+      metadata: input.metadata ?? {},
+      createdAt: nowIso(),
+    };
+    this.platformAuditLogs.unshift(row);
+    return row;
+  }
+
+  async listPlatformAuditLogs(input?: { action?: string; limit?: number }): Promise<PlatformAuditLogRecord[]> {
+    const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
+    let rows = [...this.platformAuditLogs];
+    if (input?.action) {
+      rows = rows.filter((row) => row.action === input.action);
+    }
+    return rows.slice(0, limit);
   }
 
   async createOrganizationWithOwner(input: {

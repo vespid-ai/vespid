@@ -15,7 +15,10 @@ import {
   getMembership,
   getUserById,
   getUserByEmail,
+  getPlatformSetting as dbGetPlatformSetting,
   listConnectorSecrets as dbListConnectorSecrets,
+  listPlatformSettings as dbListPlatformSettings,
+  listPlatformUserRoles as dbListPlatformUserRoles,
   getConnectorSecretById as dbGetConnectorSecretById,
   markInvitationAccepted,
   revokeAllUserAuthSessions,
@@ -98,6 +101,9 @@ import {
   listOrganizationCreditLedger as dbListOrganizationCreditLedger,
   getOrganizationBillingAccount as dbGetOrganizationBillingAccount,
   createOrganizationBillingAccount as dbCreateOrganizationBillingAccount,
+  createPlatformUserRole as dbCreatePlatformUserRole,
+  createSupportTicket as dbCreateSupportTicket,
+  createUserPaymentEvent as dbCreateUserPaymentEvent,
   createChannelAccount as dbCreateChannelAccount,
   listChannelAccountsByOrg as dbListChannelAccountsByOrg,
   getChannelAccountById as dbGetChannelAccountById,
@@ -111,6 +117,19 @@ import {
   listChannelPairingRequests as dbListChannelPairingRequests,
   updateChannelPairingRequestStatus as dbUpdateChannelPairingRequestStatus,
   listChannelEvents as dbListChannelEvents,
+  listPlatformAuditLogs as dbListPlatformAuditLogs,
+  listSupportTicketEvents as dbListSupportTicketEvents,
+  listSupportTickets as dbListSupportTickets,
+  listUserEntitlements as dbListUserEntitlements,
+  listUserPaymentEvents as dbListUserPaymentEvents,
+  appendPlatformAuditLog as dbAppendPlatformAuditLog,
+  appendSupportTicketEvent as dbAppendSupportTicketEvent,
+  deletePlatformUserRole as dbDeletePlatformUserRole,
+  getSupportTicketById as dbGetSupportTicketById,
+  patchSupportTicket as dbPatchSupportTicket,
+  upsertPlatformSetting as dbUpsertPlatformSetting,
+  upsertUserEntitlement as dbUpsertUserEntitlement,
+  setUserEntitlementTier as dbSetUserEntitlementTier,
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
@@ -128,6 +147,11 @@ import type {
   ChannelAllowlistEntryRecord,
   ChannelEventRecord,
   ChannelPairingRequestRecord,
+  PlatformAuditLogRecord,
+  PlatformSettingRecord,
+  PlatformUserRoleRecord,
+  SupportTicketEventRecord,
+  SupportTicketRecord,
   ExecutorPairingTokenRecord,
   OrganizationCreditLedgerEntryRecord,
   OrganizationCreditsRecord,
@@ -136,7 +160,9 @@ import type {
   ManagedExecutorRecord,
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
+  UserEntitlementRecord,
   UserOrgSummaryRecord,
+  UserPaymentEventRecord,
 } from "../types.js";
 
 function toIso(value: Date): string {
@@ -526,6 +552,341 @@ export class PgAppStore implements AppStore {
     }
 
     throw new Error("Failed to create personal organization");
+  }
+
+  async listPlatformUserRoles(input?: { roleKey?: string; userId?: string }): Promise<PlatformUserRoleRecord[]> {
+    const rows = await this.withUserContext({ userId: input?.userId ?? crypto.randomUUID() }, async (db) =>
+      dbListPlatformUserRoles(db, input)
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      roleKey: row.roleKey,
+      grantedByUserId: row.grantedByUserId ?? null,
+      createdAt: toIso(row.createdAt),
+    }));
+  }
+
+  async createPlatformUserRole(input: {
+    userId: string;
+    roleKey: string;
+    grantedByUserId?: string | null;
+  }): Promise<PlatformUserRoleRecord> {
+    const row = await this.withUserContext({ userId: input.grantedByUserId ?? input.userId }, async (db) =>
+      dbCreatePlatformUserRole(db, input)
+    );
+    return {
+      id: row.id,
+      userId: row.userId,
+      roleKey: row.roleKey,
+      grantedByUserId: row.grantedByUserId ?? null,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async deletePlatformUserRole(input: { userId: string; roleKey: string }): Promise<boolean> {
+    return this.withUserContext({ userId: input.userId }, async (db) => dbDeletePlatformUserRole(db, input));
+  }
+
+  async listPlatformSettings(): Promise<PlatformSettingRecord[]> {
+    const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListPlatformSettings(db));
+    return rows.map((row) => ({
+      key: row.key,
+      value: row.value ?? {},
+      updatedByUserId: row.updatedByUserId ?? null,
+      updatedAt: toIso(row.updatedAt),
+    }));
+  }
+
+  async getPlatformSetting(input: { key: string }): Promise<PlatformSettingRecord | null> {
+    const row = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbGetPlatformSetting(db, input));
+    if (!row) {
+      return null;
+    }
+    return {
+      key: row.key,
+      value: row.value ?? {},
+      updatedByUserId: row.updatedByUserId ?? null,
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async upsertPlatformSetting(input: {
+    key: string;
+    value: unknown;
+    updatedByUserId?: string | null;
+  }): Promise<PlatformSettingRecord> {
+    const row = await this.withUserContext({ userId: input.updatedByUserId ?? crypto.randomUUID() }, async (db) =>
+      dbUpsertPlatformSetting(db, input)
+    );
+    return {
+      key: row.key,
+      value: row.value ?? {},
+      updatedByUserId: row.updatedByUserId ?? null,
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async createUserPaymentEvent(input: {
+    provider: string;
+    providerEventId: string;
+    payerUserId?: string | null;
+    payerEmail?: string | null;
+    status: string;
+    amount?: number | null;
+    currency?: string | null;
+    rawPayload?: unknown;
+  }): Promise<UserPaymentEventRecord> {
+    const row = await this.withUserContext({ userId: input.payerUserId ?? crypto.randomUUID() }, async (db) =>
+      dbCreateUserPaymentEvent(db, input)
+    );
+    return {
+      id: row.id,
+      provider: row.provider,
+      providerEventId: row.providerEventId,
+      payerUserId: row.payerUserId ?? null,
+      payerEmail: row.payerEmail ?? null,
+      status: row.status,
+      amount: row.amount ?? null,
+      currency: row.currency ?? null,
+      rawPayload: row.rawPayload ?? {},
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listUserPaymentEvents(input?: { provider?: string; limit?: number }): Promise<UserPaymentEventRecord[]> {
+    const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListUserPaymentEvents(db, input));
+    return rows.map((row) => ({
+      id: row.id,
+      provider: row.provider,
+      providerEventId: row.providerEventId,
+      payerUserId: row.payerUserId ?? null,
+      payerEmail: row.payerEmail ?? null,
+      status: row.status,
+      amount: row.amount ?? null,
+      currency: row.currency ?? null,
+      rawPayload: row.rawPayload ?? {},
+      createdAt: toIso(row.createdAt),
+    }));
+  }
+
+  async upsertUserEntitlement(input: {
+    userId: string;
+    tier: "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    validFrom?: Date;
+    validUntil?: Date | null;
+    active?: boolean;
+  }): Promise<UserEntitlementRecord> {
+    const row = await this.withUserContext({ userId: input.userId }, async (db) => dbUpsertUserEntitlement(db, input));
+    return {
+      id: row.id,
+      userId: row.userId,
+      tier: row.tier,
+      sourceProvider: row.sourceProvider,
+      sourceEventId: row.sourceEventId,
+      validFrom: toIso(row.validFrom),
+      validUntil: row.validUntil ? toIso(row.validUntil) : null,
+      active: Boolean(row.active),
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listUserEntitlements(input: { userId: string; activeOnly?: boolean }): Promise<UserEntitlementRecord[]> {
+    const rows = await this.withUserContext({ userId: input.userId }, async (db) => dbListUserEntitlements(db, input));
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      tier: row.tier,
+      sourceProvider: row.sourceProvider,
+      sourceEventId: row.sourceEventId,
+      validFrom: toIso(row.validFrom),
+      validUntil: row.validUntil ? toIso(row.validUntil) : null,
+      active: Boolean(row.active),
+      createdAt: toIso(row.createdAt),
+    }));
+  }
+
+  async setUserEntitlementTier(input: {
+    userId: string;
+    tier: "free" | "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    actorUserId?: string | null;
+  }): Promise<UserEntitlementRecord | null> {
+    const row = await this.withUserContext({ userId: input.actorUserId ?? input.userId }, async (db) =>
+      dbSetUserEntitlementTier(db, input)
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      userId: row.userId,
+      tier: row.tier,
+      sourceProvider: row.sourceProvider,
+      sourceEventId: row.sourceEventId,
+      validFrom: toIso(row.validFrom),
+      validUntil: row.validUntil ? toIso(row.validUntil) : null,
+      active: Boolean(row.active),
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async createSupportTicket(input: {
+    requesterUserId?: string | null;
+    organizationId?: string | null;
+    category?: string;
+    priority?: string;
+    status?: string;
+    subject: string;
+    content: string;
+    assigneeUserId?: string | null;
+  }): Promise<SupportTicketRecord> {
+    const row = await this.withUserContext({ userId: input.requesterUserId ?? crypto.randomUUID() }, async (db) =>
+      dbCreateSupportTicket(db, input)
+    );
+    return {
+      id: row.id,
+      requesterUserId: row.requesterUserId ?? null,
+      organizationId: row.organizationId ?? null,
+      category: row.category,
+      priority: row.priority,
+      status: row.status,
+      subject: row.subject,
+      content: row.content,
+      assigneeUserId: row.assigneeUserId ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async listSupportTickets(input?: { status?: string; limit?: number }): Promise<SupportTicketRecord[]> {
+    const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListSupportTickets(db, input));
+    return rows.map((row) => ({
+      id: row.id,
+      requesterUserId: row.requesterUserId ?? null,
+      organizationId: row.organizationId ?? null,
+      category: row.category,
+      priority: row.priority,
+      status: row.status,
+      subject: row.subject,
+      content: row.content,
+      assigneeUserId: row.assigneeUserId ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    }));
+  }
+
+  async getSupportTicketById(input: { ticketId: string }): Promise<SupportTicketRecord | null> {
+    const row = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbGetSupportTicketById(db, input));
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      requesterUserId: row.requesterUserId ?? null,
+      organizationId: row.organizationId ?? null,
+      category: row.category,
+      priority: row.priority,
+      status: row.status,
+      subject: row.subject,
+      content: row.content,
+      assigneeUserId: row.assigneeUserId ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async patchSupportTicket(input: {
+    ticketId: string;
+    status?: string;
+    priority?: string;
+    assigneeUserId?: string | null;
+  }): Promise<SupportTicketRecord | null> {
+    const row = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbPatchSupportTicket(db, input));
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      requesterUserId: row.requesterUserId ?? null,
+      organizationId: row.organizationId ?? null,
+      category: row.category,
+      priority: row.priority,
+      status: row.status,
+      subject: row.subject,
+      content: row.content,
+      assigneeUserId: row.assigneeUserId ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  async appendSupportTicketEvent(input: {
+    ticketId: string;
+    actorUserId?: string | null;
+    eventType: string;
+    payload?: unknown;
+  }): Promise<SupportTicketEventRecord> {
+    const row = await this.withUserContext({ userId: input.actorUserId ?? crypto.randomUUID() }, async (db) =>
+      dbAppendSupportTicketEvent(db, input)
+    );
+    return {
+      id: row.id,
+      ticketId: row.ticketId,
+      actorUserId: row.actorUserId ?? null,
+      eventType: row.eventType,
+      payload: row.payload ?? {},
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listSupportTicketEvents(input: { ticketId: string; limit?: number }): Promise<SupportTicketEventRecord[]> {
+    const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListSupportTicketEvents(db, input));
+    return rows.map((row) => ({
+      id: row.id,
+      ticketId: row.ticketId,
+      actorUserId: row.actorUserId ?? null,
+      eventType: row.eventType,
+      payload: row.payload ?? {},
+      createdAt: toIso(row.createdAt),
+    }));
+  }
+
+  async appendPlatformAuditLog(input: {
+    actorUserId?: string | null;
+    action: string;
+    targetType: string;
+    targetId?: string | null;
+    metadata?: unknown;
+  }): Promise<PlatformAuditLogRecord> {
+    const row = await this.withUserContext({ userId: input.actorUserId ?? crypto.randomUUID() }, async (db) =>
+      dbAppendPlatformAuditLog(db, input)
+    );
+    return {
+      id: row.id,
+      actorUserId: row.actorUserId ?? null,
+      action: row.action,
+      targetType: row.targetType,
+      targetId: row.targetId ?? null,
+      metadata: row.metadata ?? {},
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  async listPlatformAuditLogs(input?: { action?: string; limit?: number }): Promise<PlatformAuditLogRecord[]> {
+    const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListPlatformAuditLogs(db, input));
+    return rows.map((row) => ({
+      id: row.id,
+      actorUserId: row.actorUserId ?? null,
+      action: row.action,
+      targetType: row.targetType,
+      targetId: row.targetId ?? null,
+      metadata: row.metadata ?? {},
+      createdAt: toIso(row.createdAt),
+    }));
   }
 
   async createOrganizationWithOwner(input: { name: string; slug: string; ownerUserId: string }) {

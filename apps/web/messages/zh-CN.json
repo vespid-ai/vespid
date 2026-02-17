@@ -16,7 +16,8 @@
     "auth": "登录",
     "org": "组织",
     "openById": "按 ID 打开",
-    "channels": "聊天平台"
+    "channels": "聊天平台",
+    "admin": "管理后台"
   },
   "common": {
     "search": "搜索",
@@ -25,6 +26,8 @@
     "nav": "导航",
     "add": "添加",
     "remove": "移除",
+    "enable": "启用",
+    "disable": "停用",
     "clearFilters": "清空筛选",
     "list": "列表",
     "json": "JSON",
@@ -156,6 +159,40 @@
       "signIn": "去登录"
     }
   },
+  "admin": {
+    "title": "系统管理",
+    "tabs": {
+      "governance": "治理",
+      "billing": "计费",
+      "risk": "风控",
+      "observability": "可观测",
+      "tickets": "工单"
+    },
+    "governance": {
+      "orgPolicy": "组织策略",
+      "systemAdmins": "系统管理员",
+      "adminEmailPlaceholder": "admin@example.com"
+    },
+    "billing": {
+      "providers": "支付提供商",
+      "events": "支付事件"
+    },
+    "risk": {
+      "policies": "风控策略",
+      "incidents": "风控事件"
+    },
+    "observability": {
+      "health": "服务健康",
+      "metrics": "指标",
+      "logs": "日志"
+    },
+    "tickets": {
+      "create": "创建工单",
+      "list": "工单列表",
+      "subject": "主题",
+      "content": "内容"
+    }
+  },
   "org": {
     "requireActive": "请先选择当前组织。",
     "subtitle": "使用应用前，请先设置当前组织。",
@@ -172,7 +209,6 @@
     "createAction": "创建组织",
     "inviteTitle": "邀请成员",
     "inviteDescription": "需要先选择当前组织。",
-    "activeIdLabel": "当前组织 ID",
     "inviteEmailLabel": "邀请邮箱",
     "inviteAction": "邀请成员",
     "recentDescription": "保存在本浏览器本地。",
@@ -553,7 +589,6 @@
     },
     "noMcpServers": "暂无 MCP 服务。",
     "noSkills": "暂无技能。",
-    "libraryOrgLabel": "组织: {orgId}",
     "libraryCount": "{count} 个工具集",
     "clearDefault": "清除默认",
     "galleryDescription": "公开工具集",

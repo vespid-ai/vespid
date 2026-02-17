@@ -216,6 +216,81 @@ export type OrganizationCreditLedgerEntryRecord = {
   createdAt: string;
 };
 
+export type AccountTier = "free" | "paid" | "enterprise";
+
+export type PlatformUserRoleRecord = {
+  id: string;
+  userId: string;
+  roleKey: string;
+  grantedByUserId: string | null;
+  createdAt: string;
+};
+
+export type PlatformSettingRecord = {
+  key: string;
+  value: unknown;
+  updatedByUserId: string | null;
+  updatedAt: string;
+};
+
+export type UserPaymentEventRecord = {
+  id: string;
+  provider: string;
+  providerEventId: string;
+  payerUserId: string | null;
+  payerEmail: string | null;
+  status: "pending" | "paid" | "failed" | "refunded" | string;
+  amount: number | null;
+  currency: string | null;
+  rawPayload: unknown;
+  createdAt: string;
+};
+
+export type UserEntitlementRecord = {
+  id: string;
+  userId: string;
+  tier: "paid" | string;
+  sourceProvider: string;
+  sourceEventId: string;
+  validFrom: string;
+  validUntil: string | null;
+  active: boolean;
+  createdAt: string;
+};
+
+export type SupportTicketRecord = {
+  id: string;
+  requesterUserId: string | null;
+  organizationId: string | null;
+  category: string;
+  priority: string;
+  status: string;
+  subject: string;
+  content: string;
+  assigneeUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SupportTicketEventRecord = {
+  id: string;
+  ticketId: string;
+  actorUserId: string | null;
+  eventType: string;
+  payload: unknown;
+  createdAt: string;
+};
+
+export type PlatformAuditLogRecord = {
+  id: string;
+  actorUserId: string | null;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  metadata: unknown;
+  createdAt: string;
+};
+
 export type AgentPairingTokenRecord = {
   id: string;
   organizationId: string;
@@ -455,6 +530,81 @@ export interface AppStore {
     actorUserId: string;
     trialCredits: number;
   }): Promise<{ defaultOrgId: string; created: boolean }>;
+  listPlatformUserRoles(input?: { roleKey?: string; userId?: string }): Promise<PlatformUserRoleRecord[]>;
+  createPlatformUserRole(input: {
+    userId: string;
+    roleKey: string;
+    grantedByUserId?: string | null;
+  }): Promise<PlatformUserRoleRecord>;
+  deletePlatformUserRole(input: { userId: string; roleKey: string }): Promise<boolean>;
+  listPlatformSettings(): Promise<PlatformSettingRecord[]>;
+  getPlatformSetting(input: { key: string }): Promise<PlatformSettingRecord | null>;
+  upsertPlatformSetting(input: {
+    key: string;
+    value: unknown;
+    updatedByUserId?: string | null;
+  }): Promise<PlatformSettingRecord>;
+  createUserPaymentEvent(input: {
+    provider: string;
+    providerEventId: string;
+    payerUserId?: string | null;
+    payerEmail?: string | null;
+    status: string;
+    amount?: number | null;
+    currency?: string | null;
+    rawPayload?: unknown;
+  }): Promise<UserPaymentEventRecord>;
+  listUserPaymentEvents(input?: { provider?: string; limit?: number }): Promise<UserPaymentEventRecord[]>;
+  upsertUserEntitlement(input: {
+    userId: string;
+    tier: "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    validFrom?: Date;
+    validUntil?: Date | null;
+    active?: boolean;
+  }): Promise<UserEntitlementRecord>;
+  listUserEntitlements(input: { userId: string; activeOnly?: boolean }): Promise<UserEntitlementRecord[]>;
+  setUserEntitlementTier(input: {
+    userId: string;
+    tier: "free" | "paid";
+    sourceProvider: string;
+    sourceEventId: string;
+    actorUserId?: string | null;
+  }): Promise<UserEntitlementRecord | null>;
+  createSupportTicket(input: {
+    requesterUserId?: string | null;
+    organizationId?: string | null;
+    category?: string;
+    priority?: string;
+    status?: string;
+    subject: string;
+    content: string;
+    assigneeUserId?: string | null;
+  }): Promise<SupportTicketRecord>;
+  listSupportTickets(input?: { status?: string; limit?: number }): Promise<SupportTicketRecord[]>;
+  getSupportTicketById(input: { ticketId: string }): Promise<SupportTicketRecord | null>;
+  patchSupportTicket(input: {
+    ticketId: string;
+    status?: string;
+    priority?: string;
+    assigneeUserId?: string | null;
+  }): Promise<SupportTicketRecord | null>;
+  appendSupportTicketEvent(input: {
+    ticketId: string;
+    actorUserId?: string | null;
+    eventType: string;
+    payload?: unknown;
+  }): Promise<SupportTicketEventRecord>;
+  listSupportTicketEvents(input: { ticketId: string; limit?: number }): Promise<SupportTicketEventRecord[]>;
+  appendPlatformAuditLog(input: {
+    actorUserId?: string | null;
+    action: string;
+    targetType: string;
+    targetId?: string | null;
+    metadata?: unknown;
+  }): Promise<PlatformAuditLogRecord>;
+  listPlatformAuditLogs(input?: { action?: string; limit?: number }): Promise<PlatformAuditLogRecord[]>;
   createOrganizationWithOwner(input: { name: string; slug: string; ownerUserId: string }): Promise<{
     organization: OrganizationRecord;
     membership: MembershipRecord;

@@ -16,7 +16,8 @@
     "auth": "Sign in",
     "org": "Organization",
     "openById": "Open by ID",
-    "channels": "Channels"
+    "channels": "Channels",
+    "admin": "Admin"
   },
   "common": {
     "search": "Search",
@@ -25,6 +26,8 @@
     "nav": "Navigation",
     "add": "Add",
     "remove": "Remove",
+    "enable": "Enable",
+    "disable": "Disable",
     "clearFilters": "Clear filters",
     "list": "List",
     "json": "JSON",
@@ -226,6 +229,40 @@
       "signIn": "Sign in"
     }
   },
+  "admin": {
+    "title": "Admin",
+    "tabs": {
+      "governance": "Governance",
+      "billing": "Billing",
+      "risk": "Risk",
+      "observability": "Observability",
+      "tickets": "Tickets"
+    },
+    "governance": {
+      "orgPolicy": "Organization policy",
+      "systemAdmins": "System administrators",
+      "adminEmailPlaceholder": "admin@example.com"
+    },
+    "billing": {
+      "providers": "Payment providers",
+      "events": "Payment events"
+    },
+    "risk": {
+      "policies": "Risk policies",
+      "incidents": "Risk incidents"
+    },
+    "observability": {
+      "health": "Service health",
+      "metrics": "Metrics",
+      "logs": "Logs"
+    },
+    "tickets": {
+      "create": "Create ticket",
+      "list": "Ticket list",
+      "subject": "Subject",
+      "content": "Content"
+    }
+  },
   "org": {
     "requireActive": "Set an active organization first.",
     "subtitle": "Set your active organization before using app features.",
@@ -242,7 +279,6 @@
     "createAction": "Create organization",
     "inviteTitle": "Invite member",
     "inviteDescription": "Requires an active org.",
-    "activeIdLabel": "Active organization ID",
     "inviteEmailLabel": "Invite email",
     "inviteAction": "Invite member",
     "recentDescription": "Stored locally in this browser.",
@@ -553,7 +589,6 @@
     },
     "noMcpServers": "No MCP servers.",
     "noSkills": "No skills.",
-    "libraryOrgLabel": "Org: {orgId}",
     "libraryCount": "{count} toolset(s)",
     "clearDefault": "Clear default",
     "galleryDescription": "Public toolsets",
