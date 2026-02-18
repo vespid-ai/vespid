@@ -1,7 +1,7 @@
 "use client";
 
 import { Send, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
@@ -17,16 +17,20 @@ import { useMe } from "../../../../lib/hooks/use-me";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions } from "../../../../lib/hooks/use-sessions";
+import { useAgentInstaller, useCreatePairingToken, type AgentInstallerArtifact } from "../../../../lib/hooks/use-agents";
+import { useEngineAuthStatus } from "../../../../lib/hooks/use-engine-auth-status";
 import { type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { providersForContext } from "../../../../components/app/llm/model-catalog";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
-import { isUnauthorizedError } from "../../../../lib/api";
+import { getApiBase, isUnauthorizedError } from "../../../../lib/api";
 import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-sheet";
 import { SessionModelChip } from "../../../../components/app/llm/session-model-chip";
+import { CommandBlock } from "../../../../components/ui/command-block";
 
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
+type PlatformId = "darwin-arm64" | "linux-x64" | "windows-x64";
 
 function formatSessionTime(value: string | null | undefined): string {
   if (!value) {
@@ -44,6 +48,55 @@ function formatSessionTime(value: string | null | undefined): string {
   });
 }
 
+function detectPreferredPlatform(): PlatformId {
+  if (typeof navigator === "undefined") {
+    return "darwin-arm64";
+  }
+  const ua = navigator.userAgent.toLowerCase();
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes("mac") || ua.includes("mac")) {
+    return "darwin-arm64";
+  }
+  if (platform.includes("win") || ua.includes("windows")) {
+    return "windows-x64";
+  }
+  return "linux-x64";
+}
+
+function shellQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
+function normalizeNodeAgentApiBase(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.hostname.toLowerCase() === "localhost") {
+      url.hostname = "127.0.0.1";
+      return url.toString().replace(/\/$/, "");
+    }
+    return value;
+  } catch {
+    return value;
+  }
+}
+
+function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
+  if (artifact.platformId === "windows-x64") {
+    return `powershell -NoProfile -Command "Invoke-WebRequest -Uri '${artifact.downloadUrl}' -OutFile '${artifact.fileName}'; Expand-Archive -Path '${artifact.fileName}' -DestinationPath . -Force"`;
+  }
+  return [
+    `curl -fsSL ${shellQuote(artifact.downloadUrl)} -o ${shellQuote(artifact.fileName)}`,
+    `tar -xzf ${shellQuote(artifact.fileName)}`,
+    "chmod +x ./vespid-agent",
+  ].join("\n");
+}
+
+function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
+  const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
+  const apiBase = normalizeNodeAgentApiBase(input.apiBase);
+  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(apiBase)}`;
+}
+
 export default function ConversationsPage() {
   const t = useTranslations();
   const router = useRouter();
@@ -57,6 +110,9 @@ export default function ConversationsPage() {
   const sessionsQuery = useSessions(scopedOrgId);
   const toolsetsQuery = useToolsets(scopedOrgId);
   const createSession = useCreateSession(scopedOrgId);
+  const installerQuery = useAgentInstaller();
+  const createPairingTokenMutation = useCreatePairingToken(scopedOrgId);
+  const engineAuthStatusQuery = useEngineAuthStatus(scopedOrgId, { refetchIntervalMs: 10_000 });
   const settingsQuery = useOrgSettings(scopedOrgId);
   const updateSettings = useUpdateOrgSettings(scopedOrgId);
 
@@ -81,13 +137,18 @@ export default function ConversationsPage() {
   const [allowConnectorAction, setAllowConnectorAction] = useState(true);
   const [extraToolsRaw, setExtraToolsRaw] = useState<string>("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [pairingToken, setPairingToken] = useState<string | null>(null);
+  const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
+  const [platformId, setPlatformId] = useState<PlatformId>(() => detectPreferredPlatform());
 
   const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5-codex", secretId: null });
   const llmInitRef = useRef(false);
+  const autoPairingTokenOrgRef = useRef<string | null>(null);
 
   const canOperate = Boolean(scopedOrgId);
   const roleKey = meQuery.data?.orgs?.find((o) => o.id === scopedOrgId)?.roleKey ?? null;
   const canEditOrgSettings = roleKey === "owner" || roleKey === "admin";
+  const canManageExecutors = roleKey === "owner" || roleKey === "admin";
   const memberReadOnlyDefaults = roleKey === "member";
   const llmSecretMissingWarning = isOAuthRequiredProvider(llm.providerId) && !llm.secretId;
 
@@ -107,6 +168,44 @@ export default function ConversationsPage() {
     return Array.from(new Set([...base, ...extras]));
   }, [allowShellRun, allowConnectorAction, extraToolsRaw]);
 
+  const installerArtifacts = installerQuery.data?.artifacts ?? [];
+  const installerByPlatform = useMemo(() => {
+    const map = new Map<PlatformId, AgentInstallerArtifact>();
+    for (const artifact of installerArtifacts) {
+      map.set(artifact.platformId, artifact);
+    }
+    return map;
+  }, [installerArtifacts]);
+
+  const pairingExpiresMs = pairingExpiresAt ? Date.parse(pairingExpiresAt) : NaN;
+  const pairingTokenExpired =
+    Boolean(pairingToken) && Number.isFinite(pairingExpiresMs) && pairingExpiresMs <= Date.now();
+  const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
+  const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
+
+  const activeInstallerArtifact = installerByPlatform.get(platformId) ?? installerArtifacts[0] ?? null;
+  const downloadCommand = activeInstallerArtifact ? buildDownloadCommand(activeInstallerArtifact) : "";
+  const connectCommand = activeInstallerArtifact
+    ? buildConnectCommand({ artifact: activeInstallerArtifact, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
+    : "";
+
+  const onlineExecutorCount = useMemo(() => {
+    const engines = engineAuthStatusQuery.data?.engines;
+    if (!engines) return 0;
+    const ids = new Set<string>();
+    for (const key of Object.keys(engines) as Array<keyof typeof engines>) {
+      for (const executor of engines[key].executors ?? []) {
+        if (executor.executorId) {
+          ids.add(executor.executorId);
+        }
+      }
+    }
+    return ids.size;
+  }, [engineAuthStatusQuery.data?.engines]);
+
+  const needsExecutorOnboarding = canOperate && engineAuthStatusQuery.isSuccess && onlineExecutorCount === 0;
+  const canStartConversation = canOperate && !createSession.isPending && message.trim().length > 0 && !needsExecutorOnboarding;
+
   useEffect(() => {
     if (llmInitRef.current) return;
     const sessionDefaults = settingsQuery.data?.settings?.llm?.defaults?.primary as any;
@@ -123,6 +222,64 @@ export default function ConversationsPage() {
     llmInitRef.current = true;
   }, [settingsQuery.data?.settings]);
 
+  useEffect(() => {
+    if (installerByPlatform.has(platformId)) {
+      return;
+    }
+    const fallback = installerArtifacts[0];
+    if (fallback) {
+      setPlatformId(fallback.platformId);
+    }
+  }, [installerArtifacts, installerByPlatform, platformId]);
+
+  useEffect(() => {
+    setPairingToken(null);
+    setPairingExpiresAt(null);
+    autoPairingTokenOrgRef.current = null;
+  }, [scopedOrgId]);
+
+  const issuePairingToken = useCallback(
+    async (input?: { auto?: boolean }) => {
+      if (!canManageExecutors) {
+        return;
+      }
+      try {
+        const payload = await createPairingTokenMutation.mutateAsync();
+        setPairingToken(payload.token);
+        setPairingExpiresAt(payload.expiresAt);
+        if (input?.auto) {
+          toast.success(t("sessions.executorGuide.autoTokenCreated"));
+        } else {
+          toast.success(t("agents.pairingCreated"));
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+      }
+    },
+    [canManageExecutors, createPairingTokenMutation, t]
+  );
+
+  useEffect(() => {
+    if (!scopedOrgId || !needsExecutorOnboarding || !canManageExecutors) {
+      return;
+    }
+    if (hasUsablePairingToken || createPairingTokenMutation.isPending) {
+      return;
+    }
+    if (autoPairingTokenOrgRef.current === scopedOrgId) {
+      return;
+    }
+    autoPairingTokenOrgRef.current = scopedOrgId;
+    void issuePairingToken({ auto: true });
+  }, [
+    canManageExecutors,
+    createPairingTokenMutation.isPending,
+    hasUsablePairingToken,
+    issuePairingToken,
+    needsExecutorOnboarding,
+    scopedOrgId,
+  ]);
+
   function resetDraft() {
     setTitle(DEFAULT_CHAT_TITLE);
     setMessage("");
@@ -138,6 +295,10 @@ export default function ConversationsPage() {
 
   async function startConversation() {
     if (!scopedOrgId) {
+      return;
+    }
+    if (needsExecutorOnboarding) {
+      toast.error(canManageExecutors ? t("sessions.executorGuide.noExecutorErrorOwner") : t("sessions.executorGuide.noExecutorErrorMember"));
       return;
     }
     const firstMessage = message.trim();
@@ -208,6 +369,7 @@ export default function ConversationsPage() {
             void sessionsQuery.refetch();
             void toolsetsQuery.refetch();
             void settingsQuery.refetch();
+            void engineAuthStatusQuery.refetch();
           }}
         />
       </div>
@@ -236,7 +398,8 @@ export default function ConversationsPage() {
   const unauthorized =
     (sessionsQuery.isError && isUnauthorizedError(sessionsQuery.error)) ||
     (toolsetsQuery.isError && isUnauthorizedError(toolsetsQuery.error)) ||
-    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error));
+    (settingsQuery.isError && isUnauthorizedError(settingsQuery.error)) ||
+    (engineAuthStatusQuery.isError && isUnauthorizedError(engineAuthStatusQuery.error));
 
   if (unauthorized) {
     return (
@@ -251,6 +414,7 @@ export default function ConversationsPage() {
             void sessionsQuery.refetch();
             void toolsetsQuery.refetch();
             void settingsQuery.refetch();
+            void engineAuthStatusQuery.refetch();
           }}
         />
       </div>
@@ -313,7 +477,7 @@ export default function ConversationsPage() {
                 variant="accent"
                 size="sm"
                 className="rounded-full"
-                disabled={!canOperate || createSession.isPending || message.trim().length === 0}
+                disabled={!canStartConversation}
                 onClick={() => void startConversation()}
               >
                 <Send className="mr-1 h-4 w-4" />
@@ -325,8 +489,96 @@ export default function ConversationsPage() {
               <span>{t("sessions.chat.shortcutHint")}</span>
               {llmSecretMissingWarning ? <span className="text-warn">{t("sessions.create.oauthRequired")}</span> : null}
               {memberReadOnlyDefaults ? <span>{t("sessions.create.memberDefaults")}</span> : null}
+              {needsExecutorOnboarding ? <span className="text-warn">{t("sessions.executorGuide.blockComposerHint")}</span> : null}
             </div>
           </section>
+
+          {needsExecutorOnboarding ? (
+            <section
+              className="rounded-[var(--radius-lg)] border border-warn/40 bg-warn/10 p-4 shadow-elev1 md:p-5"
+              data-testid="executor-onboarding-guide"
+            >
+              <div className="grid gap-3">
+                <div className="grid gap-1">
+                  <div className="text-base font-semibold text-text">{t("sessions.executorGuide.title")}</div>
+                  <div className="text-sm text-muted">
+                    {canManageExecutors ? t("sessions.executorGuide.subtitleOwner") : t("sessions.executorGuide.subtitleMember")}
+                  </div>
+                </div>
+
+                {canManageExecutors ? (
+                  <div className="grid gap-3">
+                    <div className="grid gap-2 rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/45 p-3">
+                      <div className="text-xs font-medium text-text">{t("sessions.executorGuide.tokenLabel")}</div>
+                      {hasUsablePairingToken ? (
+                        <>
+                          <div className="font-mono text-xs leading-5 text-text break-all">{pairingToken}</div>
+                          {pairingExpiresAt ? <div className="text-xs text-muted">{pairingExpiresAt}</div> : null}
+                        </>
+                      ) : (
+                        <div className="text-xs text-muted">
+                          {createPairingTokenMutation.isPending
+                            ? t("sessions.executorGuide.creatingToken")
+                            : t("sessions.executorGuide.tokenUnavailable")}
+                        </div>
+                      )}
+                    </div>
+
+                    {activeInstallerArtifact ? (
+                      <div className="grid gap-3">
+                        <div className="grid gap-1">
+                          <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.downloadCommand")}</div>
+                          <CommandBlock command={downloadCommand} copyLabel={t("agents.installer.copyDownload")} />
+                        </div>
+                        <div className="grid gap-1">
+                          <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.connectCommand")}</div>
+                          <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
+                        </div>
+                        {!hasUsablePairingToken ? (
+                          <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">
+                            {pairingTokenExpired ? t("agents.installer.tokenExpired") : t("agents.installer.tokenMissing")}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-borderSubtle/70 bg-panel/45 p-3 text-xs text-muted">
+                        {t("sessions.executorGuide.installerUnavailable")}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="accent"
+                        onClick={() => void issuePairingToken()}
+                        disabled={createPairingTokenMutation.isPending}
+                      >
+                        {t("sessions.executorGuide.regenerateToken")}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
+                        {t("sessions.executorGuide.checkStatus")}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
+                        {t("sessions.executorGuide.openAgents")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    <div className="rounded-md border border-borderSubtle/70 bg-panel/45 px-3 py-2 text-xs text-muted">
+                      {t("sessions.executorGuide.memberCannotPair")}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
+                      {t("sessions.executorGuide.checkStatus")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
+                      {t("sessions.executorGuide.openAgents")}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </section>
+          ) : null}
 
           <section className="grid gap-2" data-testid="conversation-recent-list">
             <div className="grid gap-0.5">

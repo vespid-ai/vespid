@@ -931,10 +931,6 @@ function invalidSkillBundle(details?: unknown): AppError {
   return new AppError(400, { code: "INVALID_SKILL_BUNDLE", message: "Invalid skill bundle", details });
 }
 
-function agentInstallerUnavailable(message = "Agent installer metadata is unavailable"): AppError {
-  return new AppError(503, { code: "AGENT_INSTALLER_UNAVAILABLE", message });
-}
-
 function llmOauthVerifyUrlNotConfigured(provider: LlmProviderId, envVarName: string): AppError {
   return new AppError(503, {
     code: "LLM_OAUTH_VERIFY_URL_NOT_CONFIGURED",
@@ -1028,7 +1024,11 @@ function normalizeAgentInstallerDocsUrl(value: string | null | undefined): strin
 }
 
 function parseAgentInstallerEnabled(value: string | null | undefined): boolean {
-  return String(value ?? "").trim() === "1";
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) {
+    return true;
+  }
+  return !["0", "false", "off", "no"].includes(raw);
 }
 
 function buildAgentInstallerReleaseBase(repository: string, channel: string): string {
@@ -1374,8 +1374,9 @@ export async function buildServer(input?: {
     (process.env.NODE_ENV === "test" && !process.env.REDIS_URL
       ? createInMemoryWorkflowRunQueueProducer()
       : createBullMqWorkflowRunQueueProducer());
+  const agentInstallerEnabled = input?.agentInstaller?.enabled ?? parseAgentInstallerEnabled(process.env.AGENT_INSTALLER_ENABLED);
   const agentInstallerConfig: AgentInstallerConfig = {
-    enabled: input?.agentInstaller?.enabled ?? parseAgentInstallerEnabled(process.env.AGENT_INSTALLER_ENABLED),
+    enabled: agentInstallerEnabled,
     repository: normalizeAgentInstallerRepository(input?.agentInstaller?.repository ?? process.env.AGENT_INSTALLER_REPOSITORY),
     channel: normalizeAgentInstallerChannel(input?.agentInstaller?.channel ?? process.env.AGENT_INSTALLER_CHANNEL),
     docsUrl: normalizeAgentInstallerDocsUrl(input?.agentInstaller?.docsUrl ?? process.env.AGENT_INSTALLER_DOCS_URL),
@@ -2033,16 +2034,16 @@ export async function buildServer(input?: {
   });
 
   server.get("/v1/meta/agent-installer", async () => {
-    if (!agentInstallerConfig.enabled) {
-      throw agentInstallerUnavailable();
-    }
+    const channel = agentInstallerEnabled ? agentInstallerConfig.channel : DEFAULT_AGENT_INSTALLER_CHANNEL;
+    const repository = agentInstallerEnabled ? agentInstallerConfig.repository : DEFAULT_AGENT_INSTALLER_REPOSITORY;
+    const docsUrl = agentInstallerEnabled ? agentInstallerConfig.docsUrl : null;
 
-    const releaseBase = buildAgentInstallerReleaseBase(agentInstallerConfig.repository, agentInstallerConfig.channel);
+    const releaseBase = buildAgentInstallerReleaseBase(repository, channel);
     return {
       provider: "github-releases" as const,
-      repository: agentInstallerConfig.repository,
-      channel: agentInstallerConfig.channel,
-      docsUrl: agentInstallerConfig.docsUrl,
+      repository,
+      channel,
+      docsUrl,
       artifacts: AGENT_INSTALLER_ARTIFACTS.map((artifact) => ({
         platformId: artifact.platformId,
         os: artifact.os,

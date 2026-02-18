@@ -1,16 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
+import { CommandBlock } from "../../../../../components/ui/command-block";
 import { EmptyState } from "../../../../../components/ui/empty-state";
 import { Textarea } from "../../../../../components/ui/textarea";
 import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { cn } from "../../../../../lib/cn";
-import { isUnauthorizedError } from "../../../../../lib/api";
+import { getApiBase, isUnauthorizedError } from "../../../../../lib/api";
+import { useAgentInstaller, useCreatePairingToken, type AgentInstallerArtifact } from "../../../../../lib/hooks/use-agents";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
+import { useEngineAuthStatus } from "../../../../../lib/hooks/use-engine-auth-status";
+import { useMe } from "../../../../../lib/hooks/use-me";
 import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
 import { useSession, useSessionEvents, type AgentSessionEvent } from "../../../../../lib/hooks/use-sessions";
 
@@ -84,6 +88,8 @@ type ChatMessage = {
   createdAt: string;
   seq: number;
 };
+type PlatformId = "darwin-arm64" | "linux-x64" | "windows-x64";
+const EXECUTOR_SETUP_ERROR_CODES = new Set(["NO_AGENT_AVAILABLE", "PINNED_AGENT_OFFLINE"]);
 
 function gatewayWsBase(): string {
   return process.env.NEXT_PUBLIC_GATEWAY_WS_BASE ?? "ws://localhost:3002";
@@ -102,6 +108,55 @@ function formatTime(value: string | null | undefined): string {
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) return value;
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function detectPreferredPlatform(): PlatformId {
+  if (typeof navigator === "undefined") {
+    return "darwin-arm64";
+  }
+  const ua = navigator.userAgent.toLowerCase();
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes("mac") || ua.includes("mac")) {
+    return "darwin-arm64";
+  }
+  if (platform.includes("win") || ua.includes("windows")) {
+    return "windows-x64";
+  }
+  return "linux-x64";
+}
+
+function shellQuote(value: string): string {
+  return JSON.stringify(value);
+}
+
+function normalizeNodeAgentApiBase(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.hostname.toLowerCase() === "localhost") {
+      url.hostname = "127.0.0.1";
+      return url.toString().replace(/\/$/, "");
+    }
+    return value;
+  } catch {
+    return value;
+  }
+}
+
+function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
+  if (artifact.platformId === "windows-x64") {
+    return `powershell -NoProfile -Command "Invoke-WebRequest -Uri '${artifact.downloadUrl}' -OutFile '${artifact.fileName}'; Expand-Archive -Path '${artifact.fileName}' -DestinationPath . -Force"`;
+  }
+  return [
+    `curl -fsSL ${shellQuote(artifact.downloadUrl)} -o ${shellQuote(artifact.fileName)}`,
+    `tar -xzf ${shellQuote(artifact.fileName)}`,
+    "chmod +x ./vespid-agent",
+  ].join("\n");
+}
+
+function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
+  const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
+  const apiBase = normalizeNodeAgentApiBase(input.apiBase);
+  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(apiBase)}`;
 }
 
 function mergeBySeq(existing: AgentSessionEvent[], incoming: AgentSessionEvent[]): AgentSessionEvent[] {
@@ -224,23 +279,33 @@ export default function ConversationDetailPage() {
   const orgId = useActiveOrgId();
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
+  const meQuery = useMe(Boolean(authSession.data?.session));
 
   const sessionQuery = useSession(scopedOrgId, conversationId || null);
   const eventsQuery = useSessionEvents(scopedOrgId, conversationId || null);
+  const installerQuery = useAgentInstaller();
+  const createPairingTokenMutation = useCreatePairingToken(scopedOrgId);
+  const engineAuthStatusQuery = useEngineAuthStatus(scopedOrgId, { refetchIntervalMs: 10_000 });
 
   const [events, setEvents] = useState<AgentSessionEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [wsError, setWsError] = useState<string>("");
   const [message, setMessage] = useState("");
+  const [pairingToken, setPairingToken] = useState<string | null>(null);
+  const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
+  const [platformId, setPlatformId] = useState<PlatformId>(() => detectPreferredPlatform());
+  const [sessionErrorCodes, setSessionErrorCodes] = useState<string[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const draftMessage = searchParams.get("draft") ?? "";
   const autoSendDraftRef = useRef<string>(draftMessage);
   const autoSendDoneRef = useRef(false);
+  const autoPairingTokenOrgRef = useRef<string | null>(null);
 
   useEffect(() => {
     setEvents([]);
+    setSessionErrorCodes([]);
   }, [conversationId]);
 
   useEffect(() => {
@@ -272,6 +337,121 @@ export default function ConversationDetailPage() {
       createdAt: event.createdAt,
     }));
   }, [events]);
+
+  const roleKey = meQuery.data?.orgs?.find((o) => o.id === scopedOrgId)?.roleKey ?? null;
+  const canManageExecutors = roleKey === "owner" || roleKey === "admin";
+
+  const installerArtifacts = installerQuery.data?.artifacts ?? [];
+  const installerByPlatform = useMemo(() => {
+    const map = new Map<PlatformId, AgentInstallerArtifact>();
+    for (const artifact of installerArtifacts) {
+      map.set(artifact.platformId, artifact);
+    }
+    return map;
+  }, [installerArtifacts]);
+
+  const pairingExpiresMs = pairingExpiresAt ? Date.parse(pairingExpiresAt) : NaN;
+  const pairingTokenExpired =
+    Boolean(pairingToken) && Number.isFinite(pairingExpiresMs) && pairingExpiresMs <= Date.now();
+  const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
+  const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
+
+  const activeInstallerArtifact = installerByPlatform.get(platformId) ?? installerArtifacts[0] ?? null;
+  const downloadCommand = activeInstallerArtifact ? buildDownloadCommand(activeInstallerArtifact) : "";
+  const connectCommand = activeInstallerArtifact
+    ? buildConnectCommand({ artifact: activeInstallerArtifact, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
+    : "";
+
+  const eventErrorCodes = useMemo(() => {
+    const set = new Set<string>();
+    for (const event of events) {
+      const payload = asRecord(event.payload);
+      const code = payload && typeof payload.code === "string" ? payload.code : null;
+      if (code) {
+        set.add(code);
+      }
+    }
+    return set;
+  }, [events]);
+
+  const hasOnlineExecutors = useMemo(() => {
+    const engines = engineAuthStatusQuery.data?.engines;
+    if (!engines) {
+      return false;
+    }
+    return Object.values(engines).some((entry) => entry.onlineExecutors > 0);
+  }, [engineAuthStatusQuery.data?.engines]);
+
+  const showExecutorGuide = useMemo(() => {
+    if (hasOnlineExecutors) {
+      return false;
+    }
+    for (const code of sessionErrorCodes) {
+      if (EXECUTOR_SETUP_ERROR_CODES.has(code)) return true;
+    }
+    for (const code of eventErrorCodes) {
+      if (EXECUTOR_SETUP_ERROR_CODES.has(code)) return true;
+    }
+    return false;
+  }, [eventErrorCodes, hasOnlineExecutors, sessionErrorCodes]);
+
+  useEffect(() => {
+    if (installerByPlatform.has(platformId)) {
+      return;
+    }
+    const fallback = installerArtifacts[0];
+    if (fallback) {
+      setPlatformId(fallback.platformId);
+    }
+  }, [installerArtifacts, installerByPlatform, platformId]);
+
+  useEffect(() => {
+    setPairingToken(null);
+    setPairingExpiresAt(null);
+    autoPairingTokenOrgRef.current = null;
+  }, [scopedOrgId]);
+
+  const issuePairingToken = useCallback(
+    async (input?: { auto?: boolean }) => {
+      if (!canManageExecutors) {
+        return;
+      }
+      try {
+        const payload = await createPairingTokenMutation.mutateAsync();
+        setPairingToken(payload.token);
+        setPairingExpiresAt(payload.expiresAt);
+        if (input?.auto) {
+          toast.success(t("sessions.executorGuide.autoTokenCreated"));
+        } else {
+          toast.success(t("agents.pairingCreated"));
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+      }
+    },
+    [canManageExecutors, createPairingTokenMutation, t]
+  );
+
+  useEffect(() => {
+    if (!showExecutorGuide || !scopedOrgId || !canManageExecutors) {
+      return;
+    }
+    if (hasUsablePairingToken || createPairingTokenMutation.isPending) {
+      return;
+    }
+    if (autoPairingTokenOrgRef.current === scopedOrgId) {
+      return;
+    }
+    autoPairingTokenOrgRef.current = scopedOrgId;
+    void issuePairingToken({ auto: true });
+  }, [
+    canManageExecutors,
+    createPairingTokenMutation.isPending,
+    hasUsablePairingToken,
+    issuePairingToken,
+    scopedOrgId,
+    showExecutorGuide,
+  ]);
 
   function connectWs() {
     if (!wsUrl || !canConnect) return;
@@ -306,6 +486,7 @@ export default function ConversationDetailPage() {
         const msg = safeJsonParse(raw) as GatewayServerMessage | null;
         if (!msg || typeof msg !== "object") return;
         if (msg.type === "session_error") {
+          setSessionErrorCodes((prev) => (prev.includes(msg.code) ? prev : [...prev, msg.code]));
           toast.error(`${msg.code}: ${msg.message}`);
           return;
         }
@@ -497,7 +678,8 @@ export default function ConversationDetailPage() {
 
   const unauthorized =
     (sessionQuery.isError && isUnauthorizedError(sessionQuery.error)) ||
-    (eventsQuery.isError && isUnauthorizedError(eventsQuery.error));
+    (eventsQuery.isError && isUnauthorizedError(eventsQuery.error)) ||
+    (engineAuthStatusQuery.isError && isUnauthorizedError(engineAuthStatusQuery.error));
 
   if (unauthorized) {
     return (
@@ -516,6 +698,7 @@ export default function ConversationDetailPage() {
           onRetry={() => {
             void sessionQuery.refetch();
             void eventsQuery.refetch();
+            void engineAuthStatusQuery.refetch();
           }}
         />
       </div>
@@ -581,6 +764,88 @@ export default function ConversationDetailPage() {
       </div>
 
       {wsError ? <div className="text-sm text-red-700">{wsError}</div> : null}
+
+      {showExecutorGuide ? (
+        <section
+          className="rounded-[var(--radius-lg)] border border-warn/40 bg-warn/10 p-4 shadow-elev1 md:p-5"
+          data-testid="conversation-detail-executor-onboarding-guide"
+        >
+          <div className="grid gap-3">
+            <div className="grid gap-1">
+              <div className="text-base font-semibold text-text">{t("sessions.executorGuide.title")}</div>
+              <div className="text-sm text-muted">
+                {canManageExecutors ? t("sessions.executorGuide.subtitleOwner") : t("sessions.executorGuide.subtitleMember")}
+              </div>
+            </div>
+
+            {canManageExecutors ? (
+              <div className="grid gap-3">
+                <div className="grid gap-2 rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/45 p-3">
+                  <div className="text-xs font-medium text-text">{t("sessions.executorGuide.tokenLabel")}</div>
+                  {hasUsablePairingToken ? (
+                    <>
+                      <div className="font-mono text-xs leading-5 text-text break-all">{pairingToken}</div>
+                      {pairingExpiresAt ? <div className="text-xs text-muted">{pairingExpiresAt}</div> : null}
+                    </>
+                  ) : (
+                    <div className="text-xs text-muted">
+                      {createPairingTokenMutation.isPending
+                        ? t("sessions.executorGuide.creatingToken")
+                        : t("sessions.executorGuide.tokenUnavailable")}
+                    </div>
+                  )}
+                </div>
+
+                {activeInstallerArtifact ? (
+                  <div className="grid gap-3">
+                    <div className="grid gap-1">
+                      <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.downloadCommand")}</div>
+                      <CommandBlock command={downloadCommand} copyLabel={t("agents.installer.copyDownload")} />
+                    </div>
+                    <div className="grid gap-1">
+                      <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.connectCommand")}</div>
+                      <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
+                    </div>
+                    {!hasUsablePairingToken ? (
+                      <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">
+                        {pairingTokenExpired ? t("agents.installer.tokenExpired") : t("agents.installer.tokenMissing")}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-borderSubtle/70 bg-panel/45 p-3 text-xs text-muted">
+                    {t("sessions.executorGuide.installerUnavailable")}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="accent" onClick={() => void issuePairingToken()} disabled={createPairingTokenMutation.isPending}>
+                    {t("sessions.executorGuide.regenerateToken")}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
+                    {t("sessions.executorGuide.checkStatus")}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
+                    {t("sessions.executorGuide.openAgents")}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <div className="rounded-md border border-borderSubtle/70 bg-panel/45 px-3 py-2 text-xs text-muted">
+                  {t("sessions.executorGuide.memberCannotPair")}
+                </div>
+                <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
+                  {t("sessions.executorGuide.checkStatus")}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
+                  {t("sessions.executorGuide.openAgents")}
+                </Button>
+              </div>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-[var(--radius-lg)] border border-borderSubtle/65 bg-panel/72 p-3 shadow-elev1 md:p-4" data-testid="conversation-message-stream">
         {chatMessages.length === 0 ? (

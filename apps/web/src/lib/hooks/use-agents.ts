@@ -46,7 +46,26 @@ export function useAgents(orgId: string | null) {
     queryKey: ["agents", orgId],
     enabled: Boolean(orgId),
     queryFn: async () => {
-      return apiFetchJson<{ agents: AgentMeta[] }>(`/v1/orgs/${orgId}/agents`, { method: "GET" }, { orgScoped: true });
+      const payload = await apiFetchJson<{
+        agents?: AgentMeta[];
+        executors?: Array<
+          Omit<AgentMeta, "tags" | "reportedTags"> & {
+            labels?: string[];
+            reportedLabels?: string[];
+          }
+        >;
+      }>(`/v1/orgs/${orgId}/agents`, { method: "GET" }, { orgScoped: true });
+      if (Array.isArray(payload.agents)) {
+        return { agents: payload.agents };
+      }
+      const executors = Array.isArray(payload.executors) ? payload.executors : [];
+      return {
+        agents: executors.map((executor) => ({
+          ...executor,
+          tags: Array.isArray(executor.labels) ? executor.labels : [],
+          reportedTags: Array.isArray(executor.reportedLabels) ? executor.reportedLabels : [],
+        })),
+      };
     },
   });
 }

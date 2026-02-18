@@ -59,6 +59,19 @@ function shellQuote(value: string): string {
   return JSON.stringify(value);
 }
 
+function normalizeNodeAgentApiBase(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.hostname.toLowerCase() === "localhost") {
+      url.hostname = "127.0.0.1";
+      return url.toString().replace(/\/$/, "");
+    }
+    return value;
+  } catch {
+    return value;
+  }
+}
+
 function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
   if (artifact.platformId === "windows-x64") {
     return [
@@ -74,7 +87,8 @@ function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
 
 function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
   const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
-  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(input.apiBase)}`;
+  const apiBase = normalizeNodeAgentApiBase(input.apiBase);
+  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(apiBase)}`;
 }
 
 function buildStartCommand(artifact: AgentInstallerArtifact): string {
@@ -213,8 +227,8 @@ export default function AgentsPage() {
                 {t("common.save")}
               </Button>
               <ConfirmButton
-                title="Revoke agent"
-                description="This will prevent the agent from executing future jobs."
+                title="Revoke worker node"
+                description="This will prevent the worker node from executing future jobs."
                 confirmText={t("agents.revoke")}
                 onConfirm={async () => {
                   await revoke.mutateAsync(agent.id);
@@ -428,7 +442,7 @@ export default function AgentsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={refresh}>{t("common.refresh")}</Button>
             <div className="ml-auto text-xs text-muted">
-              {agentsQuery.isFetching ? t("common.loading") : `${agents.length} agent(s)`}
+              {agentsQuery.isFetching ? t("common.loading") : `${agents.length} worker node(s)`}
             </div>
           </div>
 
@@ -452,7 +466,7 @@ export default function AgentsPage() {
 
           {agentsQuery.isError ? (
             <div className="mt-3 rounded-md border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
-              Failed to load agents.
+              Failed to load worker nodes.
             </div>
           ) : null}
         </CardContent>

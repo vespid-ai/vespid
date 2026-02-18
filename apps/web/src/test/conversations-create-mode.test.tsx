@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => {
     push: vi.fn(),
     createSession: vi.fn(async (_input: unknown) => ({ session: { id: "session_1" } })),
     updateOrgSettings: vi.fn(async (_input: unknown) => ({})),
+    createPairingToken: vi.fn(async () => ({
+      token: "org_1.pairing-token",
+      expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+    })),
+    onlineExecutorCount: 1,
   };
 });
 
@@ -42,6 +47,74 @@ vi.mock("../lib/hooks/use-org-settings", () => ({
   useUpdateOrgSettings: () => ({ isPending: false, mutateAsync: mocks.updateOrgSettings }),
 }));
 
+vi.mock("../lib/hooks/use-agents", () => ({
+  useAgentInstaller: () => ({
+    data: {
+      artifacts: [
+        {
+          platformId: "darwin-arm64",
+          os: "darwin",
+          arch: "arm64",
+          fileName: "vespid-agent.tar.gz",
+          archiveType: "tar.gz",
+          downloadUrl: "https://example.com/vespid-agent.tar.gz",
+        },
+      ],
+    },
+    isLoading: false,
+  }),
+  useCreatePairingToken: () => ({ isPending: false, mutateAsync: mocks.createPairingToken }),
+}));
+
+vi.mock("../lib/hooks/use-engine-auth-status", () => ({
+  useEngineAuthStatus: () => ({
+    isSuccess: true,
+    data: {
+      organizationId: "org_1",
+      engines: {
+        "gateway.codex.v2": {
+          onlineExecutors: mocks.onlineExecutorCount,
+          verifiedCount: mocks.onlineExecutorCount,
+          unverifiedCount: 0,
+          executors: Array.from({ length: mocks.onlineExecutorCount }, (_, idx) => ({
+            executorId: `exec_${idx + 1}`,
+            name: `Executor ${idx + 1}`,
+            verified: true,
+            checkedAt: new Date().toISOString(),
+            reason: "verified",
+          })),
+        },
+        "gateway.claude.v2": {
+          onlineExecutors: mocks.onlineExecutorCount,
+          verifiedCount: 0,
+          unverifiedCount: mocks.onlineExecutorCount,
+          executors: Array.from({ length: mocks.onlineExecutorCount }, (_, idx) => ({
+            executorId: `exec_${idx + 1}`,
+            name: `Executor ${idx + 1}`,
+            verified: false,
+            checkedAt: new Date().toISOString(),
+            reason: "not_required",
+          })),
+        },
+        "gateway.opencode.v2": {
+          onlineExecutors: mocks.onlineExecutorCount,
+          verifiedCount: mocks.onlineExecutorCount,
+          unverifiedCount: 0,
+          executors: Array.from({ length: mocks.onlineExecutorCount }, (_, idx) => ({
+            executorId: `exec_${idx + 1}`,
+            name: `Executor ${idx + 1}`,
+            verified: true,
+            checkedAt: new Date().toISOString(),
+            reason: "not_required",
+          })),
+        },
+      },
+    },
+    refetch: vi.fn(),
+    isFetching: false,
+  }),
+}));
+
 vi.mock("../lib/hooks/use-sessions", () => ({
   useSessions: () => ({ data: { sessions: [] }, isLoading: false, isError: false, refetch: vi.fn() }),
   useCreateSession: () => ({ isPending: false, mutateAsync: mocks.createSession }),
@@ -57,6 +130,8 @@ describe("Conversations create modes", () => {
     mocks.push.mockReset();
     mocks.createSession.mockClear();
     mocks.updateOrgSettings.mockClear();
+    mocks.createPairingToken.mockClear();
+    mocks.onlineExecutorCount = 1;
   });
 
   it("submits quick mode payload with minimal defaults", async () => {
@@ -120,5 +195,23 @@ describe("Conversations create modes", () => {
     expect(payload.executorSelector).toEqual({ pool: "byon", tag: "west" });
     expect(payload.prompt.system).toBe("System prompt");
     expect(payload.prompt.instructions).toBe("Use policy-safe responses.");
+  });
+
+  it("shows executor onboarding and blocks create when no executor is online", async () => {
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+    mocks.onlineExecutorCount = 0;
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationsPage />
+      </NextIntlClientProvider>
+    );
+
+    expect(await screen.findByTestId("executor-onboarding-guide")).toBeInTheDocument();
+    await waitFor(() => expect(mocks.createPairingToken).toHaveBeenCalledTimes(1));
+
+    await user.type(screen.getByLabelText(messages.sessions.chat.message), "Try to start");
+    expect(screen.getByRole("button", { name: messages.sessions.chat.send })).toBeDisabled();
   });
 });

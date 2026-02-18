@@ -9,6 +9,10 @@ import ConversationDetailPage from "../app/[locale]/(app)/conversations/[convers
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   replace: vi.fn(),
+  createPairingToken: vi.fn(async () => ({
+    token: "org_1.pairing-token",
+    expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+  })),
   sessionData: {
     session: {
       id: "session_1",
@@ -43,7 +47,15 @@ const mocks = vi.hoisted(() => ({
         payload: { message: "Summarizing now." },
         createdAt: "2026-02-17T10:00:05.000Z",
       },
-    ],
+    ] as any[],
+  },
+  engineAuthStatusData: {
+    organizationId: "org_1",
+    engines: {
+      "gateway.codex.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+      "gateway.claude.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+      "gateway.opencode.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+    },
   },
 }));
 
@@ -59,6 +71,38 @@ vi.mock("../lib/hooks/use-active-org-id", () => ({
 
 vi.mock("../lib/hooks/use-session", () => ({
   useSession: () => ({ isLoading: false, data: { session: { token: "tok", expiresAt: Date.now() + 60_000 }, user: { email: "ops@vespid.ai" } } }),
+}));
+
+vi.mock("../lib/hooks/use-me", () => ({
+  useMe: () => ({ data: { orgs: [{ id: "org_1", roleKey: "owner" }] } }),
+}));
+
+vi.mock("../lib/hooks/use-agents", () => ({
+  useAgentInstaller: () => ({
+    data: {
+      artifacts: [
+        {
+          platformId: "darwin-arm64",
+          os: "darwin",
+          arch: "arm64",
+          fileName: "vespid-agent.tar.gz",
+          archiveType: "tar.gz",
+          downloadUrl: "https://example.com/vespid-agent.tar.gz",
+        },
+      ],
+    },
+    isLoading: false,
+  }),
+  useCreatePairingToken: () => ({ isPending: false, mutateAsync: mocks.createPairingToken }),
+}));
+
+vi.mock("../lib/hooks/use-engine-auth-status", () => ({
+  useEngineAuthStatus: () => ({
+    isSuccess: true,
+    isError: false,
+    data: mocks.engineAuthStatusData,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("../lib/hooks/use-sessions", () => ({
@@ -115,6 +159,43 @@ describe("Conversation detail layout", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket as any);
+    mocks.createPairingToken.mockClear();
+    mocks.eventsData.events = [
+      {
+        id: "event_1",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 1,
+        eventType: "user_message",
+        level: "info",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { message: "Need an incident summary." },
+        createdAt: "2026-02-17T10:00:00.000Z",
+      },
+      {
+        id: "event_2",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 2,
+        eventType: "agent_message",
+        level: "info",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { message: "Summarizing now." },
+        createdAt: "2026-02-17T10:00:05.000Z",
+      },
+    ];
+    mocks.engineAuthStatusData = {
+      organizationId: "org_1",
+      engines: {
+        "gateway.codex.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+        "gateway.claude.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+        "gateway.opencode.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+      },
+    };
   });
 
   afterEach(() => {
@@ -149,5 +230,72 @@ describe("Conversation detail layout", () => {
       const sent = FakeWebSocket.instances[0]?.send.mock.calls.map((call) => JSON.parse(call[0]));
       expect(sent?.some((payload: any) => payload.type === "session_send" && payload.message === "Ping the node")).toBe(true);
     });
+  });
+
+  it("shows executor onboarding guide when session has no-agent errors", async () => {
+    const messages = readMessages("en");
+    mocks.eventsData.events = [
+      {
+        id: "event_err",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 3,
+        eventType: "error",
+        level: "error",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { code: "PINNED_AGENT_OFFLINE", message: "Node-host could not open the session." },
+        createdAt: "2026-02-17T10:01:00.000Z",
+      },
+    ];
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    expect(await screen.findByTestId("conversation-detail-executor-onboarding-guide")).toBeInTheDocument();
+    await waitFor(() => expect(mocks.createPairingToken).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(messages.sessions.executorGuide.title)).toBeInTheDocument();
+  });
+
+  it("hides executor onboarding guide once an online executor is reported", async () => {
+    const messages = readMessages("en");
+    mocks.eventsData.events = [
+      {
+        id: "event_err",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 3,
+        eventType: "error",
+        level: "error",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { code: "PINNED_AGENT_OFFLINE", message: "Node-host could not open the session." },
+        createdAt: "2026-02-17T10:01:00.000Z",
+      },
+    ];
+    mocks.engineAuthStatusData = {
+      organizationId: "org_1",
+      engines: {
+        "gateway.codex.v2": { onlineExecutors: 1, verifiedCount: 1, unverifiedCount: 0, executors: [] },
+        "gateway.claude.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+        "gateway.opencode.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+      },
+    };
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("conversation-detail-executor-onboarding-guide")).not.toBeInTheDocument();
+    });
+    expect(mocks.createPairingToken).not.toHaveBeenCalled();
   });
 });

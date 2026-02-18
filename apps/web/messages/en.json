@@ -11,7 +11,7 @@
     "sessions": "Chat",
     "models": "Model Connections",
     "secrets": "Secrets",
-    "agents": "Agents",
+    "agents": "Worker Nodes",
     "toolsets": "Toolsets",
     "auth": "Sign in",
     "org": "Organization",
@@ -96,6 +96,25 @@
       "oauthRequired": "This model provider requires a connected account.",
       "memberDefaults": "Members use organization default model settings."
     },
+    "executorGuide": {
+      "title": "Set up a BYON executor before your first chat",
+      "subtitleOwner": "No worker node is online for this organization yet. Create a token and connect one here, or start an already paired node.",
+      "subtitleMember": "No worker node is online for this organization yet. Ask an owner/admin to connect one or start an already paired node.",
+      "autoTokenCreated": "Pairing token created automatically for this organization.",
+      "tokenLabel": "Pairing token",
+      "creatingToken": "Creating pairing token...",
+      "tokenUnavailable": "No pairing token yet. Create one to continue.",
+      "downloadCommand": "1) Download and unpack worker-node installer",
+      "connectCommand": "2) Connect this machine to the organization",
+      "regenerateToken": "Create / rotate token",
+      "checkStatus": "I have connected it, check again",
+      "openAgents": "Open Worker Nodes page",
+      "installerUnavailable": "Installer metadata is unavailable. Open the Worker Nodes page for full setup options.",
+      "memberCannotPair": "Your role cannot create pairing tokens. Ask an owner/admin to complete executor pairing.",
+      "blockComposerHint": "Chat creation is blocked until at least one executor is online.",
+      "noExecutorErrorOwner": "No worker node is online yet. Start an already paired node, or pair and connect a new one.",
+      "noExecutorErrorMember": "No worker node is online yet. Ask an owner/admin to start a paired node or pair a new one."
+    },
     "list": {
       "title": "Recent chats",
       "subtitle": "Latest activity first.",
@@ -117,8 +136,8 @@
     "toolsetResolved": "Resolved",
     "selectorTagPlaceholder": "e.g. west",
     "extraToolsPlaceholder": "Comma-separated tool IDs (optional)",
-    "pinnedAgent": "Pinned agent",
-    "resetAgent": "Reset agent",
+    "pinnedAgent": "Pinned worker node",
+    "resetAgent": "Reset worker node",
     "ws": {
       "requiresLogin": "Login is required to connect.",
       "connected": "Connected",
@@ -177,12 +196,24 @@
     "fetchedAt": "Updated: {ts}",
     "connections": {
       "title": "Model Connections",
-      "subtitle": "Connect providers once, then use a single default model across chat, workflows, and toolsets.",
+      "subtitle": "Connect each engine with the right method before running chats and workflows.",
       "primaryTitle": "Organization default model",
       "primarySubtitle": "This default is used across chat, workflows, and toolset generation.",
       "oauthRequired": "This provider requires a connected OAuth account.",
       "providersTitle": "Provider connections",
       "providersSubtitle": "Connect, rotate, or disconnect provider accounts without exposing internal implementation details.",
+      "byonOnlyTitle": "BYON only",
+      "byonOnlyDescription": "Sessions and workflows run only on BYON executors. Install CLI and sign in on each executor host.",
+      "matrix": {
+        "title": "Connection matrix",
+        "subtitle": "Official methods vs currently supported runtime paths in Vespid.",
+        "columns": {
+          "engine": "Engine",
+          "officialMethods": "Official methods",
+          "supportedNow": "Supported in Vespid now",
+          "recommendedPath": "Recommended path"
+        }
+      },
       "tabs": {
         "apiKey": "API Key",
         "oauth": "OAuth"
@@ -202,6 +233,8 @@
       "testRequired": "Please test this key before saving.",
       "apiKeyDialogTitle": "{provider} API key",
       "apiKeyDialogDescription": "Test the key first, then save only when verification succeeds.",
+      "apiKeyRequired": "API key is required.",
+      "apiKeyInputLabel": "API key",
       "oauthDialogTitle": "{provider} authorization",
       "oauthDialogDescription": "Authorize with provider account and return to this page to finish connection.",
       "startAuthorization": "Start authorization",
@@ -216,6 +249,71 @@
       "oauthTokenPlaceholder": "Paste OAuth token...",
       "completeConnection": "Complete connection",
       "pending": "Authorization is still pending.",
+      "recheck": "Recheck",
+      "cliLabel": "CLI",
+      "defaultModelLabel": "Default model",
+      "secretConnectorLabel": "Secret connector",
+      "officialMethodsTitle": "Official methods",
+      "methodSelectorTitle": "Credential source",
+      "docsLink": "Docs",
+      "support": {
+        "supported_now": "Supported now",
+        "host_managed": "Host-managed",
+        "official_not_supported_yet": "Official, not supported yet"
+      },
+      "methods": {
+        "executor_oauth": {
+          "label": "Executor account login (OAuth/device)"
+        },
+        "api_key": {
+          "label": "API key"
+        },
+        "bedrock": {
+          "label": "AWS Bedrock"
+        },
+        "vertex": {
+          "label": "Google Vertex AI"
+        },
+        "managed_api_key": {
+          "label": "Vespid-managed API key"
+        },
+        "executor_profile": {
+          "label": "Executor-managed provider profile"
+        }
+      },
+      "runtime": {
+        "onlineExecutors": "Online executors: {count}",
+        "verified": "Verified: {count}",
+        "unverified": "Unverified: {count}",
+        "verificationNotApplicable": "Verification not applicable (executor-managed provider profile).",
+        "loginOnExecutor": "Login on each executor host: {command}",
+        "verifyCommands": "Verification commands: {commandA} or {commandB}",
+        "executorVerified": "verified",
+        "executorUnverified": "unverified"
+      },
+      "opencode": {
+        "apiKeyModeNote": "Use this when Vespid should inject one org-level API key into OpenCode runtime.",
+        "executorManagedNote": "Use this when each executor host is configured with OpenCode provider profile or environment variables.",
+        "runtimeNoCustody": "Configured on each executor host; control plane does not store those credentials.",
+        "providers": {
+          "anthropic": {
+            "name": "Anthropic",
+            "desc": "Claude account/API key on host"
+          },
+          "openai": {
+            "name": "OpenAI",
+            "desc": "OpenAI API key on host"
+          },
+          "google": {
+            "name": "Google Gemini",
+            "desc": "API key / ADC on host"
+          },
+          "openrouter": {
+            "name": "OpenRouter",
+            "desc": "OpenRouter API key on host"
+          }
+        }
+      },
       "runtimeTitle": "Provider runtime overrides",
       "runtimeSubtitle": "Override base URL and API kind for OpenAI-like/custom endpoints.",
       "provider": "Provider",
@@ -556,19 +654,19 @@
     "healthRunError": "Failed to load run."
   },
   "agents": {
-    "title": "Agents",
+    "title": "Worker Nodes",
     "pairing": "Pairing token",
     "revoke": "Revoke",
-    "subtitle": "Remote execution agents paired to this organization.",
-    "noAgentsTitle": "No agents yet",
-    "noAgentsDescription": "Create a pairing token to connect a node agent.",
+    "subtitle": "Remote worker nodes paired to this organization.",
+    "noAgentsTitle": "No worker nodes yet",
+    "noAgentsDescription": "Create a pairing token to connect a worker node.",
     "pairingCreated": "Pairing token created",
-    "agentRevoked": "Agent revoked",
-    "tagsUpdated": "Agent tags updated",
+    "agentRevoked": "Worker node revoked",
+    "tagsUpdated": "Worker node tags updated",
     "createPairingToken": "Create pairing token",
     "pairingHint": "Tokens are displayed only once. They expire in 15 minutes.",
     "table": {
-      "agent": "Agent",
+      "agent": "Worker Node",
       "status": "Status",
       "lastSeen": "Last seen",
       "created": "Created",
@@ -577,11 +675,11 @@
     "pairingSteps": {
       "step1": "1. Create a pairing token",
       "step2": "2. Run the connect command with the token",
-      "step3": "3. Refresh this page and verify the agent is online"
+      "step3": "3. Refresh this page and verify the worker node is online"
     },
     "installer": {
       "title": "Connector program",
-      "subtitle": "Download the standalone agent for your platform, then connect this machine.",
+      "subtitle": "Download the standalone worker-node binary for your platform, then connect this machine.",
       "platforms": {
         "darwinArm64": "macOS (Apple Silicon)",
         "linuxX64": "Linux (x64)",
@@ -801,22 +899,22 @@
       "faq": "FAQ"
     },
     "hero": {
-      "eyebrow": "Agentic Automation Platform",
-      "title": "Orchestrate agents, workflows, and execution at enterprise scale.",
-      "subtitle": "Vespid turns agent ideas into production workflows with secure multi-tenant isolation, auditable runs, and optional node execution.",
+      "eyebrow": "Workflow Orchestration Platform",
+      "title": "Orchestrate workflows, worker nodes, and execution at enterprise scale.",
+      "subtitle": "Vespid turns workflow ideas into production automation with secure multi-tenant isolation, auditable runs, and optional node execution.",
       "ctaPrimary": "Start Free",
       "ctaSecondary": "Book Demo",
       "stats": {
         "rls": "Multi-tenant RLS by default",
         "queue": "Queued execution with retries",
-        "runtime": "Agent + Browser + Node runtime"
+        "runtime": "Workflow + Browser + Worker Node runtime"
       },
       "panel": {
         "title": "Execution cockpit",
         "badge": "live",
         "steps": {
           "intake": "Intake → Normalize",
-          "reasoning": "Agent reasoning",
+          "reasoning": "Workflow reasoning",
           "connector": "Connector action",
           "node": "Node execution",
           "audit": "Audit event"
@@ -881,7 +979,7 @@
     },
     "features": {
       "eyebrow": "Execution stack",
-      "title": "Everything required to run agents in production",
+      "title": "Everything required to run workflows in production",
       "subtitle": "From governance to execution, Vespid delivers the orchestration layer your teams can trust.",
       "items": {
         "orgIsolation": {
@@ -890,7 +988,7 @@
         },
         "workflowDsl": {
           "title": "Workflow DSL v2",
-          "description": "Model agentic graphs that are versioned, testable, and production-safe."
+          "description": "Model workflow graphs that are versioned, testable, and production-safe."
         },
         "queueFirst": {
           "title": "Queue-first execution",
@@ -898,7 +996,7 @@
         },
         "nodeBrowser": {
           "title": "Node & browser execution",
-          "description": "Route sensitive steps to node agents or browser sessions on demand."
+          "description": "Route sensitive steps to worker nodes or browser sessions on demand."
         },
         "auditReady": {
           "title": "Audit-ready events",
@@ -917,7 +1015,7 @@
       "steps": {
         "design": {
           "title": "Design workflows",
-          "description": "Compose agent reasoning, connectors, and runtime rules in a visual DSL."
+          "description": "Compose workflow reasoning, connectors, and runtime rules in a visual DSL."
         },
         "publish": {
           "title": "Publish & enqueue",
@@ -931,7 +1029,7 @@
     },
     "useCases": {
       "eyebrow": "Use cases",
-      "title": "Agent workflows that move real operations",
+      "title": "Workflow automation that moves real operations",
       "subtitle": "Build repeatable automation across teams without rewriting infrastructure.",
       "items": {
         "onboarding": {
@@ -975,7 +1073,7 @@
           "metric": "-68% failures"
         },
         "retail": {
-          "title": "Retail team shipped 12 agent workflows in 30 days",
+          "title": "Retail team shipped 12 workflow automations in 30 days",
           "description": "Reusable templates and connectors sped up cross-functional automation.",
           "metric": "12 workflows"
         }
@@ -1059,7 +1157,7 @@
       "features": {
         "starter": {
           "workflowBuilder": "Workflow builder",
-          "standardAgents": "Standard agents",
+          "standardAgents": "Standard worker nodes",
           "sharedQueue": "Shared queue",
           "communityConnectors": "Community connectors"
         },
@@ -1088,7 +1186,7 @@
         },
         "infra": {
           "question": "Can we use our own infrastructure?",
-          "answer": "Yes. Use node agents and the gateway to execute sensitive workloads inside your network."
+          "answer": "Yes. Use worker nodes and the gateway to execute sensitive workloads inside your network."
         },
         "queue": {
           "question": "What happens if the queue is down?",
@@ -1106,7 +1204,7 @@
     },
     "cta": {
       "eyebrow": "Get started",
-      "title": "Ready to orchestrate your first agent workflow?",
+      "title": "Ready to orchestrate your first workflow?",
       "subtitle": "Give your teams the execution backbone they need to ship reliable automation.",
       "ctaPrimary": "Start Free",
       "contactTitle": "Contact sales",

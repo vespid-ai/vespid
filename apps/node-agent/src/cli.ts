@@ -125,6 +125,29 @@ async function ensureDir(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
+function normalizeLocalhostUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.hostname.toLowerCase() !== "localhost") {
+      return value;
+    }
+    parsed.hostname = "127.0.0.1";
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
+function normalizeConfigEndpoints(config: NodeAgentConfig): NodeAgentConfig {
+  const apiBaseUrl = normalizeLocalhostUrl(config.apiBaseUrl).replace(/\/+$/, "");
+  const gatewayWsUrl = normalizeLocalhostUrl(config.gatewayWsUrl);
+  return {
+    ...config,
+    apiBaseUrl,
+    gatewayWsUrl,
+  };
+}
+
 async function saveConfig(configPath: string, config: NodeAgentConfig): Promise<void> {
   await ensureDir(configPath);
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
@@ -144,23 +167,40 @@ async function pairAgent(input: {
   tags?: string[];
 }): Promise<{ executorId: string; executorToken: string; organizationId: string; gatewayWsUrl: string }> {
   const url = new URL("/v1/executors/pair", input.apiBaseUrl);
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         pairingToken: input.pairingToken,
         name: input.name,
         agentVersion: input.agentVersion,
-          capabilities: {
+        capabilities: {
           kinds: ["connector.action", "agent.execute", "agent.run"],
           ...(input.tags && input.tags.length > 0 ? { labels: input.tags } : {}),
         },
       }),
     });
-  const payload = await response.json();
+  } catch (error) {
+    const fallbackHint = url.hostname.toLowerCase() === "localhost" ? " (tip: try --api-base http://127.0.0.1:3001)" : "";
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`PAIRING_API_UNREACHABLE:${url.origin}${fallbackHint}: ${message}`);
+  }
+
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
   if (!response.ok) {
     const code = (payload as { code?: unknown }).code;
-    throw new Error(typeof code === "string" ? code : "PAIRING_FAILED");
+    if (typeof code === "string") {
+      throw new Error(code);
+    }
+    throw new Error(`PAIRING_FAILED_STATUS_${response.status}`);
   }
   const parsed = z
     .object({
@@ -180,9 +220,10 @@ async function main(): Promise<void> {
     const configPath = parsed.configPath ?? defaultConfigPath();
     const agentVersion = await readPackageVersion();
     const name = parsed.name ?? os.hostname() ?? `agent-${crypto.randomBytes(4).toString("hex")}`;
+    const normalizedApiBase = normalizeLocalhostUrl(parsed.apiBase).replace(/\/+$/, "");
 
     const paired = await pairAgent({
-      apiBaseUrl: parsed.apiBase,
+      apiBaseUrl: normalizedApiBase,
       pairingToken: parsed.pairingToken,
       name,
       agentVersion,
@@ -195,7 +236,7 @@ async function main(): Promise<void> {
       executorToken: paired.executorToken,
       organizationId: paired.organizationId,
       gatewayWsUrl: paired.gatewayWsUrl,
-      apiBaseUrl: parsed.apiBase,
+      apiBaseUrl: normalizedApiBase,
       executorName: name,
       executorVersion: agentVersion,
       capabilities: {
@@ -204,8 +245,9 @@ async function main(): Promise<void> {
       },
     };
 
-    await saveConfig(configPath, config);
-    const started = await startNodeAgent(config);
+    const normalized = normalizeConfigEndpoints(config);
+    await saveConfig(configPath, normalized);
+    const started = await startNodeAgent(normalized);
     await started.ready;
     return;
   }
@@ -231,7 +273,15 @@ async function main(): Promise<void> {
           },
         } satisfies NodeAgentConfig)
       : null;
-  const config = preconfigured ?? (await loadConfig(configPath));
+  const loaded = preconfigured ?? (await loadConfig(configPath));
+  const config = normalizeConfigEndpoints(loaded);
+  if (!preconfigured) {
+    const loadedApiBase = loaded.apiBaseUrl?.replace(/\/+$/, "");
+    const normalizedApiBase = config.apiBaseUrl?.replace(/\/+$/, "");
+    if (loaded.gatewayWsUrl !== config.gatewayWsUrl || loadedApiBase !== normalizedApiBase) {
+      await saveConfig(configPath, config);
+    }
+  }
   const started = await startNodeAgent(config);
   await started.ready;
 }

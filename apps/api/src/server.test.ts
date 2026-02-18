@@ -235,7 +235,7 @@ describe("api hardening foundation", () => {
     expect(body.channels.some((channel) => channel.id === "webchat")).toBe(true);
   });
 
-  it("returns 503 when agent installer metadata is disabled", async () => {
+  it("returns default agent installer metadata when custom metadata is disabled", async () => {
     const disabledServer = await buildServer({
       store: createPaidMemoryStore(),
       oauthService: fakeOAuthService(),
@@ -248,8 +248,21 @@ describe("api hardening foundation", () => {
       url: "/v1/meta/agent-installer",
     });
 
-    expect(response.statusCode).toBe(503);
-    expect((response.json() as { code?: string }).code).toBe("AGENT_INSTALLER_UNAVAILABLE");
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      provider: string;
+      repository: string;
+      channel: string;
+      docsUrl: string | null;
+      checksumsUrl: string;
+      artifacts: Array<{ platformId: string; fileName: string; downloadUrl: string; archiveType: string }>;
+    };
+    expect(body.provider).toBe("github-releases");
+    expect(body.repository).toBe("vespid-ai/vespid");
+    expect(body.channel).toBe("latest");
+    expect(body.docsUrl).toBeNull();
+    expect(body.artifacts.map((artifact) => artifact.platformId)).toEqual(["darwin-arm64", "linux-x64", "windows-x64"]);
+    expect(body.checksumsUrl).toContain("/releases/latest/download/vespid-agent-checksums.txt");
     await disabledServer.close();
   });
 

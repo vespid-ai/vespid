@@ -142,6 +142,8 @@ describe("ModelConnectionsPage engine connections", () => {
     await screen.findByTestId("engine-card-gateway.codex.v2");
     expect(screen.getByTestId("engine-card-gateway.claude.v2")).toBeInTheDocument();
     expect(screen.getByTestId("engine-card-gateway.opencode.v2")).toBeInTheDocument();
+    expect(screen.getByTestId("connection-matrix")).toBeInTheDocument();
+    expect(screen.getByText("Connection matrix")).toBeInTheDocument();
   });
 
   it("creates connector secret for engine API key", async () => {
@@ -158,6 +160,35 @@ describe("ModelConnectionsPage engine connections", () => {
         connectorId: "agent.codex",
         name: "default",
         value: "sk-codex-test",
+      });
+    });
+  });
+
+  it("renders OpenCode method labels without legacy OAuth account wording", async () => {
+    renderPage();
+    const opencodeCard = await screen.findByTestId("engine-card-gateway.opencode.v2");
+    expect(within(opencodeCard).getByRole("button", { name: "Executor-managed provider profile" })).toBeInTheDocument();
+    expect(within(opencodeCard).getByRole("button", { name: "Vespid-managed API key" })).toBeInTheDocument();
+    expect(within(opencodeCard).queryByText("OAuth account")).not.toBeInTheDocument();
+  });
+
+  it("switches OpenCode to executor-managed provider profile mode", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const opencodeCard = await screen.findByTestId("engine-card-gateway.opencode.v2");
+    await user.click(within(opencodeCard).getByRole("button", { name: "Executor-managed provider profile" }));
+
+    await waitFor(() => {
+      expect(mocks.updateOrgSettingsMutate).toHaveBeenCalledWith({
+        agents: {
+          engineAuthDefaults: {
+            "gateway.opencode.v2": {
+              mode: "oauth_executor",
+              secretId: null,
+            },
+          },
+        },
       });
     });
   });

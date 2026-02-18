@@ -11,7 +11,7 @@
     "sessions": "对话",
     "models": "模型连接",
     "secrets": "密钥",
-    "agents": "代理",
+    "agents": "工作节点",
     "toolsets": "工具集",
     "auth": "登录",
     "org": "组织",
@@ -97,12 +97,24 @@
     "fetchedAt": "更新时间: {ts}",
     "connections": {
       "title": "模型连接",
-      "subtitle": "先完成连接，再用一个统一默认模型覆盖会话、工作流和工具集生成。",
+      "subtitle": "先为每个引擎配置正确连接方式，再运行会话和工作流。",
       "primaryTitle": "组织默认模型",
       "primarySubtitle": "该默认值会用于会话、工作流和工具集生成。",
       "oauthRequired": "该提供方需要已连接的 OAuth 账号。",
       "providersTitle": "提供方连接",
       "providersSubtitle": "连接、轮换或断开提供方账号，不向用户暴露内部实现细节。",
+      "byonOnlyTitle": "仅支持 BYON",
+      "byonOnlyDescription": "会话与工作流仅在 BYON 执行器运行。请在每台执行器主机安装 CLI 并完成登录。",
+      "matrix": {
+        "title": "连接矩阵",
+        "subtitle": "官方连接方式与 Vespid 当前运行时支持能力对照。",
+        "columns": {
+          "engine": "引擎",
+          "officialMethods": "官方连接方式",
+          "supportedNow": "当前在 Vespid 支持",
+          "recommendedPath": "推荐路径"
+        }
+      },
       "tabs": {
         "apiKey": "API Key",
         "oauth": "OAuth"
@@ -122,6 +134,8 @@
       "testRequired": "请先测试该 Key，再保存。",
       "apiKeyDialogTitle": "{provider} API Key",
       "apiKeyDialogDescription": "请先测试，再在验证通过后保存。",
+      "apiKeyRequired": "API Key 不能为空。",
+      "apiKeyInputLabel": "API Key",
       "oauthDialogTitle": "{provider} 授权",
       "oauthDialogDescription": "跳转到提供方完成授权后，返回本页继续完成连接。",
       "startAuthorization": "开始授权",
@@ -136,6 +150,71 @@
       "oauthTokenPlaceholder": "粘贴 OAuth Token...",
       "completeConnection": "完成连接",
       "pending": "授权仍在进行中。",
+      "recheck": "重新检查",
+      "cliLabel": "CLI",
+      "defaultModelLabel": "默认模型",
+      "secretConnectorLabel": "密钥连接器",
+      "officialMethodsTitle": "官方连接方式",
+      "methodSelectorTitle": "凭据来源",
+      "docsLink": "文档",
+      "support": {
+        "supported_now": "当前支持",
+        "host_managed": "主机托管",
+        "official_not_supported_yet": "官方支持，暂未接入"
+      },
+      "methods": {
+        "executor_oauth": {
+          "label": "执行器账号登录（OAuth/设备码）"
+        },
+        "api_key": {
+          "label": "API Key"
+        },
+        "bedrock": {
+          "label": "AWS Bedrock"
+        },
+        "vertex": {
+          "label": "Google Vertex AI"
+        },
+        "managed_api_key": {
+          "label": "Vespid 托管 API Key"
+        },
+        "executor_profile": {
+          "label": "执行器托管 Provider 配置"
+        }
+      },
+      "runtime": {
+        "onlineExecutors": "在线执行器：{count}",
+        "verified": "已验证：{count}",
+        "unverified": "未验证：{count}",
+        "verificationNotApplicable": "该模式不适用验证状态（由执行器主机托管 Provider 配置）。",
+        "loginOnExecutor": "在每台执行器主机登录：{command}",
+        "verifyCommands": "验证命令：{commandA} 或 {commandB}",
+        "executorVerified": "已验证",
+        "executorUnverified": "未验证"
+      },
+      "opencode": {
+        "apiKeyModeNote": "当你希望由 Vespid 统一注入组织级 API Key 到 OpenCode 时使用此模式。",
+        "executorManagedNote": "当每台执行器主机已通过 OpenCode provider 配置或环境变量完成连接时使用此模式。",
+        "runtimeNoCustody": "这些凭据配置在执行器主机，控制面不保存对应密钥。",
+        "providers": {
+          "anthropic": {
+            "name": "Anthropic",
+            "desc": "主机上的 Claude 账号/API Key"
+          },
+          "openai": {
+            "name": "OpenAI",
+            "desc": "主机上的 OpenAI API Key"
+          },
+          "google": {
+            "name": "Google Gemini",
+            "desc": "主机上的 API Key / ADC"
+          },
+          "openrouter": {
+            "name": "OpenRouter",
+            "desc": "主机上的 OpenRouter API Key"
+          }
+        }
+      },
       "runtimeTitle": "提供方运行时覆盖",
       "runtimeSubtitle": "支持 OpenAI-like / 自定义端点的 base URL 与 API kind 覆盖。",
       "provider": "提供方",
@@ -476,19 +555,19 @@
     "healthRunError": "加载运行失败。"
   },
   "agents": {
-    "title": "代理",
+    "title": "工作节点",
     "pairing": "配对令牌",
     "revoke": "撤销",
-    "subtitle": "已配对到当前组织的远程执行代理。",
-    "noAgentsTitle": "暂无代理",
-    "noAgentsDescription": "创建配对令牌以连接一个 node agent。",
+    "subtitle": "已配对到当前组织的远程执行工作节点。",
+    "noAgentsTitle": "暂无工作节点",
+    "noAgentsDescription": "创建配对令牌以连接一个本地工作节点。",
     "pairingCreated": "已创建配对令牌",
-    "agentRevoked": "已撤销代理",
-    "tagsUpdated": "已更新代理标签",
+    "agentRevoked": "已撤销工作节点",
+    "tagsUpdated": "已更新工作节点标签",
     "createPairingToken": "创建配对令牌",
     "pairingHint": "令牌仅展示一次, 15 分钟后过期。",
     "table": {
-      "agent": "代理",
+      "agent": "工作节点",
       "status": "状态",
       "lastSeen": "最近在线",
       "created": "创建时间",
@@ -497,11 +576,11 @@
     "pairingSteps": {
       "step1": "1. 创建配对令牌",
       "step2": "2. 使用该令牌运行连接命令",
-      "step3": "3. 刷新本页并确认代理在线"
+      "step3": "3. 刷新本页并确认工作节点在线"
     },
     "installer": {
       "title": "连接程序",
-      "subtitle": "下载当前平台的独立 agent 程序，然后将当前机器连接到服务。",
+      "subtitle": "下载当前平台的独立工作节点程序，然后将当前机器连接到服务。",
       "platforms": {
         "darwinArm64": "macOS（Apple Silicon）",
         "linuxX64": "Linux（x64）",
@@ -553,6 +632,25 @@
       "modelChipFallback": "选择模型",
       "oauthRequired": "该模型提供方需要先连接账号。",
       "memberDefaults": "成员将使用组织默认模型设置。"
+    },
+    "executorGuide": {
+      "title": "首次对话前请先配置 BYON 执行器",
+      "subtitleOwner": "当前组织还没有在线工作节点。你可以在此页创建令牌并连接，或启动已配对节点。",
+      "subtitleMember": "当前组织还没有在线工作节点。请联系 owner/admin 完成连接或启动已配对节点。",
+      "autoTokenCreated": "已自动为该组织创建配对令牌。",
+      "tokenLabel": "配对令牌",
+      "creatingToken": "正在创建配对令牌...",
+      "tokenUnavailable": "暂无可用配对令牌，请先创建。",
+      "downloadCommand": "1）下载并解压执行器安装包",
+      "connectCommand": "2）将当前机器连接到组织",
+      "regenerateToken": "创建/轮换令牌",
+      "checkStatus": "我已连接，重新检查",
+      "openAgents": "打开工作节点页面",
+      "installerUnavailable": "安装包元数据暂不可用。请前往工作节点页面完成完整配置。",
+      "memberCannotPair": "你的角色无权创建配对令牌，请联系 owner/admin 操作。",
+      "blockComposerHint": "至少有一个执行器在线后，才能创建对话。",
+      "noExecutorErrorOwner": "当前没有在线工作节点。请先启动已配对节点，或重新配对后连接。",
+      "noExecutorErrorMember": "当前没有在线工作节点。请联系 owner/admin 启动已配对节点或重新配对。"
     },
     "list": {
       "title": "最近对话",
@@ -801,22 +899,22 @@
       "faq": "常见问题"
     },
     "hero": {
-      "eyebrow": "企业级智能代理平台",
-      "title": "企业级代理编排与自动化执行平台。",
-      "subtitle": "Vespid 将代理想法转化为生产工作流，提供多租户隔离、可审计运行与可选节点执行。",
+      "eyebrow": "企业级工作流编排平台",
+      "title": "企业级工作流与工作节点编排平台。",
+      "subtitle": "Vespid 将工作流想法转化为生产自动化，提供多租户隔离、可审计运行与可选节点执行。",
       "ctaPrimary": "免费开始",
       "ctaSecondary": "预约演示",
       "stats": {
         "rls": "默认多租户 RLS",
         "queue": "队列执行与重试",
-        "runtime": "Agent + Browser + Node 运行时"
+        "runtime": "Workflow + Browser + Worker Node 运行时"
       },
       "panel": {
         "title": "执行驾驶舱",
         "badge": "实时",
         "steps": {
           "intake": "接入 → 规范化",
-          "reasoning": "代理推理",
+          "reasoning": "工作流推理",
           "connector": "连接器动作",
           "node": "节点执行",
           "audit": "审计事件"
@@ -881,7 +979,7 @@
     },
     "features": {
       "eyebrow": "执行栈",
-      "title": "运行生产级智能代理的全栈能力",
+      "title": "运行生产级工作流的全栈能力",
       "subtitle": "从治理到执行，Vespid 提供团队可信赖的编排层。",
       "items": {
         "orgIsolation": {
@@ -890,7 +988,7 @@
         },
         "workflowDsl": {
           "title": "工作流 DSL v2",
-          "description": "构建可版本化、可测试、可上线的代理图。"
+          "description": "构建可版本化、可测试、可上线的工作流图。"
         },
         "queueFirst": {
           "title": "队列优先执行",
@@ -898,7 +996,7 @@
         },
         "nodeBrowser": {
           "title": "节点与浏览器执行",
-          "description": "按需将敏感步骤路由至节点代理或浏览器会话。"
+          "description": "按需将敏感步骤路由至工作节点或浏览器会话。"
         },
         "auditReady": {
           "title": "审计级运行事件",
@@ -917,7 +1015,7 @@
       "steps": {
         "design": {
           "title": "设计工作流",
-          "description": "用可视化 DSL 组合代理推理、连接器与运行规则。"
+          "description": "用可视化 DSL 组合工作流推理、连接器与运行规则。"
         },
         "publish": {
           "title": "发布并入队",
@@ -931,7 +1029,7 @@
     },
     "useCases": {
       "eyebrow": "用例",
-      "title": "驱动真实业务运转的代理工作流",
+      "title": "驱动真实业务运转的工作流自动化",
       "subtitle": "跨团队构建可复用的自动化，而无需重写基础设施。",
       "items": {
         "onboarding": {
@@ -975,7 +1073,7 @@
           "metric": "-68% 失败"
         },
         "retail": {
-          "title": "零售团队 30 天交付 12 条代理工作流",
+          "title": "零售团队 30 天交付 12 条工作流自动化",
           "description": "可复用模板与连接器加速跨团队自动化落地。",
           "metric": "12 条工作流"
         }
@@ -1059,7 +1157,7 @@
       "features": {
         "starter": {
           "workflowBuilder": "工作流构建器",
-          "standardAgents": "标准代理",
+          "standardAgents": "标准工作节点",
           "sharedQueue": "共享队列",
           "communityConnectors": "社区连接器"
         },
@@ -1088,7 +1186,7 @@
         },
         "infra": {
           "question": "可以使用自己的基础设施吗？",
-          "answer": "可以。通过节点代理与网关在你的网络内执行敏感任务。"
+          "answer": "可以。通过工作节点与网关在你的网络内执行敏感任务。"
         },
         "queue": {
           "question": "队列不可用时会发生什么？",
@@ -1106,7 +1204,7 @@
     },
     "cta": {
       "eyebrow": "开始使用",
-      "title": "准备好编排你的第一个代理工作流了吗？",
+      "title": "准备好编排你的第一个工作流了吗？",
       "subtitle": "为团队提供可靠的执行底座，快速交付自动化。",
       "ctaPrimary": "免费开始",
       "contactTitle": "联系销售",
