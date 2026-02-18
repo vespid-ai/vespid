@@ -112,59 +112,6 @@ export const platformSettings = pgTable("platform_settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const userPaymentEvents = pgTable(
-  "user_payment_events",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    provider: text("provider").notNull(),
-    providerEventId: text("provider_event_id").notNull(),
-    payerUserId: uuid("payer_user_id").references(() => users.id, { onDelete: "set null" }),
-    payerEmail: text("payer_email"),
-    status: text("status").notNull(),
-    amount: bigint("amount", { mode: "number" }),
-    currency: text("currency"),
-    rawPayload: jsonb("raw_payload").notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => ({
-    userPaymentEventsProviderEventUnique: uniqueIndex("user_payment_events_provider_event_unique").on(
-      table.provider,
-      table.providerEventId
-    ),
-    userPaymentEventsPayerCreatedAtIdx: index("user_payment_events_payer_created_at_idx").on(table.payerUserId, table.createdAt),
-    userPaymentEventsProviderStatusCreatedAtIdx: index("user_payment_events_provider_status_created_at_idx").on(
-      table.provider,
-      table.status,
-      table.createdAt
-    ),
-  })
-);
-
-export const userEntitlements = pgTable(
-  "user_entitlements",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    tier: text("tier").notNull(),
-    sourceProvider: text("source_provider").notNull(),
-    sourceEventId: text("source_event_id").notNull(),
-    validFrom: timestamp("valid_from", { withTimezone: true }).notNull().defaultNow(),
-    validUntil: timestamp("valid_until", { withTimezone: true }),
-    active: boolean("active").notNull().default(true),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => ({
-    userEntitlementsUserActiveIdx: index("user_entitlements_user_active_idx").on(table.userId, table.active, table.validUntil),
-    userEntitlementsSourceUnique: uniqueIndex("user_entitlements_source_unique").on(
-      table.userId,
-      table.sourceProvider,
-      table.sourceEventId
-    ),
-  })
-);
-
 export const workflows = pgTable("workflows", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -274,35 +221,6 @@ export const connectorSecrets = pgTable("connector_secrets", {
   ),
   connectorSecretsOrgConnectorIdx: index("connector_secrets_org_connector_idx").on(table.organizationId, table.connectorId),
 }));
-
-export const organizationCreditBalances = pgTable("organization_credit_balances", {
-  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
-  balanceCredits: bigint("balance_credits", { mode: "number" }).notNull().default(0),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const organizationCreditLedger = pgTable("organization_credit_ledger", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-  deltaCredits: bigint("delta_credits", { mode: "number" }).notNull(),
-  reason: text("reason").notNull(),
-  stripeEventId: text("stripe_event_id"),
-  workflowRunId: uuid("workflow_run_id").references(() => workflowRuns.id, { onDelete: "set null" }),
-  createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
-  metadata: jsonb("metadata"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => ({
-  organizationCreditLedgerOrgCreatedAtIdx: index("organization_credit_ledger_org_created_at_idx").on(
-    table.organizationId,
-    table.createdAt
-  ),
-}));
-
-export const organizationBillingAccounts = pgTable("organization_billing_accounts", {
-  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
-  stripeCustomerId: text("stripe_customer_id").notNull().unique(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const organizationAgents = pgTable("organization_agents", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -459,10 +377,10 @@ export const agentSessions = pgTable("agent_sessions", {
   bindingId: uuid("binding_id"),
   selectorTag: text("selector_tag"),
   selectorGroup: text("selector_group"),
-  engineId: text("engine_id").notNull().default("gateway.loop.v2"),
+  engineId: text("engine_id").notNull().default("gateway.codex.v2"),
   toolsetId: uuid("toolset_id").references(() => agentToolsets.id, { onDelete: "set null" }),
-  llmProvider: text("llm_provider").notNull().default("openai"),
-  llmModel: text("llm_model").notNull().default("gpt-5.3-codex"),
+  llmProvider: text("llm_provider").notNull().default("openai-codex"),
+  llmModel: text("llm_model").notNull().default("gpt-5-codex"),
   llmSecretId: uuid("llm_secret_id").references(() => connectorSecrets.id, { onDelete: "set null" }),
   toolsAllow: jsonb("tools_allow").notNull().default(sql`'[]'::jsonb`),
   limits: jsonb("limits").notNull().default(sql`'{}'::jsonb`),

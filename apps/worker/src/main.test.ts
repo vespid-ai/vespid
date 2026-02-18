@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const mocks = vi.hoisted(() => ({
   withTenantContext: vi.fn(),
@@ -50,7 +48,7 @@ vi.mock("./gateway/client.js", () => ({
 }));
 
 import { processWorkflowRunJob } from "./main.js";
-import type { EnterpriseProvider, WorkflowNodeExecutor } from "@vespid/shared";
+import type { WorkflowNodeExecutor } from "@vespid/shared";
 
 const pool = {} as ReturnType<typeof import("@vespid/db").createPool>;
 const jobBase = {
@@ -298,67 +296,4 @@ describe("workflow worker", () => {
     );
   });
 
-  it("prefers enterprise executors when provided via enterpriseProvider", async () => {
-    const enterpriseExecutor: WorkflowNodeExecutor = {
-      nodeType: "agent.execute",
-      async execute() {
-        return { status: "succeeded", output: { enterprise: true } };
-      },
-    };
-
-    const enterpriseProvider: EnterpriseProvider = {
-      edition: "enterprise",
-      name: "test-enterprise",
-      getCapabilities() {
-        return [];
-      },
-      getWorkflowNodeExecutors() {
-        return [enterpriseExecutor];
-      },
-    };
-
-    await processWorkflowRunJob(pool, jobBase, { enterpriseProvider });
-
-    expect(mocks.markWorkflowRunSucceeded).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        output: expect.objectContaining({
-          steps: [
-            expect.objectContaining({
-              nodeType: "agent.execute",
-              status: "succeeded",
-              output: { enterprise: true },
-            }),
-          ],
-        }),
-      })
-    );
-  });
-
-  it("loads enterprise provider module dynamically and applies executor override", async () => {
-    const fixturePath = path.resolve(process.cwd(), "../../tests/fixtures/enterprise-provider.mjs");
-    const fixtureUrl = pathToFileURL(fixturePath).toString();
-    const { loadEnterpriseProvider } = await import("@vespid/shared/enterprise-provider");
-
-    const provider = await loadEnterpriseProvider({ modulePath: fixtureUrl });
-
-    await processWorkflowRunJob(pool, jobBase, { enterpriseProvider: provider });
-
-    expect(mocks.markWorkflowRunSucceeded).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        output: expect.objectContaining({
-          steps: [
-            expect.objectContaining({
-              nodeType: "agent.execute",
-              status: "succeeded",
-              output: expect.objectContaining({
-                taskId: "n1-enterprise-task",
-              }),
-            }),
-          ],
-        }),
-      })
-    );
-  });
 });

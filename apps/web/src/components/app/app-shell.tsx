@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Cpu,
-  CreditCard,
   LayoutGrid,
   LogOut,
   Menu,
@@ -123,7 +122,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       try {
         const me = await apiFetchJson<{
           user: { id: string; email: string };
-          account: { tier: "free" | "paid" | "enterprise"; isSystemAdmin: boolean };
+          account: { isSystemAdmin: boolean };
           orgPolicy: { canManageOrganizations: boolean; maxOrganizations: number | null; currentOrganizations: number };
           orgs: Array<{ id: string; name: string; roleKey: string }>;
           defaultOrgId: string | null;
@@ -206,7 +205,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       { href: (l) => `/${l}/workflows`, labelKey: "nav.workflows", icon: <LayoutGrid className="h-4 w-4" /> },
       { href: (l) => `/${l}/models`, labelKey: "nav.models", icon: <Cpu className="h-4 w-4" /> },
       { href: (l) => `/${l}/channels`, labelKey: "nav.channels", icon: <MessageSquare className="h-4 w-4" /> },
-      { href: (l) => `/${l}/billing`, labelKey: "nav.billing", icon: <CreditCard className="h-4 w-4" /> },
       { href: (l) => `/${l}/agents`, labelKey: "nav.agents", icon: <Rocket className="h-4 w-4" /> },
       { href: (l) => `/${l}/toolsets`, labelKey: "nav.toolsets", icon: <Braces className="h-4 w-4" /> },
       ...(isSystemAdmin ? [{ href: (l: string) => `/${l}/admin`, labelKey: "nav.admin", icon: <ShieldCheck className="h-4 w-4" /> }] : []),
@@ -401,7 +399,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           { title: t("nav.workflows"), href: `/${locale}/workflows`, icon: LayoutGrid },
           { title: t("nav.models"), href: `/${locale}/models`, icon: Cpu },
           { title: t("nav.channels"), href: `/${locale}/channels`, icon: MessageSquare },
-          { title: t("nav.billing"), href: `/${locale}/billing`, icon: CreditCard },
           { title: t("nav.agents"), href: `/${locale}/agents`, icon: Rocket },
           { title: t("nav.toolsets"), href: `/${locale}/toolsets`, icon: Braces },
           ...(isSystemAdmin ? [{ title: t("nav.admin"), href: `/${locale}/admin`, icon: ShieldCheck }] : []),

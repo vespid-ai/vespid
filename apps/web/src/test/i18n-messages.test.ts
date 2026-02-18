@@ -44,7 +44,6 @@ describe("i18n message coverage", () => {
       "models.connections.apiKeyGroupTitle",
       "models.connections.oauthGroupTitle",
       "onboarding.title",
-      "billing.setupGuide",
       "sessions.create.modelChipAria",
       "sessions.chat.shortcutHint",
       "sessions.chat.roleAssistant",

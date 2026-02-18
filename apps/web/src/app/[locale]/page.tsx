@@ -324,19 +324,6 @@ export default function LocaleHomePage() {
           footerNote={t("marketing.pricing.footerNote")}
         />
 
-        <section className="pb-8">
-          <div className="mx-auto max-w-6xl px-6">
-            <div className="rounded-3xl border border-borderSubtle/70 bg-panel/50 p-6 shadow-elev1">
-              <div className="text-sm font-semibold text-text">{t("marketing.pricing.creditsCallout.title")}</div>
-              <div className="mt-2 grid gap-2 text-sm text-muted sm:grid-cols-3">
-                <div>{t("marketing.pricing.creditsCallout.items.managedCredits")}</div>
-                <div>{t("marketing.pricing.creditsCallout.items.byok")}</div>
-                <div>{t("marketing.pricing.creditsCallout.items.vertex")}</div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <Faq eyebrow={t("marketing.faq.eyebrow")} title={t("marketing.faq.title")} items={faqItems} />
 
         <MarketingCta

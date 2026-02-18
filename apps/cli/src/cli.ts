@@ -16,7 +16,7 @@ function usage(): never {
       "",
       "Commands:",
       "  vespid session list --api <url> --org <orgId> --token <accessToken>",
-      "  vespid session create --api <url> --org <orgId> --token <accessToken> --model <model> --instructions <text> [--title <text>] [--provider openai|anthropic] [--toolset <toolsetId>] [--tag <selectorTag>] [--tools <comma-separated>]",
+      "  vespid session create --api <url> --org <orgId> --token <accessToken> --model <model> --instructions <text> [--title <text>] [--engine codex|claude|opencode] [--toolset <toolsetId>] [--tag <selectorTag>] [--tools <comma-separated>]",
       "  vespid session send --gateway <wsUrl> --org <orgId> --token <accessToken> --session <sessionId> --message <text> [--timeout-ms <ms>]",
       "",
       "Notes:",
@@ -129,21 +129,26 @@ async function cmdSessionCreate(args: string[]) {
   const instructions = argValue(args, "--instructions");
   if (!apiBase || !orgId || !token || !model || !instructions) usage();
 
-  const provider = (argValue(args, "--provider") ?? "openai") as "openai" | "anthropic";
+  const engine = (argValue(args, "--engine") ?? "codex").trim().toLowerCase();
   const title = argValue(args, "--title") ?? "";
   const system = argValue(args, "--system") ?? "";
   const toolsetId = argValue(args, "--toolset");
   const selectorTag = argValue(args, "--tag");
   const tools = parseCommaList(argValue(args, "--tools"));
 
+  const engineId =
+    engine === "claude" ? "gateway.claude.v2" : engine === "opencode" ? "gateway.opencode.v2" : "gateway.codex.v2";
+
   const payload = {
     ...(title.trim().length ? { title: title.trim() } : {}),
-    engineId: "gateway.loop.v2",
+    engine: {
+      id: engineId,
+      model: model.trim(),
+    },
     ...(toolsetId && toolsetId.trim().length ? { toolsetId: toolsetId.trim() } : {}),
-    llm: { provider, model: model.trim() },
     prompt: { ...(system.trim().length ? { system: system.trim() } : {}), instructions: instructions.trim() },
     tools: { allow: tools },
-    ...(selectorTag && selectorTag.trim().length ? { executorSelector: { pool: "managed", tag: selectorTag.trim() } } : {}),
+    ...(selectorTag && selectorTag.trim().length ? { executorSelector: { pool: "byon", tag: selectorTag.trim() } } : {}),
   };
 
   const out = await apiFetchJson<{ session: { id: string } }>({

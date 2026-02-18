@@ -6,20 +6,22 @@ describe("connectors", () => {
     expect(defaultConnectors.some((connector) => connector.id === "jira")).toBe(true);
   });
 
-  it("allows enterprise connector injection without mutating defaults", () => {
+  it("includes migrated salesforce connector in defaults", () => {
+    expect(defaultConnectors.some((connector) => connector.id === "salesforce")).toBe(true);
+  });
+
+  it("allows additional connector injection without mutating defaults", () => {
     const catalog = createConnectorCatalog({
-      enterpriseConnectors: [
+      additionalConnectors: [
         {
-          id: "salesforce",
-          displayName: "Salesforce",
+          id: "notion",
+          displayName: "Notion",
           requiresSecret: true,
         },
       ],
     });
 
-    expect(catalog.some((connector) => connector.id === "salesforce" && connector.source === "enterprise")).toBe(
-      true
-    );
-    expect(defaultConnectors.some((connector) => connector.id === "salesforce")).toBe(false);
+    expect(catalog.some((connector) => connector.id === "notion")).toBe(true);
+    expect(defaultConnectors.some((connector) => connector.id === "notion")).toBe(false);
   });
 });

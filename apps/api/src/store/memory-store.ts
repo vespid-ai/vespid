@@ -12,8 +12,6 @@ import type {
   OrganizationAgentRecord,
   OrganizationExecutorRecord,
   ManagedExecutorRecord,
-  OrganizationCreditLedgerEntryRecord,
-  OrganizationCreditsRecord,
   OrganizationRecord,
   OrganizationSettings,
   SessionRecord,
@@ -40,8 +38,6 @@ import type {
   AgentMemoryChunkRecord,
   AgentMemoryDocumentRecord,
   AgentMemorySyncJobRecord,
-  UserEntitlementRecord,
-  UserPaymentEventRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -53,8 +49,6 @@ export class MemoryAppStore implements AppStore {
   private usersByEmail = new Map<string, string>();
   private platformUserRoles = new Map<string, PlatformUserRoleRecord>();
   private platformSettings = new Map<string, PlatformSettingRecord>();
-  private userPaymentEvents = new Map<string, UserPaymentEventRecord>();
-  private userEntitlements = new Map<string, UserEntitlementRecord>();
   private supportTickets = new Map<string, SupportTicketRecord>();
   private supportTicketEventsByTicketId = new Map<string, SupportTicketEventRecord[]>();
   private platformAuditLogs: PlatformAuditLogRecord[] = [];
@@ -75,10 +69,6 @@ export class MemoryAppStore implements AppStore {
     secretIv: Buffer;
     secretTag: Buffer;
   })>();
-  private orgCreditBalances = new Map<string, { balanceCredits: number; updatedAt: string }>();
-  private orgCreditLedger = new Map<string, Array<Omit<OrganizationCreditLedgerEntryRecord, "createdAt"> & { createdAt: Date }>>();
-  private processedStripeEvents = new Set<string>();
-  private orgBillingAccounts = new Map<string, { stripeCustomerId: string }>();
   private agentPairingTokensByHash = new Map<string, AgentPairingTokenRecord>();
   private executorPairingTokensByHash = new Map<string, ExecutorPairingTokenRecord>();
   private organizationAgents = new Map<
@@ -127,12 +117,6 @@ export class MemoryAppStore implements AppStore {
         paid: { canManageOrg: true, maxOrgs: 5 },
         enterprise: { canManageOrg: true, maxOrgs: null },
       },
-      updatedByUserId: null,
-      updatedAt: now,
-    });
-    this.platformSettings.set("payments.providers", {
-      key: "payments.providers",
-      value: { enabled: ["stripe"] },
       updatedByUserId: null,
       updatedAt: now,
     });
@@ -213,10 +197,7 @@ export class MemoryAppStore implements AppStore {
     return results;
   }
 
-  async ensurePersonalOrganizationForUser(input: {
-    actorUserId: string;
-    trialCredits: number;
-  }): Promise<{ defaultOrgId: string; created: boolean }> {
+  async ensurePersonalOrganizationForUser(input: { actorUserId: string }): Promise<{ defaultOrgId: string; created: boolean }> {
     const existing = await this.listOrganizationsForUser({ actorUserId: input.actorUserId });
     if (existing.length > 0) {
       return { defaultOrgId: existing[0]!.organization.id, created: false };
@@ -226,10 +207,6 @@ export class MemoryAppStore implements AppStore {
       name: "Personal workspace",
       slug: `personal-${input.actorUserId.slice(0, 8)}`,
       ownerUserId: input.actorUserId,
-    });
-    this.orgCreditBalances.set(created.organization.id, {
-      balanceCredits: Math.max(0, Math.floor(input.trialCredits)),
-      updatedAt: nowIso(),
     });
     return { defaultOrgId: created.organization.id, created: true };
   }
@@ -292,113 +269,6 @@ export class MemoryAppStore implements AppStore {
     };
     this.platformSettings.set(input.key, row);
     return row;
-  }
-
-  async createUserPaymentEvent(input: {
-    provider: string;
-    providerEventId: string;
-    payerUserId?: string | null;
-    payerEmail?: string | null;
-    status: string;
-    amount?: number | null;
-    currency?: string | null;
-    rawPayload?: unknown;
-  }): Promise<UserPaymentEventRecord> {
-    const key = `${input.provider}:${input.providerEventId}`;
-    const existing = [...this.userPaymentEvents.values()].find((row) => `${row.provider}:${row.providerEventId}` === key);
-    if (existing) {
-      return existing;
-    }
-    const row: UserPaymentEventRecord = {
-      id: crypto.randomUUID(),
-      provider: input.provider,
-      providerEventId: input.providerEventId,
-      payerUserId: input.payerUserId ?? null,
-      payerEmail: input.payerEmail ?? null,
-      status: input.status,
-      amount: input.amount ?? null,
-      currency: input.currency ?? null,
-      rawPayload: input.rawPayload ?? {},
-      createdAt: nowIso(),
-    };
-    this.userPaymentEvents.set(row.id, row);
-    return row;
-  }
-
-  async listUserPaymentEvents(input?: { provider?: string; limit?: number }): Promise<UserPaymentEventRecord[]> {
-    const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
-    let rows = [...this.userPaymentEvents.values()];
-    if (input?.provider) {
-      rows = rows.filter((row) => row.provider === input.provider);
-    }
-    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return rows.slice(0, limit);
-  }
-
-  async upsertUserEntitlement(input: {
-    userId: string;
-    tier: "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    validFrom?: Date;
-    validUntil?: Date | null;
-    active?: boolean;
-  }): Promise<UserEntitlementRecord> {
-    const existing = [...this.userEntitlements.values()].find(
-      (row) => row.userId === input.userId && row.sourceProvider === input.sourceProvider && row.sourceEventId === input.sourceEventId
-    );
-    const row: UserEntitlementRecord = {
-      id: existing?.id ?? crypto.randomUUID(),
-      userId: input.userId,
-      tier: input.tier,
-      sourceProvider: input.sourceProvider,
-      sourceEventId: input.sourceEventId,
-      validFrom: (input.validFrom ?? new Date()).toISOString(),
-      validUntil: input.validUntil ? input.validUntil.toISOString() : null,
-      active: input.active ?? true,
-      createdAt: existing?.createdAt ?? nowIso(),
-    };
-    this.userEntitlements.set(row.id, row);
-    return row;
-  }
-
-  async listUserEntitlements(input: { userId: string; activeOnly?: boolean }): Promise<UserEntitlementRecord[]> {
-    const nowMs = Date.now();
-    let rows = [...this.userEntitlements.values()].filter((row) => row.userId === input.userId);
-    if (input.activeOnly) {
-      rows = rows.filter((row) => row.active && (!row.validUntil || Date.parse(row.validUntil) > nowMs));
-    }
-    rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return rows;
-  }
-
-  async setUserEntitlementTier(input: {
-    userId: string;
-    tier: "free" | "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    actorUserId?: string | null;
-  }): Promise<UserEntitlementRecord | null> {
-    if (input.tier === "free") {
-      for (const [id, row] of this.userEntitlements.entries()) {
-        if (row.userId !== input.userId || !row.active) continue;
-        this.userEntitlements.set(id, {
-          ...row,
-          active: false,
-          validUntil: nowIso(),
-        });
-      }
-      return null;
-    }
-    return this.upsertUserEntitlement({
-      userId: input.userId,
-      tier: "paid",
-      sourceProvider: input.sourceProvider,
-      sourceEventId: input.sourceEventId,
-      validFrom: new Date(),
-      validUntil: null,
-      active: true,
-    });
   }
 
   async createSupportTicket(input: {
@@ -544,9 +414,6 @@ export class MemoryAppStore implements AppStore {
     };
 
     this.memberships.set(membership.id, membership);
-    if (!this.orgCreditBalances.has(organization.id)) {
-      this.orgCreditBalances.set(organization.id, { balanceCredits: 0, updatedAt: nowIso() });
-    }
     return { organization, membership };
   }
 
@@ -1359,134 +1226,6 @@ export class MemoryAppStore implements AppStore {
     }
     this.connectorSecrets.delete(input.secretId);
     return true;
-  }
-
-  async getOrganizationCredits(input: { organizationId: string; actorUserId?: string }): Promise<OrganizationCreditsRecord> {
-    const row = this.orgCreditBalances.get(input.organizationId) ?? { balanceCredits: 0, updatedAt: nowIso() };
-    this.orgCreditBalances.set(input.organizationId, row);
-    return { organizationId: input.organizationId, balanceCredits: row.balanceCredits, updatedAt: row.updatedAt };
-  }
-
-  async grantOrganizationCredits(input: {
-    organizationId: string;
-    actorUserId?: string;
-    credits: number;
-    reason: string;
-    metadata?: unknown;
-  }): Promise<OrganizationCreditsRecord> {
-    const existing = await this.getOrganizationCredits({ organizationId: input.organizationId });
-    const delta = Math.max(0, Math.floor(input.credits));
-    const next = {
-      balanceCredits: existing.balanceCredits + Math.max(0, Math.floor(input.credits)),
-      updatedAt: nowIso(),
-    };
-    this.orgCreditBalances.set(input.organizationId, next);
-
-    const ledger = this.orgCreditLedger.get(input.organizationId) ?? [];
-    ledger.push({
-      id: crypto.randomUUID(),
-      organizationId: input.organizationId,
-      deltaCredits: delta,
-      reason: input.reason,
-      stripeEventId: null,
-      workflowRunId: null,
-      createdByUserId: input.actorUserId ?? null,
-      metadata: input.metadata ?? null,
-      createdAt: new Date(),
-    });
-    this.orgCreditLedger.set(input.organizationId, ledger);
-
-    return { organizationId: input.organizationId, balanceCredits: next.balanceCredits, updatedAt: next.updatedAt };
-  }
-
-  async creditOrganizationFromStripeEvent(input: {
-    organizationId: string;
-    stripeEventId: string;
-    credits: number;
-    metadata?: unknown;
-  }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }> {
-    if (this.processedStripeEvents.has(input.stripeEventId)) {
-      return { applied: false, balance: await this.getOrganizationCredits({ organizationId: input.organizationId }) };
-    }
-    this.processedStripeEvents.add(input.stripeEventId);
-    const delta = Math.max(0, Math.floor(input.credits));
-    const existing = await this.getOrganizationCredits({ organizationId: input.organizationId });
-    const next = { balanceCredits: existing.balanceCredits + delta, updatedAt: nowIso() };
-    this.orgCreditBalances.set(input.organizationId, next);
-
-    const ledger = this.orgCreditLedger.get(input.organizationId) ?? [];
-    ledger.push({
-      id: crypto.randomUUID(),
-      organizationId: input.organizationId,
-      deltaCredits: delta,
-      reason: "stripe_topup",
-      stripeEventId: input.stripeEventId,
-      workflowRunId: null,
-      createdByUserId: null,
-      metadata: input.metadata ?? null,
-      createdAt: new Date(),
-    });
-    this.orgCreditLedger.set(input.organizationId, ledger);
-
-    const balance: OrganizationCreditsRecord = {
-      organizationId: input.organizationId,
-      balanceCredits: next.balanceCredits,
-      updatedAt: next.updatedAt,
-    };
-    return { applied: true, balance };
-  }
-
-  async listOrganizationCreditLedger(input: {
-    organizationId: string;
-    actorUserId: string;
-    limit: number;
-    cursor?: { createdAt: string; id: string } | null;
-  }): Promise<{ entries: OrganizationCreditLedgerEntryRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
-    const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(200, Math.floor(input.limit))) : 50;
-    const all = this.orgCreditLedger.get(input.organizationId) ?? [];
-
-    const cursor = input.cursor
-      ? { createdAtMs: new Date(input.cursor.createdAt).getTime(), id: input.cursor.id }
-      : null;
-
-    const filtered = cursor
-      ? all.filter((row) => {
-          const ts = row.createdAt.getTime();
-          return ts < cursor.createdAtMs || (ts === cursor.createdAtMs && row.id < cursor.id);
-        })
-      : all;
-
-    const sorted = [...filtered].sort((a, b) => {
-      const dt = b.createdAt.getTime() - a.createdAt.getTime();
-      if (dt !== 0) return dt;
-      return b.id.localeCompare(a.id);
-    });
-
-    const slice = sorted.slice(0, limit);
-    const next = sorted.length > limit ? slice[slice.length - 1] ?? null : null;
-
-    return {
-      entries: slice.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
-      nextCursor: next ? { createdAt: next.createdAt.toISOString(), id: next.id } : null,
-    };
-  }
-
-  async getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null> {
-    return this.orgBillingAccounts.get(input.organizationId) ?? null;
-  }
-
-  async createOrganizationBillingAccount(input: {
-    organizationId: string;
-    actorUserId?: string;
-    stripeCustomerId: string;
-  }): Promise<{ stripeCustomerId: string }> {
-    const existing = this.orgBillingAccounts.get(input.organizationId);
-    if (existing) {
-      return existing;
-    }
-    const row = { stripeCustomerId: input.stripeCustomerId };
-    this.orgBillingAccounts.set(input.organizationId, row);
-    return row;
   }
 
   async createAgentPairingToken(input: {

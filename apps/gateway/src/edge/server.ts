@@ -24,6 +24,7 @@ import type {
   GatewayBrainSessionEventV2,
   GatewayDispatchRequest,
   GatewayDispatchResponse,
+  GatewayExecutorEngineAuthMap,
   GatewayExecutorHelloV2,
   GatewayInvokeToolV2,
   SessionAttachmentV2,
@@ -38,6 +39,7 @@ import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";
 import { ensureConsumerGroup, xaddJson, xreadGroupJson } from "../bus/streams.js";
 import type { BrainToEdgeCommand, EdgeToBrainRequest } from "../bus/types.js";
 import { createChannelRuntimeManager } from "../channels/manager.js";
+import { listExecutorRoutes } from "../brain/scheduler.js";
 
 type ConnectedExecutor = {
   ws: WebSocket;
@@ -51,6 +53,7 @@ type ConnectedExecutor = {
   labels: string[];
   maxInFlight: number;
   kinds: Array<"connector.action" | "agent.execute" | "agent.run">;
+  engineAuth: GatewayExecutorEngineAuthMap;
 };
 
 function envNumber(name: string, fallback: number): number {
@@ -244,6 +247,25 @@ function parseMaxInFlight(capabilities: unknown, fallback: number): number {
   return fallback;
 }
 
+const engineAuthSchema = z
+  .object({
+    "gateway.codex.v2": z
+      .object({
+        oauthVerified: z.boolean(),
+        checkedAt: z.string().min(1),
+        reason: z.string().min(1),
+      })
+      .optional(),
+    "gateway.claude.v2": z
+      .object({
+        oauthVerified: z.boolean(),
+        checkedAt: z.string().min(1),
+        reason: z.string().min(1),
+      })
+      .optional(),
+  })
+  .strict();
+
 const dispatchRequestSchema = z.object({
   organizationId: z.string().uuid(),
   requestedByUserId: z.string().uuid(),
@@ -321,8 +343,8 @@ export async function buildGatewayEdgeServer(input?: {
           "req.headers['x-gateway-token']",
           "secret",
           "*.secret",
-          "sessionConfig.llm.auth",
-          "*.sessionConfig.llm.auth",
+          "sessionConfig.engine.auth",
+          "*.sessionConfig.engine.auth",
         ],
         censor: "[REDACTED]",
       },
@@ -379,9 +401,11 @@ export async function buildGatewayEdgeServer(input?: {
       executorId: executor.executorId,
       pool: executor.pool,
       organizationId: executor.organizationId,
+      name: executor.name,
       labels: executor.labels,
       maxInFlight: executor.maxInFlight,
       kinds: executor.kinds,
+      engineAuth: executor.engineAuth,
       lastSeenAtMs: executor.lastSeenAtMs,
     };
     try {
@@ -523,7 +547,16 @@ export async function buildGatewayEdgeServer(input?: {
               continue;
             }
             pendingToolResultByRequestId.set(cmd.invoke.requestId, { executorId: exec.executorId });
-            safeWsSend(exec.ws, cmd.invoke);
+            if (!safeWsSend(exec.ws, cmd.invoke)) {
+              executorsById.delete(exec.executorId);
+              try {
+                await redis.del(executorRouteKey(exec.executorId));
+              } catch {
+                // ignore
+              }
+              pendingToolResultByRequestId.delete(cmd.invoke.requestId);
+              await redis.set(replyKey(cmd.invoke.requestId), safeJsonStringify({ status: "failed", error: REMOTE_EXEC_ERROR.NoAgentAvailable }), "EX", resultsTtlSec);
+            }
             continue;
           }
 
@@ -538,7 +571,20 @@ export async function buildGatewayEdgeServer(input?: {
               );
               continue;
             }
-            safeWsSend(exec.ws, cmd.payload);
+            if (!safeWsSend(exec.ws, cmd.payload)) {
+              executorsById.delete(exec.executorId);
+              try {
+                await redis.del(executorRouteKey(exec.executorId));
+              } catch {
+                // ignore
+              }
+              await redis.set(
+                replyKey(cmd.payload.requestId),
+                safeJsonStringify({ status: "failed", error: REMOTE_EXEC_ERROR.PinnedAgentOffline }),
+                "EX",
+                resultsTtlSec
+              );
+            }
             continue;
           }
 
@@ -742,6 +788,19 @@ export async function buildGatewayEdgeServer(input?: {
     return reply.status(200).send(result);
   });
 
+  server.get("/internal/v1/executors/routes", async (request, reply) => {
+    const token = request.headers["x-gateway-token"];
+    if (typeof token !== "string" || token.length === 0 || token !== serviceToken) {
+      return reply.status(401).send({ code: "UNAUTHORIZED", message: "Invalid gateway service token" });
+    }
+    const orgId = parseUuid((request.query as { organizationId?: unknown })?.organizationId);
+    if (!orgId) {
+      return reply.status(400).send({ code: "BAD_REQUEST", message: "organizationId is required" });
+    }
+    const routes = await listExecutorRoutes(redis, { pool: "byon", organizationId: orgId });
+    return reply.status(200).send({ routes });
+  });
+
   server.post("/ingress/channels/:channelId/:accountKey", async (request, reply) => {
     const parsed = z
       .object({
@@ -937,6 +996,7 @@ export async function buildGatewayEdgeServer(input?: {
             labels: z.array(z.string().min(1).max(64)).max(50),
             maxInFlight: z.number().int().min(1).max(200),
             kinds: z.array(z.enum(["connector.action", "agent.execute", "agent.run"])).min(1),
+            engineAuth: engineAuthSchema.optional(),
           })
           .safeParse(message) as { success: boolean; data?: GatewayExecutorHelloV2 };
         if (!parsed.success || !parsed.data) return;
@@ -960,6 +1020,7 @@ export async function buildGatewayEdgeServer(input?: {
         executor.maxInFlight = Math.max(1, Math.min(executor.configuredMaxInFlight, reportedMax));
         executor.kinds = parsed.data.kinds ?? ["agent.execute", "connector.action", "agent.run"];
         executor.name = parsed.data.name ?? null;
+        executor.engineAuth = parsed.data.engineAuth ?? {};
         await touchExecutor(executor);
         await writeExecutorRoute(executor);
         return;
@@ -1205,6 +1266,7 @@ export async function buildGatewayEdgeServer(input?: {
           labels,
           maxInFlight: configuredMaxInFlight,
           kinds: parseKinds(managed.capabilities),
+          engineAuth: {},
         };
       } else {
         const orgId = tokenPrefix;
@@ -1234,6 +1296,7 @@ export async function buildGatewayEdgeServer(input?: {
           labels,
           maxInFlight: configuredMaxInFlight,
           kinds: parseKinds(row.capabilities),
+          engineAuth: {},
         };
       }
 

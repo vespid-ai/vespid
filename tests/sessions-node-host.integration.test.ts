@@ -256,7 +256,7 @@ describe("sessions node-host connectivity (integration)", () => {
     if (gateway) await gateway.close();
   });
 
-  it("pins BYON first and automatically fails over to managed pool when BYON goes offline", async () => {
+  it("pins BYON and returns an error when BYON executor goes offline", async () => {
     if (!available || !api || !gatewayWsUrl || !orgId || !token || !byonExecutorId || !managedExecutorId) return;
 
     const create = await api.inject({
@@ -265,8 +265,7 @@ describe("sessions node-host connectivity (integration)", () => {
       headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
       payload: {
         title: "Managed failover session",
-        engineId: "gateway.loop.v2",
-        llm: { provider: "openai", model: "gpt-4.1-mini" },
+        engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
         prompt: { instructions: "Say ok." },
         tools: { allow: [] },
         executorSelector: { pool: "byon" },
@@ -316,17 +315,15 @@ describe("sessions node-host connectivity (integration)", () => {
     }
 
     const countBeforeSecond = received.length;
-    const finalsBeforeSecond = received.filter((m) => m?.type === "agent_final").length;
 
     client.send(JSON.stringify({ type: "session_send", sessionId, message: "second", idempotencyKey: "k2" }));
 
-    expect(await waitFor(() => received.filter((m) => m?.type === "agent_final").length > finalsBeforeSecond, 5000)).toBe(true);
+    expect(await waitFor(() => received.length > countBeforeSecond, 5000)).toBe(true);
 
     const secondWave = received.slice(countBeforeSecond);
     const secondErrors = secondWave.filter((m) => m?.type === "session_error");
-    expect(secondErrors.length).toBe(0);
-    expect(secondWave.some((m) => m?.type === "agent_final" && typeof m.content === "string" && m.content.includes("managed"))).toBe(true);
-    expect(secondWave.some((m) => m?.type === "session_state" && m.pinnedExecutorPool === "managed")).toBe(true);
+    expect(secondErrors.length).toBeGreaterThan(0);
+    expect(secondWave.some((m) => m?.type === "agent_final")).toBe(false);
 
     const afterSecond = await api.inject({
       method: "GET",
@@ -335,26 +332,8 @@ describe("sessions node-host connectivity (integration)", () => {
     });
     expect(afterSecond.statusCode).toBe(200);
     const secondSession = (afterSecond.json() as any).session;
-    expect(secondSession.pinnedExecutorPool).toBe("managed");
-    expect(secondSession.pinnedExecutorId).toBe(managedExecutorId);
-
-    const events = await api.inject({
-      method: "GET",
-      url: `/v1/orgs/${orgId}/sessions/${sessionId}/events?limit=200`,
-      headers: { authorization: `Bearer ${token}`, "x-org-id": orgId },
-    });
-    expect(events.statusCode).toBe(200);
-    const rows = (events.json() as any).events as any[];
-    expect(
-      rows.some(
-        (e) =>
-          e.eventType === "system" &&
-          e.payload &&
-          typeof e.payload === "object" &&
-          (e.payload as any).action === "session_executor_failover" &&
-          (e.payload as any).to?.pool === "managed"
-      )
-    ).toBe(true);
+    expect(secondSession.pinnedExecutorPool).toBe("byon");
+    expect(secondSession.pinnedExecutorId).toBe(byonExecutorId);
 
     await new Promise<void>((resolve) => {
       client.close();

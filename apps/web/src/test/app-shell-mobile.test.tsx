@@ -69,7 +69,7 @@ describe("AppShell mobile rendering", () => {
           return new Response(
             JSON.stringify({
               user: { id: "u_1", email: "ops@vespid.ai" },
-              account: { tier: "paid", isSystemAdmin: false },
+              account: { isSystemAdmin: false },
               orgPolicy: { canManageOrganizations: true, maxOrganizations: 5, currentOrganizations: 0 },
               orgs: [],
               defaultOrgId: null,
@@ -131,7 +131,7 @@ describe("AppShell mobile rendering", () => {
           return new Response(
             JSON.stringify({
               user: { id: "u_1", email: "ops@vespid.ai" },
-              account: { tier: "free", isSystemAdmin: false },
+              account: { isSystemAdmin: false },
               orgPolicy: { canManageOrganizations: false, maxOrganizations: 1, currentOrganizations: 1 },
               orgs: [{ id: "org_default", name: "Default workspace", roleKey: "owner" }],
               defaultOrgId: "org_default",
@@ -161,7 +161,7 @@ describe("AppShell mobile rendering", () => {
           return new Response(
             JSON.stringify({
               user: { id: "u_1", email: "ops@vespid.ai" },
-              account: { tier: "paid", isSystemAdmin: true },
+              account: { isSystemAdmin: true },
               orgPolicy: { canManageOrganizations: true, maxOrganizations: 5, currentOrganizations: 1 },
               orgs: [{ id: "org_default", name: "Main Org", roleKey: "owner" }],
               defaultOrgId: "org_default",

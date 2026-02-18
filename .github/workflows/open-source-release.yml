@@ -1,19 +1,19 @@
-name: Community Release
+name: Open Source Release
 
 on:
   push:
     tags:
-      - "community-v*"
+      - "v*"
   workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
+  attestations: write
+  id-token: write
 
 jobs:
   build-node-agent-binaries:
-    # This workflow is mirrored into the public community repository; never run it there.
-    if: github.repository == 'vespid-ai/vespid'
     strategy:
       fail-fast: false
       matrix:
@@ -57,8 +57,6 @@ jobs:
           if-no-files-found: error
 
   release:
-    # This workflow is mirrored into the public community repository; never run it there.
-    if: github.repository == 'vespid-ai/vespid'
     needs:
       - build-node-agent-binaries
     runs-on: ubuntu-latest
@@ -80,18 +78,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Licensing and boundary gates
+      - name: OSS release gates
         run: |
-          pnpm check:boundary
           pnpm check:licenses
-          pnpm check:mirror
           pnpm check:secrets
 
       - name: Build workspace
         run: pnpm build
 
-      - name: Create SBOM
+      - name: Generate SBOM
         run: pnpm sbom:generate
+
+      - name: Verify SBOM exists
+        run: test -s artifacts/sbom/community-sbom.json
 
       - name: Download node-agent archives
         uses: actions/download-artifact@v4
@@ -110,28 +109,40 @@ jobs:
             .release-assets/vespid-agent-darwin-arm64.tar.gz \
             .release-assets/vespid-agent-linux-x64.tar.gz \
             .release-assets/vespid-agent-windows-x64.zip \
-            > .release-assets/vespid-agent-checksums.txt
+            artifacts/sbom/community-sbom.json \
+            > .release-assets/vespid-release-checksums.txt
 
-      - name: Upload packaged node-agent release assets
+      - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: node-agent-release-assets
+          name: vespid-release-assets
           path: |
             .release-assets/vespid-agent-darwin-arm64.tar.gz
             .release-assets/vespid-agent-linux-x64.tar.gz
             .release-assets/vespid-agent-windows-x64.zip
-            .release-assets/vespid-agent-checksums.txt
+            .release-assets/vespid-release-checksums.txt
+            artifacts/sbom/community-sbom.json
           if-no-files-found: error
 
-      - name: Publish node-agent binaries to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/community-v')
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            .release-assets/vespid-agent-darwin-arm64.tar.gz
+            .release-assets/vespid-agent-linux-x64.tar.gz
+            .release-assets/vespid-agent-windows-x64.zip
+            artifacts/sbom/community-sbom.json
+
+      - name: Publish release assets to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             .release-assets/vespid-agent-darwin-arm64.tar.gz
             .release-assets/vespid-agent-linux-x64.tar.gz
             .release-assets/vespid-agent-windows-x64.zip
-            .release-assets/vespid-agent-checksums.txt
+            .release-assets/vespid-release-checksums.txt
+            artifacts/sbom/community-sbom.json
           fail_on_unmatched_files: true
 
       - name: Set up Docker Buildx
@@ -144,29 +155,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push community API image
+      - name: Build and push API image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/community/api.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/vespid-api-community:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/vespid-api:${{ github.ref_name }}
 
-      - name: Build and push community Web image
+      - name: Build and push Web image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/community/web.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/vespid-web-community:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/vespid-web:${{ github.ref_name }}
 
-      - name: Build and push community Worker image
+      - name: Build and push Worker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/community/worker.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/vespid-worker-community:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/vespid-worker:${{ github.ref_name }}
 
       - name: Publish SDK package
         env:
@@ -176,7 +187,6 @@ jobs:
             echo "NPM_TOKEN is not set; skipping npm publish."
             exit 0
           fi
-          # pnpm/npm requires a userconfig with auth for the registry.
           printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > ~/.npmrc
           pnpm --filter @vespid/sdk-client test
           pnpm --filter @vespid/sdk-client publish --access public --no-git-checks

@@ -1,7 +1,7 @@
 {
   "name": "vespid",
   "private": true,
-  "license": "AGPL-3.0-only",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "build": "pnpm -r --if-present build",
@@ -18,12 +18,9 @@
     "smoke:channels": "pnpm exec tsx scripts/channel-smoke-matrix.ts",
     "load:channels": "pnpm exec tsx scripts/channel-load-matrix.ts",
     "regression:channels": "pnpm --filter @vespid/gateway exec vitest run src/channels/adapters/core.test.ts src/channels/security.test.ts src/channels/router.test.ts src/channels/manager.test.ts && pnpm --filter @vespid/tests exec vitest run channels-core8.integration.test.ts channels-extended.integration.test.ts channels-auth.integration.test.ts",
-    "check:boundary": "bash scripts/check-no-enterprise-imports.sh",
     "check:licenses": "node scripts/check-license-spdx.mjs",
-    "check:mirror": "node scripts/check-oss-mirror-dry-run.mjs",
     "check:migrations": "node scripts/check-migration-rollbacks.mjs",
     "check:secrets": "bash scripts/check-secrets.sh",
-    "mirror:prepare": "node scripts/prepare-community-mirror.mjs --out .community-mirror",
     "sbom:generate": "node scripts/create-sbom.mjs"
   },
   "devDependencies": {

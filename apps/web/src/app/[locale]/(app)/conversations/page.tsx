@@ -82,17 +82,19 @@ export default function ConversationsPage() {
   const [extraToolsRaw, setExtraToolsRaw] = useState<string>("");
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5.3-codex", secretId: null });
+  const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5-codex", secretId: null });
   const llmInitRef = useRef(false);
 
   const canOperate = Boolean(scopedOrgId);
   const roleKey = meQuery.data?.orgs?.find((o) => o.id === scopedOrgId)?.roleKey ?? null;
   const canEditOrgSettings = roleKey === "owner" || roleKey === "admin";
   const memberReadOnlyDefaults = roleKey === "member";
-  const llmSecretMissing = isOAuthRequiredProvider(llm.providerId) && !llm.secretId;
+  const llmSecretMissingWarning = isOAuthRequiredProvider(llm.providerId) && !llm.secretId;
 
   const selectedToolset = toolsets.find((ts: any) => ts.id === toolsetId) ?? null;
-  const sessionAllowedProviders = providersForContext("session");
+  const sessionAllowedProviders = providersForContext("session").filter((provider) =>
+    provider === "openai" || provider === "openai-codex" || provider === "anthropic" || provider === "opencode"
+  );
 
   const toolAllow = useMemo(() => {
     const base: string[] = [];
@@ -111,9 +113,10 @@ export default function ConversationsPage() {
     const provider = sessionDefaults && typeof sessionDefaults.provider === "string" ? sessionDefaults.provider : null;
     const model = sessionDefaults && typeof sessionDefaults.model === "string" ? sessionDefaults.model : null;
     if (provider || model) {
+      const normalizedProvider = provider === "openai-codex" ? "openai" : provider;
       setLlm((prev) => ({
         ...prev,
-        ...(provider ? { providerId: provider } : {}),
+        ...(normalizedProvider ? { providerId: normalizedProvider as any } : {}),
         ...(model ? { modelId: model } : {}),
       }));
     }
@@ -143,21 +146,22 @@ export default function ConversationsPage() {
     }
 
     try {
+      const engineId =
+        llm.providerId === "anthropic" ? "gateway.claude.v2" : llm.providerId === "opencode" ? "gateway.opencode.v2" : "gateway.codex.v2";
       const payload = {
         ...(title.trim().length > 0 ? { title: title.trim() } : {}),
-        engineId: "gateway.loop.v2",
-        ...(toolsetId.trim().length > 0 ? { toolsetId: toolsetId.trim() } : {}),
-        llm: {
-          provider: llm.providerId,
+        engine: {
+          id: engineId as "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2",
           model: llm.modelId.trim(),
           ...(llm.secretId ? { auth: { secretId: llm.secretId } } : {}),
         },
+        ...(toolsetId.trim().length > 0 ? { toolsetId: toolsetId.trim() } : {}),
         prompt: {
           ...(system.trim().length > 0 ? { system: system.trim() } : {}),
           instructions: instructions.trim() || DEFAULT_INSTRUCTIONS,
         },
         tools: { allow: toolAllow },
-        ...(selectorTag.trim().length > 0 ? { executorSelector: { pool: "managed", tag: selectorTag.trim() } } : {}),
+        ...(selectorTag.trim().length > 0 ? { executorSelector: { pool: "byon", tag: selectorTag.trim() } } : {}),
       } as const;
 
       const out = await createSession.mutateAsync(payload as any);
@@ -309,7 +313,7 @@ export default function ConversationsPage() {
                 variant="accent"
                 size="sm"
                 className="rounded-full"
-                disabled={!canOperate || createSession.isPending || message.trim().length === 0 || llmSecretMissing}
+                disabled={!canOperate || createSession.isPending || message.trim().length === 0}
                 onClick={() => void startConversation()}
               >
                 <Send className="mr-1 h-4 w-4" />
@@ -319,7 +323,7 @@ export default function ConversationsPage() {
 
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
               <span>{t("sessions.chat.shortcutHint")}</span>
-              {llmSecretMissing ? <span className="text-warn">{t("sessions.create.oauthRequired")}</span> : null}
+              {llmSecretMissingWarning ? <span className="text-warn">{t("sessions.create.oauthRequired")}</span> : null}
               {memberReadOnlyDefaults ? <span>{t("sessions.create.memberDefaults")}</span> : null}
             </div>
           </section>
@@ -455,7 +459,7 @@ export default function ConversationsPage() {
                 <div className="pt-1">
                   <Button
                     variant="outline"
-                    disabled={!canOperate || updateSettings.isPending || llm.modelId.trim().length === 0 || llmSecretMissing}
+                    disabled={!canOperate || updateSettings.isPending || llm.modelId.trim().length === 0}
                     onClick={async () => {
                       if (!scopedOrgId) return;
                       await updateSettings.mutateAsync({

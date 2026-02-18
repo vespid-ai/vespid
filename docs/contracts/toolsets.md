@@ -4,7 +4,7 @@ Toolsets are reusable bundles that package:
 - MCP server configurations (`mcpServers[]`)
 - Agent Skills bundles (`agentSkills[]`, `agentskills-v1`)
 
-They are designed to be attached to `agent.run` nodes executed by gateway brain (`engine.id="gateway.loop.v2"`).
+They are designed to be attached to `agent.run` nodes executed by gateway-dispatched BYON executors.
 
 ## Data Model
 
@@ -67,7 +67,7 @@ This MVP is validated primarily via unit/integration tests. If you want to verif
 1. Create a toolset with an external MCP server config using placeholder values (for example `env: { TOKEN: "${ENV:MY_TOKEN}" }`).
 2. Ensure the referenced environment variables are set in the executor environment (`MY_TOKEN` in this example).
 3. Attach the toolset to an `agent.run` node via `config.toolsetId` (or set an org default toolset).
-4. Run the workflow with `execution.mode="gateway"` and `engine.id="gateway.loop.v2"`.
+4. Run the workflow with `execution.mode="gateway"` and `engine.id` in `{gateway.codex.v2, gateway.claude.v2, gateway.opencode.v2}`.
 
 Expected results:
 - Node execution fails fast with `MCP_ENV_NOT_SET:VAR` when a placeholder env var is missing.

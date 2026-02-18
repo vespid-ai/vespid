@@ -29,7 +29,7 @@ describe("workflow dsl", () => {
           type: "agent.run",
           config: {
             toolsetId: "00000000-0000-0000-0000-000000000000",
-            llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
+            engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
             execution: { mode: "gateway" },
             prompt: { instructions: "Say hello." },
             tools: {
@@ -39,20 +39,6 @@ describe("workflow dsl", () => {
             },
             limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
             output: { mode: "text" },
-            team: {
-              mode: "supervisor",
-              maxParallel: 3,
-              leadMode: "normal",
-              teammates: [
-                {
-                  id: "ux",
-                  prompt: { instructions: "Review UX." },
-                  tools: { allow: [], execution: "cloud" },
-                  limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
-                  output: { mode: "json", jsonSchema: { type: "object" } },
-                },
-              ],
-            },
           },
         },
       ],
@@ -61,7 +47,7 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
-  it("accepts agent.run with anthropic provider and gateway execution selector", () => {
+  it("accepts agent.run with claude engine and gateway execution selector", () => {
     const parsed = workflowDslSchema.parse({
       version: "v2",
       trigger: { type: "trigger.manual" },
@@ -70,7 +56,7 @@ describe("workflow dsl", () => {
           id: "n1",
           type: "agent.run",
           config: {
-            llm: { provider: "anthropic", model: "claude-3-5-sonnet-latest", auth: { fallbackToEnv: true } },
+            engine: { id: "gateway.claude.v2", model: "claude-3-5-sonnet-latest" },
             execution: { mode: "gateway", selector: { tag: "west" } },
             prompt: { instructions: "Say hello." },
             tools: { allow: [], execution: "cloud" },
@@ -84,53 +70,7 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
-  it("rejects non-loop gateway engine ids", () => {
-    expect(() =>
-      workflowDslSchema.parse({
-        version: "v2",
-        trigger: { type: "trigger.manual" },
-        nodes: [
-          {
-            id: "n1",
-            type: "agent.run",
-            config: {
-              llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
-              execution: { mode: "gateway" },
-              engine: { id: "gateway.codex.v2" as any },
-              prompt: { instructions: "Say hello." },
-              tools: { allow: [], execution: "cloud" },
-              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
-              output: { mode: "text" },
-            },
-          },
-        ],
-      })
-    ).toThrow();
-  });
-
-  it("rejects vertex provider when llm.auth.secretId is missing", () => {
-    expect(() =>
-      workflowDslSchema.parse({
-        version: "v2",
-        trigger: { type: "trigger.manual" },
-        nodes: [
-          {
-            id: "n1",
-            type: "agent.run",
-            config: {
-              llm: { provider: "vertex", model: "gemini-2.0-flash-001", auth: { fallbackToEnv: true } },
-              prompt: { instructions: "Say hello." },
-              tools: { allow: [], execution: "cloud" },
-              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
-              output: { mode: "text" },
-            },
-          },
-        ],
-      })
-    ).toThrow();
-  });
-
-  it("accepts vertex provider when llm.auth.secretId is present", () => {
+  it("accepts supported gateway engine ids", () => {
     const parsed = workflowDslSchema.parse({
       version: "v2",
       trigger: { type: "trigger.manual" },
@@ -139,11 +79,51 @@ describe("workflow dsl", () => {
           id: "n1",
           type: "agent.run",
           config: {
-            llm: {
-              provider: "vertex",
-              model: "gemini-2.0-flash-001",
-              auth: { secretId: "00000000-0000-0000-0000-000000000000", fallbackToEnv: true },
+            execution: { mode: "gateway" },
+            engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+            prompt: { instructions: "Say hello." },
+            tools: { allow: [], execution: "cloud" },
+            limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+            output: { mode: "text" },
+          },
+        },
+      ],
+    });
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
+  });
+
+  it("rejects unsupported engine id", () => {
+    expect(() =>
+      workflowDslSchema.parse({
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [
+          {
+            id: "n1",
+            type: "agent.run",
+            config: {
+              engine: { id: "gateway.invalid.v2" as any, model: "invalid-model" },
+              prompt: { instructions: "Say hello." },
+              tools: { allow: [], execution: "cloud" },
+              limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
+              output: { mode: "text" },
             },
+          },
+        ],
+      })
+    ).toThrow();
+  });
+
+  it("accepts codex engine with optional secret", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            engine: { id: "gateway.codex.v2", model: "gpt-5-codex", auth: { secretId: "00000000-0000-0000-0000-000000000000" } },
             prompt: { instructions: "Say hello." },
             tools: { allow: [], execution: "cloud" },
             limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },
@@ -164,7 +144,7 @@ describe("workflow dsl", () => {
           id: "n1",
           type: "agent.run",
           config: {
-            llm: { provider: "openai", model: "gpt-5.3-codex", auth: { fallbackToEnv: true } },
+            engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
             prompt: { instructions: "Call no tools." },
             tools: { allow: [], execution: "cloud" },
             limits: { maxTurns: 2, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000, maxRuntimeChars: 2048 },

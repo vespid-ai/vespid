@@ -2,8 +2,6 @@ import crypto from "node:crypto";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
-import rawBody from "fastify-raw-body";
-import Stripe from "stripe";
 import {
   AppError,
   badRequest,
@@ -11,19 +9,23 @@ import {
   forbidden,
   notFound,
   unauthorized,
-  type EnterpriseProvider,
   type AppError as AppErrorType,
   validateAgentSkillBundles,
   validateMcpPlaceholderPolicy,
   type ToolsetCatalogItem,
   type ToolsetDraft,
   type ToolsetBuilderLlmConfig,
+  getAllAgentSecretConnectorIds,
   getAllLlmConnectorIds,
+  getAgentEngineMeta,
   getCatalogSnapshotInfo,
   getDefaultConnectorIdForProvider,
   getDefaultModelForProvider,
   getLlmProviderMeta,
+  isAgentEngineId,
   isOAuthRequiredProvider,
+  listPlatformCapabilities,
+  listAgentEngines,
   listAllCatalogModels,
   listLlmProviders,
   normalizeLlmProviderId,
@@ -33,11 +35,6 @@ import {
   type LlmProviderId,
   type LlmUsageContext,
 } from "@vespid/shared";
-import {
-  loadEnterpriseProvider,
-  resolveEditionCapabilities,
-  resolveEnterpriseConnectors,
-} from "@vespid/shared/enterprise-provider";
 import { signAuthToken, verifyAuthToken } from "@vespid/shared/auth";
 import { createConnectorCatalog } from "@vespid/connectors";
 import { listChannelDefinitions } from "@vespid/channels";
@@ -46,7 +43,7 @@ import { z } from "zod";
 import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
 import { createVertexOAuthServiceFromEnv, type VertexOAuthService } from "./vertex-oauth.js";
 import { createStore } from "./store/index.js";
-import type { AccountTier, AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
+import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
 import { workflowDslAnySchema, validateV3GraphConstraints } from "@vespid/workflow";
 import { getToolsetCatalog } from "./toolsets/catalog.js";
@@ -132,7 +129,6 @@ const ACCESS_TOKEN_TTL_SEC = Number(process.env.ACCESS_TOKEN_TTL_SEC ?? 15 * 60)
 const SESSION_TTL_SEC = Number(process.env.SESSION_TTL_SEC ?? 7 * 24 * 60 * 60);
 const OAUTH_CONTEXT_TTL_SEC = Number(process.env.OAUTH_CONTEXT_TTL_SEC ?? 10 * 60);
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME ?? "vespid_session";
-const PERSONAL_TRIAL_CREDITS = Number(process.env.PERSONAL_TRIAL_CREDITS ?? 100);
 const OAUTH_STATE_COOKIE_NAME = "vespid_oauth_state";
 const OAUTH_NONCE_COOKIE_NAME = "vespid_oauth_nonce";
 const VERTEX_OAUTH_STATE_COOKIE_NAME = "vespid_vertex_oauth_state";
@@ -148,7 +144,7 @@ const INTERNAL_API_SERVICE_TOKEN =
 const GATEWAY_HTTP_URL = process.env.GATEWAY_HTTP_URL ?? "http://localhost:3002";
 const GATEWAY_INTERNAL_SERVICE_TOKEN =
   process.env.GATEWAY_SERVICE_TOKEN ?? process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? "dev-gateway-token";
-const DEFAULT_AGENT_INSTALLER_REPOSITORY = "vespid-ai/vespid-community";
+const DEFAULT_AGENT_INSTALLER_REPOSITORY = "vespid-ai/vespid";
 const DEFAULT_AGENT_INSTALLER_CHANNEL = "latest";
 const AGENT_INSTALLER_ARTIFACTS: AgentInstallerArtifact[] = [
   {
@@ -216,9 +212,6 @@ const DEFAULT_ORG_POLICY: OrgPolicy = {
   enterprise: { canManageOrg: true, maxOrgs: null },
 };
 
-const SUPPORTED_PAYMENT_PROVIDERS = ["stripe", "creem", "paypal", "crypto"] as const;
-type SupportedPaymentProvider = (typeof SUPPORTED_PAYMENT_PROVIDERS)[number];
-
 const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
@@ -235,10 +228,6 @@ const createOrgSchema = z.object({
   slug: z.string().regex(/^[a-z0-9-]{3,50}$/),
 });
 
-const paymentProviderParamSchema = z.object({
-  provider: z.enum(SUPPORTED_PAYMENT_PROVIDERS),
-});
-
 const adminSystemAdminMutationSchema = z
   .object({
     userId: z.string().uuid().optional(),
@@ -252,19 +241,6 @@ const adminSystemAdminMutationSchema = z
 const adminPlatformSettingUpdateSchema = z.object({
   key: z.string().min(1).max(120),
   value: z.unknown(),
-});
-
-const adminUserTierUpdateSchema = z.object({
-  tier: z.enum(["free", "paid"]),
-});
-
-const adminPaymentEventsQuerySchema = z.object({
-  provider: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-});
-
-const adminPaymentsProviderUpdateSchema = z.object({
-  enabled: z.boolean(),
 });
 
 const adminSupportTicketsQuerySchema = z.object({
@@ -390,6 +366,21 @@ const llmDefaultPrimarySchema = z
     }
   });
 
+const agentEngineAuthDefaultSchema = z
+  .object({
+    mode: z.enum(["oauth_executor", "api_key"]).optional(),
+    secretId: z.string().uuid().nullable().optional(),
+  })
+  .strict();
+
+const agentEngineAuthDefaultsSchema = z
+  .object({
+    "gateway.codex.v2": agentEngineAuthDefaultSchema.optional(),
+    "gateway.claude.v2": agentEngineAuthDefaultSchema.optional(),
+    "gateway.opencode.v2": agentEngineAuthDefaultSchema.optional(),
+  })
+  .strict();
+
 const channelIdSchema = z.enum([
   "whatsapp",
   "telegram",
@@ -498,6 +489,12 @@ const orgSettingsSchema = z
       })
       .strict()
       .optional(),
+    agents: z
+      .object({
+        engineAuthDefaults: agentEngineAuthDefaultsSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -520,6 +517,41 @@ function normalizeProviderDefault(input: {
   };
 }
 
+type AgentEngineAuthDefault = {
+  mode: "oauth_executor" | "api_key";
+  secretId: string | null;
+};
+
+type AgentEngineAuthDefaults = {
+  "gateway.codex.v2": AgentEngineAuthDefault;
+  "gateway.claude.v2": AgentEngineAuthDefault;
+  "gateway.opencode.v2": AgentEngineAuthDefault;
+};
+
+function defaultEngineAuthMode(engineId: keyof AgentEngineAuthDefaults): "oauth_executor" | "api_key" {
+  return engineId === "gateway.opencode.v2" ? "api_key" : "oauth_executor";
+}
+
+function normalizeAgentEngineAuthDefault(engineId: keyof AgentEngineAuthDefaults, value: unknown): AgentEngineAuthDefault {
+  const parsed = agentEngineAuthDefaultSchema.safeParse(value ?? {});
+  const mode = parsed.success && parsed.data.mode ? parsed.data.mode : defaultEngineAuthMode(engineId);
+  const secretId = parsed.success && "secretId" in parsed.data ? (parsed.data.secretId ?? null) : null;
+  if (mode === "oauth_executor") {
+    return { mode, secretId: null };
+  }
+  return { mode, secretId };
+}
+
+function normalizeAgentEngineAuthDefaults(value: unknown): AgentEngineAuthDefaults {
+  const parsed = agentEngineAuthDefaultsSchema.safeParse(value ?? {});
+  const raw = parsed.success ? parsed.data : {};
+  return {
+    "gateway.codex.v2": normalizeAgentEngineAuthDefault("gateway.codex.v2", raw["gateway.codex.v2"]),
+    "gateway.claude.v2": normalizeAgentEngineAuthDefault("gateway.claude.v2", raw["gateway.claude.v2"]),
+    "gateway.opencode.v2": normalizeAgentEngineAuthDefault("gateway.opencode.v2", raw["gateway.opencode.v2"]),
+  };
+}
+
 function normalizeOrgSettings(input: unknown): {
   tools: { shellRunEnabled: boolean };
   toolsets: { defaultToolsetId: string | null };
@@ -529,16 +561,22 @@ function normalizeOrgSettings(input: unknown): {
     };
     providers: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>>;
   };
+  agents: {
+    engineAuthDefaults: AgentEngineAuthDefaults;
+  };
 } {
   const root = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
   const toolsRaw = root["tools"];
   const toolsetsRaw = root["toolsets"];
   const llmRaw = root["llm"];
+  const agentsRaw = root["agents"];
 
   const toolsObj = toolsRaw && typeof toolsRaw === "object" && !Array.isArray(toolsRaw) ? (toolsRaw as Record<string, unknown>) : {};
   const toolsetsObj =
     toolsetsRaw && typeof toolsetsRaw === "object" && !Array.isArray(toolsetsRaw) ? (toolsetsRaw as Record<string, unknown>) : {};
   const llmObj = llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw) ? (llmRaw as Record<string, unknown>) : {};
+  const agentsObj =
+    agentsRaw && typeof agentsRaw === "object" && !Array.isArray(agentsRaw) ? (agentsRaw as Record<string, unknown>) : {};
 
   const llmProviders: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>> = {};
 
@@ -585,6 +623,9 @@ function normalizeOrgSettings(input: unknown): {
         primary: primaryDefaults,
       },
       providers: llmProviders,
+    },
+    agents: {
+      engineAuthDefaults: normalizeAgentEngineAuthDefaults(agentsObj.engineAuthDefaults),
     },
   };
 }
@@ -814,6 +855,10 @@ function orgLimitReached(message = "You have reached your organization limit"): 
   return new AppError(409, { code: "ORG_LIMIT_REACHED", message });
 }
 
+function orgSlugConflict(message = "Organization slug already exists"): AppError {
+  return new AppError(409, { code: "ORG_SLUG_CONFLICT", message });
+}
+
 function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
   return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
 }
@@ -903,6 +948,58 @@ function llmKeyInvalid(message = "Provider rejected the API key"): AppError {
 
 function llmKeyTestUnavailable(message = "Provider key validation is currently unavailable"): AppError {
   return new AppError(503, { code: "LLM_KEY_TEST_UNAVAILABLE", message });
+}
+
+function readPgErrorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return null;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function readErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const value = (error as { message?: unknown }).message;
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return String(error);
+}
+
+function isPgUndefinedTableError(error: unknown, relation: string): boolean {
+  if (readPgErrorCode(error) !== "42P01") {
+    return false;
+  }
+  return readErrorMessage(error).toLowerCase().includes(relation.toLowerCase());
+}
+
+function isPgUniqueViolation(error: unknown): boolean {
+  return readPgErrorCode(error) === "23505";
+}
+
+function isOrgSlugConflictError(error: unknown): boolean {
+  if (error instanceof Error && error.message === "ORG_SLUG_EXISTS") {
+    return true;
+  }
+  if (!isPgUniqueViolation(error)) {
+    return false;
+  }
+  const message = readErrorMessage(error).toLowerCase();
+  const constraint =
+    typeof error === "object" && error !== null && "constraint" in error
+      ? String((error as { constraint?: unknown }).constraint ?? "").toLowerCase()
+      : "";
+  return (
+    constraint.includes("organizations_slug") ||
+    message.includes("organizations_slug") ||
+    message.includes("organizations.slug") ||
+    message.includes("slug")
+  );
 }
 
 function normalizeAgentInstallerRepository(value: string | null | undefined): string {
@@ -1239,31 +1336,12 @@ function normalizeOrgPolicy(value: unknown): OrgPolicy {
   };
 }
 
-function normalizeEnabledPaymentProviders(value: unknown): SupportedPaymentProvider[] {
-  const fallback: SupportedPaymentProvider[] = ["stripe"];
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return fallback;
-  }
-  const enabled = (value as Record<string, unknown>).enabled;
-  if (!Array.isArray(enabled)) {
-    return fallback;
-  }
-  const filtered = enabled
-    .map((provider) => (typeof provider === "string" ? provider.toLowerCase() : ""))
-    .filter((provider): provider is SupportedPaymentProvider =>
-      SUPPORTED_PAYMENT_PROVIDERS.includes(provider as SupportedPaymentProvider)
-    );
-  return filtered.length > 0 ? [...new Set(filtered)] : fallback;
-}
-
 export async function buildServer(input?: {
   store?: AppStore;
   oauthService?: OAuthService;
   vertexOAuthService?: VertexOAuthService | null;
   orgContextEnforcement?: OrgContextEnforcement;
   queueProducer?: WorkflowRunQueueProducer;
-  enterpriseProvider?: EnterpriseProvider;
-  stripe?: Stripe;
   agentInstaller?: Partial<AgentInstallerConfig>;
 }) {
   const server = Fastify({
@@ -1287,13 +1365,6 @@ export async function buildServer(input?: {
     },
     credentials: true,
   });
-  await server.register(rawBody, {
-    field: "rawBody",
-    global: false,
-    encoding: false,
-    runFirst: true,
-  });
-
   const store = input?.store ?? createStore();
   const oauthService = input?.oauthService ?? createOAuthServiceFromEnv();
   const vertexOAuthService = input?.vertexOAuthService ?? createVertexOAuthServiceFromEnv();
@@ -1309,120 +1380,15 @@ export async function buildServer(input?: {
     channel: normalizeAgentInstallerChannel(input?.agentInstaller?.channel ?? process.env.AGENT_INSTALLER_CHANNEL),
     docsUrl: normalizeAgentInstallerDocsUrl(input?.agentInstaller?.docsUrl ?? process.env.AGENT_INSTALLER_DOCS_URL),
   };
-  const enterpriseProvider = await loadEnterpriseProvider({
-    ...(input?.enterpriseProvider ? { inlineProvider: input.enterpriseProvider } : {}),
-    logger: server.log,
-  });
-  const editionCapabilities = resolveEditionCapabilities(enterpriseProvider);
-  const connectorCatalog = createConnectorCatalog({
-    enterpriseConnectors: resolveEnterpriseConnectors(enterpriseProvider),
-  });
+  const capabilitiesCatalog = listPlatformCapabilities();
+  const connectorCatalog = createConnectorCatalog();
   const channelCatalog = listChannelDefinitions();
   const allowedSecretConnectorIds = new Set<string>([
     ...connectorCatalog.map((connector) => connector.id),
     ...getAllLlmConnectorIds(),
+    ...getAllAgentSecretConnectorIds(),
   ]);
   await store.ensureDefaultRoles();
-
-  const stripe =
-    input?.stripe ??
-    (process.env.STRIPE_SECRET_KEY
-      ? new Stripe(process.env.STRIPE_SECRET_KEY, {
-          // Pin an API version for reproducibility. Update intentionally when needed.
-          apiVersion: "2026-01-28.clover",
-        })
-      : null);
-  const stripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET ?? null;
-
-  type StripeCreditsPackConfig = { priceId: string; credits: number };
-  function parseStripeCreditsPacks(): Record<string, StripeCreditsPackConfig> | null {
-    const raw = process.env.STRIPE_CREDITS_PACKS_JSON;
-    if (!raw || raw.trim().length === 0) {
-      return null;
-    }
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return null;
-      }
-      const out: Record<string, StripeCreditsPackConfig> = {};
-      for (const [packId, value] of Object.entries(parsed as Record<string, any>)) {
-        if (typeof packId !== "string" || packId.trim().length === 0) {
-          continue;
-        }
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          continue;
-        }
-        const priceId = typeof (value as any).priceId === "string" ? String((value as any).priceId) : "";
-        const credits = Number((value as any).credits);
-        if (!priceId || !Number.isFinite(credits) || credits <= 0) {
-          continue;
-        }
-        out[packId] = { priceId, credits: Math.floor(credits) };
-      }
-      return Object.keys(out).length > 0 ? out : null;
-    } catch {
-      return null;
-    }
-  }
-  const stripeCreditsPacks = parseStripeCreditsPacks();
-
-  type StripeCreditsPackSummary = {
-    packId: string;
-    credits: number;
-    currency?: string;
-    unitAmount?: number;
-    productName?: string;
-  };
-
-  type StripePriceSummary = {
-    currency: string | null;
-    unitAmount: number | null;
-    productName: string | null;
-  };
-
-  const stripePriceCache = new Map<string, { value: StripePriceSummary; expiresAtMs: number }>();
-  const stripePriceInFlight = new Map<string, Promise<StripePriceSummary>>();
-  const STRIPE_PRICE_CACHE_TTL_MS = 10 * 60_000;
-
-  async function getStripePriceSummary(priceId: string): Promise<StripePriceSummary> {
-    if (!stripe) {
-      throw new Error("STRIPE_NOT_CONFIGURED");
-    }
-
-    const cached = stripePriceCache.get(priceId);
-    if (cached && cached.expiresAtMs > Date.now()) {
-      return cached.value;
-    }
-
-    const inFlight = stripePriceInFlight.get(priceId);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const promise = (async () => {
-      // Expand product so we can surface a stable name without extra calls.
-      const price = await stripe.prices.retrieve(priceId, { expand: ["product"] });
-      const productName =
-        price.product && typeof price.product === "object" && "name" in price.product && typeof (price.product as any).name === "string"
-          ? String((price.product as any).name)
-          : null;
-      const summary: StripePriceSummary = {
-        currency: typeof price.currency === "string" ? price.currency : null,
-        unitAmount: typeof price.unit_amount === "number" ? price.unit_amount : null,
-        productName,
-      };
-      stripePriceCache.set(priceId, { value: summary, expiresAtMs: Date.now() + STRIPE_PRICE_CACHE_TTL_MS });
-      return summary;
-    })();
-
-    stripePriceInFlight.set(priceId, promise);
-    try {
-      return await promise;
-    } finally {
-      stripePriceInFlight.delete(priceId);
-    }
-  }
 
   const authSecret = process.env.AUTH_TOKEN_SECRET ?? "dev-auth-secret";
   const refreshSecret = process.env.REFRESH_TOKEN_SECRET ?? authSecret;
@@ -1573,12 +1539,7 @@ export async function buildServer(input?: {
   }
 
   async function ensurePersonalWorkspace(user: UserRecord): Promise<void> {
-    const credits = Number.isFinite(PERSONAL_TRIAL_CREDITS) ? Math.max(0, Math.floor(PERSONAL_TRIAL_CREDITS)) : 0;
-    await store.ensurePersonalOrganizationForUser({ actorUserId: user.id, trialCredits: credits });
-  }
-
-  function isEnterpriseEdition(): boolean {
-    return String(enterpriseProvider.edition).toLowerCase() === "enterprise";
+    await store.ensurePersonalOrganizationForUser({ actorUserId: user.id });
   }
 
   function isBootstrapSystemAdminEmail(email: string | null | undefined): boolean {
@@ -1604,40 +1565,30 @@ export async function buildServer(input?: {
     return normalizeOrgPolicy(setting?.value);
   }
 
-  async function getEnabledPaymentProviders(): Promise<SupportedPaymentProvider[]> {
-    const setting = await store.getPlatformSetting({ key: "payments.providers" });
-    return normalizeEnabledPaymentProviders(setting?.value);
-  }
-
-  async function resolveAccountTier(userId: string): Promise<AccountTier> {
-    if (isEnterpriseEdition()) {
-      return "enterprise";
-    }
-    const entitlements = await store.listUserEntitlements({ userId, activeOnly: true });
-    const hasPaid = entitlements.some((entitlement) => entitlement.tier === "paid" && entitlement.active);
-    return hasPaid ? "paid" : "free";
-  }
-
   async function resolveUserCapabilities(input: { userId: string; email?: string | null }): Promise<{
-    tier: AccountTier;
     isSystemAdmin: boolean;
     orgPolicy: MeOrgPolicy;
   }> {
     await ensureSystemAdminBootstrap({ userId: input.userId, email: input.email ?? null });
-    const [tier, roleRows, orgs, orgPolicy] = await Promise.all([
-      resolveAccountTier(input.userId),
-      store.listPlatformUserRoles({ userId: input.userId, roleKey: "system_admin" }),
-      store.listOrganizationsForUser({ actorUserId: input.userId }),
-      getOrgPolicy(),
-    ]);
-
-    const tierPolicy = tier === "enterprise" ? orgPolicy.enterprise : tier === "paid" ? orgPolicy.paid : orgPolicy.free;
+    const roleRowsPromise = store.listPlatformUserRoles({ userId: input.userId, roleKey: "system_admin" }).catch((error) => {
+      if (isPgUndefinedTableError(error, "platform_user_roles")) {
+        server.log.warn(
+          {
+            event: "platform_user_roles_missing",
+            userId: input.userId,
+          },
+          "platform_user_roles table is missing; continuing without system-admin role lookup"
+        );
+        return [];
+      }
+      throw error;
+    });
+    const [roleRows, orgs] = await Promise.all([roleRowsPromise, store.listOrganizationsForUser({ actorUserId: input.userId })]);
     return {
-      tier,
       isSystemAdmin: roleRows.length > 0,
       orgPolicy: {
-        canManageOrganizations: tierPolicy.canManageOrg,
-        maxOrganizations: tierPolicy.maxOrgs,
+        canManageOrganizations: true,
+        maxOrganizations: null,
         currentOrganizations: orgs.length,
       },
     };
@@ -2006,7 +1957,6 @@ export async function buildServer(input?: {
     return {
       user: toPublicUser(user),
       account: {
-        tier: capabilities.tier,
         isSystemAdmin: capabilities.isSystemAdmin,
       },
       orgPolicy: capabilities.orgPolicy,
@@ -2060,12 +2010,7 @@ export async function buildServer(input?: {
 
   server.get("/v1/meta/capabilities", async () => {
     return {
-      edition: enterpriseProvider.edition,
-      capabilities: editionCapabilities,
-      provider: {
-        name: enterpriseProvider.name,
-        version: enterpriseProvider.version ?? null,
-      },
+      capabilities: capabilitiesCatalog,
     };
   });
 
@@ -2075,23 +2020,9 @@ export async function buildServer(input?: {
     };
   });
 
-  server.get("/v1/llm/providers", async (request) => {
-    const parsedQuery = llmProvidersQuerySchema.safeParse(request.query ?? {});
-    if (!parsedQuery.success) {
-      throw badRequest("Invalid llm providers query", parsedQuery.error.flatten());
-    }
-    const context = parsedQuery.data.context;
-    const providers = listLlmProviders({
-      ...(context ? { context: context as LlmUsageContext } : {}),
-    }).map((provider) => ({
-      ...provider,
-      oauthSupported: provider.authMode === "oauth",
-      models: listAllCatalogModels().filter((model) => model.providerId === provider.id),
-    }));
-
+  server.get("/v1/agent/engines", async () => {
     return {
-      providers,
-      source: getCatalogSnapshotInfo(),
+      engines: listAgentEngines(),
     };
   });
 
@@ -2358,286 +2289,21 @@ export async function buildServer(input?: {
       throw orgLimitReached("Organization limit reached for your account.");
     }
 
-    const created = await store.createOrganizationWithOwner({
-      name: parsed.data.name,
-      slug: parsed.data.slug,
-      ownerUserId: auth.userId,
-    });
+    let created;
+    try {
+      created = await store.createOrganizationWithOwner({
+        name: parsed.data.name,
+        slug: parsed.data.slug,
+        ownerUserId: auth.userId,
+      });
+    } catch (error) {
+      if (isOrgSlugConflictError(error)) {
+        throw orgSlugConflict();
+      }
+      throw error;
+    }
 
     return reply.status(201).send(created);
-  });
-
-  server.get("/v1/billing/credits/packs", async (request) => {
-    requireAuth(request);
-
-    if (!stripe || !stripeCreditsPacks) {
-      return { enabled: false, packs: [] as StripeCreditsPackSummary[] };
-    }
-
-    const packs: StripeCreditsPackSummary[] = [];
-    for (const [packId, pack] of Object.entries(stripeCreditsPacks)) {
-      try {
-        const price = await getStripePriceSummary(pack.priceId);
-        packs.push({
-          packId,
-          credits: pack.credits,
-          ...(price.currency ? { currency: price.currency } : {}),
-          ...(typeof price.unitAmount === "number" ? { unitAmount: price.unitAmount } : {}),
-          ...(price.productName ? { productName: price.productName } : {}),
-        });
-      } catch {
-        // Skip packs that cannot be resolved (misconfigured or transient Stripe failure).
-      }
-    }
-
-    return { enabled: packs.length > 0, packs };
-  });
-
-  server.get("/v1/orgs/:orgId/billing/credits", async (request) => {
-    const auth = requireAuth(request);
-    const orgId = (request.params as { orgId?: string }).orgId;
-    if (!orgId) {
-      throw badRequest("Missing orgId");
-    }
-
-    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
-    const credits = await store.getOrganizationCredits({ organizationId: orgContext.organizationId, actorUserId: auth.userId });
-
-    return {
-      balanceCredits: credits.balanceCredits,
-      lastUpdatedAt: credits.updatedAt,
-    };
-  });
-
-  server.get("/v1/orgs/:orgId/billing/credits/ledger", async (request) => {
-    const auth = requireAuth(request);
-    const orgId = (request.params as { orgId?: string }).orgId;
-    if (!orgId) {
-      throw badRequest("Missing orgId");
-    }
-
-    const parsed = listCreditLedgerQuerySchema.safeParse(request.query ?? {});
-    if (!parsed.success) {
-      throw badRequest("Invalid ledger query", parsed.error.flatten());
-    }
-
-    const cursor = parsed.data.cursor
-      ? decodeCursor<{ createdAt: string; id: string }>(parsed.data.cursor)
-      : null;
-    if (parsed.data.cursor && !cursor) {
-      throw badRequest("Invalid cursor");
-    }
-
-    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
-    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage billing");
-    }
-
-    const result = await store.listOrganizationCreditLedger({
-      organizationId: orgContext.organizationId,
-      actorUserId: auth.userId,
-      limit: parsed.data.limit ?? 50,
-      cursor,
-    });
-
-    return {
-      entries: result.entries,
-      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
-    };
-  });
-
-  server.post("/v1/orgs/:orgId/billing/credits/checkout", async (request) => {
-    const auth = requireAuth(request);
-    const orgId = (request.params as { orgId?: string }).orgId;
-    if (!orgId) {
-      throw badRequest("Missing orgId");
-    }
-
-    const parsed = z.object({ packId: z.string().min(1).max(120) }).safeParse(request.body);
-    if (!parsed.success) {
-      throw badRequest("Invalid checkout payload", parsed.error.flatten());
-    }
-
-    const orgContext = await requireOrgContext(request, { expectedOrgId: orgId });
-    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
-      throw forbidden("Role is not allowed to manage billing");
-    }
-
-    if (!stripe || !stripeCreditsPacks) {
-      throw new AppError(500, { code: "STRIPE_NOT_CONFIGURED", message: "Stripe is not configured" });
-    }
-    const pack = stripeCreditsPacks[parsed.data.packId];
-    if (!pack) {
-      throw badRequest("Unknown packId");
-    }
-
-    const existingAccount = await store.getOrganizationBillingAccount({
-      organizationId: orgContext.organizationId,
-      actorUserId: auth.userId,
-    });
-
-    const stripeCustomerId =
-      existingAccount?.stripeCustomerId ??
-      (await (async () => {
-        const customer = await stripe.customers.create({
-          email: auth.email,
-          metadata: { organizationId: orgContext.organizationId },
-        });
-        const created = await store.createOrganizationBillingAccount({
-          organizationId: orgContext.organizationId,
-          actorUserId: auth.userId,
-          stripeCustomerId: customer.id,
-        });
-        return created.stripeCustomerId;
-      })());
-
-    const successUrl = new URL("/billing/success", WEB_BASE_URL);
-    successUrl.searchParams.set("orgId", orgContext.organizationId);
-    const cancelUrl = new URL("/billing/cancel", WEB_BASE_URL);
-    cancelUrl.searchParams.set("orgId", orgContext.organizationId);
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      customer: stripeCustomerId,
-      line_items: [{ price: pack.priceId, quantity: 1 }],
-      success_url: successUrl.toString(),
-      cancel_url: cancelUrl.toString(),
-      metadata: {
-        organizationId: orgContext.organizationId,
-        packId: parsed.data.packId,
-        credits: String(pack.credits),
-        payerUserId: auth.userId,
-        payerEmail: auth.email,
-      },
-    });
-
-    if (!session.url) {
-      throw new AppError(500, { code: "STRIPE_CHECKOUT_FAILED", message: "Stripe checkout session did not return a URL" });
-    }
-
-    return { checkoutUrl: session.url };
-  });
-
-  async function handleStripePaymentWebhook(request: { headers: Record<string, unknown>; rawBody?: Buffer }, reply: { status: (code: number) => any }) {
-    if (!stripe || !stripeWebhookSecret) {
-      throw new AppError(500, { code: "STRIPE_NOT_CONFIGURED", message: "Stripe webhook is not configured" });
-    }
-
-    const signature = request.headers["stripe-signature"];
-    if (typeof signature !== "string" || signature.trim().length === 0) {
-      throw badRequest("Missing Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
-    }
-
-    const raw = request.rawBody;
-    if (!raw || !Buffer.isBuffer(raw)) {
-      throw badRequest("Missing raw body", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
-    }
-
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(raw, signature, stripeWebhookSecret);
-    } catch {
-      throw badRequest("Invalid Stripe signature", { code: "STRIPE_WEBHOOK_INVALID_SIGNATURE" });
-    }
-
-    const toStringOrNull = (value: unknown): string | null => (typeof value === "string" && value.trim().length > 0 ? value : null);
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object as Stripe.Checkout.Session;
-      const payerUserIdRaw = toStringOrNull(session.metadata?.payerUserId);
-      const payerUserId = payerUserIdRaw && z.string().uuid().safeParse(payerUserIdRaw).success ? payerUserIdRaw : null;
-      const payerEmail =
-        toStringOrNull(session.metadata?.payerEmail) ??
-        toStringOrNull(session.customer_details?.email) ??
-        toStringOrNull(session.customer_email);
-
-      const inferredUserId =
-        payerUserId ??
-        (payerEmail ? (await store.getUserByEmail(payerEmail.toLowerCase()))?.id ?? null : null);
-      const paymentStatus = session.payment_status === "paid" ? "paid" : "pending";
-
-      await store.createUserPaymentEvent({
-        provider: "stripe",
-        providerEventId: event.id,
-        payerUserId: inferredUserId,
-        payerEmail,
-        status: paymentStatus,
-        amount: typeof session.amount_total === "number" ? session.amount_total : null,
-        currency: toStringOrNull(session.currency),
-        rawPayload: event,
-      });
-
-      if (paymentStatus === "paid" && inferredUserId) {
-        await store.upsertUserEntitlement({
-          userId: inferredUserId,
-          tier: "paid",
-          sourceProvider: "stripe",
-          sourceEventId: event.id,
-          validFrom: new Date(),
-          validUntil: null,
-          active: true,
-        });
-      }
-
-      const organizationId = toStringOrNull(session.metadata?.organizationId);
-      const creditsRaw = toStringOrNull(session.metadata?.credits);
-      const credits = creditsRaw ? Number(creditsRaw) : NaN;
-      if (organizationId && Number.isFinite(credits) && credits > 0 && paymentStatus === "paid") {
-        const result = await store.creditOrganizationFromStripeEvent({
-          organizationId,
-          stripeEventId: event.id,
-          credits: Math.floor(credits),
-          metadata: {
-            kind: "stripe_checkout_session_completed",
-            checkoutSessionId: session.id,
-            packId: session.metadata?.packId ?? null,
-            amountTotal: session.amount_total ?? null,
-            currency: session.currency ?? null,
-            payerUserId: inferredUserId,
-          },
-        });
-        return reply.status(200).send({ ok: true, applied: result.applied, provider: "stripe" });
-      }
-
-      return reply.status(200).send({ ok: true, provider: "stripe", applied: false });
-    }
-
-    await store.createUserPaymentEvent({
-      provider: "stripe",
-      providerEventId: event.id,
-      status: "pending",
-      rawPayload: event,
-    });
-
-    return reply.status(200).send({ ok: true, provider: "stripe", ignored: true });
-  }
-
-  server.post("/v1/billing/payments/:provider/webhook", { config: { rawBody: true } as any }, async (request, reply) => {
-    const parsed = paymentProviderParamSchema.safeParse(request.params ?? {});
-    if (!parsed.success) {
-      throw badRequest("Invalid payment provider", parsed.error.flatten());
-    }
-
-    const enabledProviders = await getEnabledPaymentProviders();
-    if (!enabledProviders.includes(parsed.data.provider)) {
-      throw new AppError(503, {
-        code: "PAYMENT_PROVIDER_DISABLED",
-        message: `Payment provider ${parsed.data.provider} is disabled`,
-      });
-    }
-
-    if (parsed.data.provider === "stripe") {
-      return handleStripePaymentWebhook(request as any, reply as any);
-    }
-
-    throw new AppError(501, {
-      code: "PAYMENT_PROVIDER_NOT_IMPLEMENTED",
-      message: `Payment provider ${parsed.data.provider} is not implemented`,
-    });
-  });
-
-  server.post("/v1/billing/stripe/webhook", { config: { rawBody: true } as any }, async (request, reply) => {
-    return handleStripePaymentWebhook(request as any, reply as any);
   });
 
   server.post("/v1/orgs/:orgId/invitations", async (request, reply) => {
@@ -2743,6 +2409,7 @@ export async function buildServer(input?: {
     const normalizedExisting = normalizeOrgSettings(existing);
     const llmDefaultsPatch = parsed.data.llm?.defaults;
     const llmProvidersPatch = parsed.data.llm?.providers;
+    const engineAuthDefaultsPatch = parsed.data.agents?.engineAuthDefaults;
 
     const nextProviderOverrides: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>> =
       llmProvidersPatch
@@ -2789,6 +2456,22 @@ export async function buildServer(input?: {
         },
         providers: nextProviderOverrides,
       },
+      agents: {
+        engineAuthDefaults: {
+          "gateway.codex.v2":
+            engineAuthDefaultsPatch && "gateway.codex.v2" in engineAuthDefaultsPatch
+              ? normalizeAgentEngineAuthDefault("gateway.codex.v2", engineAuthDefaultsPatch["gateway.codex.v2"])
+              : normalizedExisting.agents.engineAuthDefaults["gateway.codex.v2"],
+          "gateway.claude.v2":
+            engineAuthDefaultsPatch && "gateway.claude.v2" in engineAuthDefaultsPatch
+              ? normalizeAgentEngineAuthDefault("gateway.claude.v2", engineAuthDefaultsPatch["gateway.claude.v2"])
+              : normalizedExisting.agents.engineAuthDefaults["gateway.claude.v2"],
+          "gateway.opencode.v2":
+            engineAuthDefaultsPatch && "gateway.opencode.v2" in engineAuthDefaultsPatch
+              ? normalizeAgentEngineAuthDefault("gateway.opencode.v2", engineAuthDefaultsPatch["gateway.opencode.v2"])
+              : normalizedExisting.agents.engineAuthDefaults["gateway.opencode.v2"],
+        },
+      },
     };
 
     const updated = await store.updateOrganizationSettings({
@@ -2798,6 +2481,120 @@ export async function buildServer(input?: {
     });
 
     return { settings: normalizeOrgSettings(updated) };
+  });
+
+  server.get("/v1/orgs/:orgId/engines/auth-status", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+
+    const gatewayRes = await fetch(
+      `${GATEWAY_HTTP_URL}/internal/v1/executors/routes?organizationId=${encodeURIComponent(orgContext.organizationId)}`,
+      {
+        method: "GET",
+        headers: {
+          "x-gateway-token": GATEWAY_INTERNAL_SERVICE_TOKEN,
+        },
+      }
+    );
+    if (!gatewayRes.ok) {
+      throw new AppError(503, { code: "GATEWAY_UNAVAILABLE", message: "Failed to load executor auth status" });
+    }
+
+    const gatewayPayload = await gatewayRes.json().catch(() => null);
+    const parsedRoutes = z
+      .object({
+        routes: z.array(
+          z.object({
+            executorId: z.string().uuid(),
+            name: z.string().nullable().optional(),
+            kinds: z.array(z.enum(["connector.action", "agent.execute", "agent.run"])).optional(),
+            lastSeenAtMs: z.number().optional(),
+            engineAuth: z
+              .object({
+                "gateway.codex.v2": z
+                  .object({
+                    oauthVerified: z.boolean(),
+                    checkedAt: z.string().min(1),
+                    reason: z.string().min(1),
+                  })
+                  .optional(),
+                "gateway.claude.v2": z
+                  .object({
+                    oauthVerified: z.boolean(),
+                    checkedAt: z.string().min(1),
+                    reason: z.string().min(1),
+                  })
+                  .optional(),
+              })
+              .optional(),
+          })
+        ),
+      })
+      .safeParse(gatewayPayload);
+    if (!parsedRoutes.success) {
+      throw new AppError(502, { code: "GATEWAY_RESPONSE_INVALID", message: "Invalid executor auth status payload from gateway" });
+    }
+
+    const onlineRoutes = parsedRoutes.data.routes.filter((route) => (route.kinds ?? []).includes("agent.run"));
+    const engineIds = ["gateway.codex.v2", "gateway.claude.v2", "gateway.opencode.v2"] as const;
+    const engines = Object.fromEntries(
+      engineIds.map((engineId) => {
+        const executorStatuses = onlineRoutes.map((route) => {
+          if (engineId === "gateway.codex.v2" || engineId === "gateway.claude.v2") {
+            const status = route.engineAuth?.[engineId];
+            return {
+              executorId: route.executorId,
+              name: route.name ?? route.executorId,
+              verified: status?.oauthVerified === true,
+              checkedAt: status?.checkedAt ?? new Date(route.lastSeenAtMs ?? Date.now()).toISOString(),
+              reason: status?.reason ?? "not_reported",
+            };
+          }
+          return {
+            executorId: route.executorId,
+            name: route.name ?? route.executorId,
+            verified: true,
+            checkedAt: new Date(route.lastSeenAtMs ?? Date.now()).toISOString(),
+            reason: "not_required",
+          };
+        });
+        const verifiedCount = executorStatuses.filter((executor) => executor.verified).length;
+        const unverifiedCount = executorStatuses.length - verifiedCount;
+        return [
+          engineId,
+          {
+            onlineExecutors: executorStatuses.length,
+            verifiedCount,
+            unverifiedCount,
+            executors: executorStatuses,
+          },
+        ];
+      })
+    ) as Record<
+      "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2",
+      {
+        onlineExecutors: number;
+        verifiedCount: number;
+        unverifiedCount: number;
+        executors: Array<{
+          executorId: string;
+          name: string;
+          verified: boolean;
+          checkedAt: string;
+          reason: string;
+        }>;
+      }
+    >;
+
+    return {
+      organizationId: orgContext.organizationId,
+      engines,
+      requestedByUserId: auth.userId,
+    };
   });
 
   server.get("/v1/orgs/:orgId/secrets", async (request) => {
@@ -3702,29 +3499,17 @@ export async function buildServer(input?: {
         scope: z.enum(["main", "per-peer", "per-channel-peer", "per-account-channel-peer"]).default("main"),
         context: z.record(z.string().min(1), z.unknown()).optional(),
         executionMode: z.enum(["pinned-node-host"]).default("pinned-node-host"),
-        engineId: z.enum(["gateway.loop.v2"]).optional(),
+        engine: z.object({
+          id: z.enum(["gateway.codex.v2", "gateway.claude.v2", "gateway.opencode.v2"]),
+          model: z.string().min(1).max(200).optional(),
+          auth: z
+            .object({
+              secretId: z.string().uuid().optional(),
+            })
+            .strict()
+            .optional(),
+        }),
         toolsetId: z.string().uuid().optional(),
-        llm: z
-          .object({
-            provider: llmProviderInputSchema.default("openai"),
-            model: z.string().min(1).max(200),
-            auth: z
-              .object({
-                secretId: z.string().uuid().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .superRefine((value, ctx) => {
-            if (!providerSupportsContext(value.provider, "session")) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ["provider"],
-                message: `${value.provider} is not available for sessions`,
-              });
-            }
-          })
-          .optional(),
         prompt: z.object({
           system: z.string().max(200_000).optional(),
           instructions: z.string().min(1).max(200_000),
@@ -3736,7 +3521,7 @@ export async function buildServer(input?: {
         resetPolicy: z.unknown().optional(),
         executorSelector: z
           .object({
-            pool: z.enum(["managed", "byon"]).default("byon"),
+            pool: z.literal("byon").default("byon"),
             labels: z.array(z.string().min(1).max(64)).max(50).optional(),
             group: z.string().min(1).max(64).optional(),
             tag: z.string().min(1).max(64).optional(),
@@ -3749,54 +3534,29 @@ export async function buildServer(input?: {
       throw badRequest("Invalid session payload", body.error.flatten());
     }
 
-    const engineId = body.data.engineId ?? "gateway.loop.v2";
-
-    const isMember = orgContext.membership.roleKey === "member";
+    if (!isAgentEngineId(body.data.engine.id)) {
+      throw badRequest(`Unsupported engine: ${body.data.engine.id}`);
+    }
+    const engineMeta = getAgentEngineMeta(body.data.engine.id);
+    if (!engineMeta) {
+      throw badRequest(`Unsupported engine: ${body.data.engine.id}`);
+    }
+    const engineId = body.data.engine.id;
     const orgSettings = normalizeOrgSettings(
       await store.getOrganizationSettings({
         organizationId: orgContext.organizationId,
         actorUserId: auth.userId,
       })
     );
-
-    const resolvedLlm = (() => {
-      if (!isMember) {
-        const candidate = body.data.llm ?? {
-          provider: orgSettings.llm.defaults.primary.provider ?? "openai",
-          model: orgSettings.llm.defaults.primary.model ?? "gpt-4.1-mini",
-          auth: {
-            secretId: orgSettings.llm.defaults.primary.secretId ?? null,
-          },
-        };
-        return {
-          provider: candidate.provider,
-          model: candidate.model.trim(),
-          auth: { secretId: candidate.auth?.secretId ?? null },
-        };
-      }
-      const defaults = orgSettings.llm.defaults.primary;
-      if (!defaults.provider || !defaults.model) {
-        throw new AppError(400, {
-          code: "ORG_DEFAULT_LLM_REQUIRED",
-          message: "Members must use organization default model configuration.",
-        });
-      }
-      if (!providerSupportsContext(defaults.provider, "session")) {
-        throw new AppError(400, {
-          code: "ORG_DEFAULT_LLM_REQUIRED",
-          message: "Organization default model does not support chat sessions.",
-        });
-      }
-      return {
-        provider: defaults.provider,
-        model: defaults.model,
-        auth: { secretId: defaults.secretId ?? null },
-      };
-    })();
-
-    if (isOAuthRequiredProvider(resolvedLlm.provider) && !resolvedLlm.auth.secretId) {
-      throw badRequest("Provider requires llm.auth.secretId for sessions.");
-    }
+    const engineAuthDefault = orgSettings.agents.engineAuthDefaults[engineId];
+    const resolvedEngineSecretId =
+      body.data.engine.auth?.secretId ??
+      (engineAuthDefault.mode === "api_key" && typeof engineAuthDefault.secretId === "string" ? engineAuthDefault.secretId : null);
+    const resolvedEngine = {
+      id: engineId,
+      model: body.data.engine.model?.trim() || engineMeta.defaultModel,
+      auth: { secretId: resolvedEngineSecretId },
+    };
 
     const bindings = await store.listAgentBindings({
       organizationId: orgContext.organizationId,
@@ -3885,9 +3645,9 @@ export async function buildServer(input?: {
       engineId,
       toolsetId: body.data.toolsetId ?? null,
       llm: {
-        provider: resolvedLlm.provider,
-        model: resolvedLlm.model,
-        auth: { ...(resolvedLlm.auth.secretId ? { secretId: resolvedLlm.auth.secretId } : {}) },
+        provider: engineId === "gateway.claude.v2" ? "claude" : engineId === "gateway.opencode.v2" ? "opencode" : "codex",
+        model: resolvedEngine.model,
+        auth: { ...(resolvedEngine.auth.secretId ? { secretId: resolvedEngine.auth.secretId } : {}) },
       },
       prompt: { system: body.data.prompt.system ?? null, instructions: body.data.prompt.instructions },
       tools: body.data.tools,
@@ -3904,8 +3664,7 @@ export async function buildServer(input?: {
       level: "info",
       payload: {
         engineId,
-        llm: resolvedLlm,
-        enforcedOrgDefault: isMember,
+        engine: resolvedEngine,
         route: {
           sessionKey,
           scope: body.data.scope,
@@ -6259,118 +6018,6 @@ export async function buildServer(input?: {
       metadata: { deleted },
     });
     return { ok: deleted };
-  });
-
-  server.get("/v1/admin/users/:userId/tier", async (request) => {
-    await requireSystemAdmin(request);
-    const params = z.object({ userId: z.string().uuid() }).safeParse(request.params ?? {});
-    if (!params.success) {
-      throw badRequest("Invalid user id", params.error.flatten());
-    }
-    const user = await store.getUserById(params.data.userId);
-    if (!user) {
-      throw notFound("User not found");
-    }
-    const [effectiveTier, entitlements] = await Promise.all([
-      resolveAccountTier(user.id),
-      store.listUserEntitlements({ userId: user.id, activeOnly: false }),
-    ]);
-    return {
-      user: toPublicUser(user),
-      effectiveTier,
-      entitlements,
-      edition: enterpriseProvider.edition,
-    };
-  });
-
-  server.put("/v1/admin/users/:userId/tier", async (request) => {
-    const auth = await requireSystemAdmin(request);
-    const params = z.object({ userId: z.string().uuid() }).safeParse(request.params ?? {});
-    if (!params.success) {
-      throw badRequest("Invalid user id", params.error.flatten());
-    }
-    const parsed = adminUserTierUpdateSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      throw badRequest("Invalid tier payload", parsed.error.flatten());
-    }
-    const user = await store.getUserById(params.data.userId);
-    if (!user) {
-      throw notFound("User not found");
-    }
-
-    const updated = await store.setUserEntitlementTier({
-      userId: user.id,
-      tier: parsed.data.tier,
-      sourceProvider: "admin",
-      sourceEventId: `admin:${Date.now()}`,
-      actorUserId: auth.userId,
-    });
-    await store.appendPlatformAuditLog({
-      actorUserId: auth.userId,
-      action: "user_tier.updated",
-      targetType: "user",
-      targetId: user.id,
-      metadata: { tier: parsed.data.tier },
-    });
-    return { user: toPublicUser(user), tier: parsed.data.tier, entitlement: updated };
-  });
-
-  server.get("/v1/admin/payments/events", async (request) => {
-    await requireSystemAdmin(request);
-    const parsed = adminPaymentEventsQuerySchema.safeParse(request.query ?? {});
-    if (!parsed.success) {
-      throw badRequest("Invalid payments query", parsed.error.flatten());
-    }
-    const events = await store.listUserPaymentEvents({
-      ...(parsed.data.provider ? { provider: parsed.data.provider } : {}),
-      ...(parsed.data.limit ? { limit: parsed.data.limit } : {}),
-    });
-    return { events };
-  });
-
-  server.get("/v1/admin/payments/providers", async (request) => {
-    await requireSystemAdmin(request);
-    const enabled = await getEnabledPaymentProviders();
-    return {
-      providers: SUPPORTED_PAYMENT_PROVIDERS.map((provider) => ({
-        provider,
-        enabled: enabled.includes(provider),
-        implemented: provider === "stripe",
-      })),
-    };
-  });
-
-  server.put("/v1/admin/payments/providers/:provider", async (request) => {
-    const auth = await requireSystemAdmin(request);
-    const params = paymentProviderParamSchema.safeParse(request.params ?? {});
-    if (!params.success) {
-      throw badRequest("Invalid payment provider", params.error.flatten());
-    }
-    const parsed = adminPaymentsProviderUpdateSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      throw badRequest("Invalid provider payload", parsed.error.flatten());
-    }
-
-    const enabledSet = new Set(await getEnabledPaymentProviders());
-    if (parsed.data.enabled) {
-      enabledSet.add(params.data.provider);
-    } else {
-      enabledSet.delete(params.data.provider);
-    }
-    const value = { enabled: [...enabledSet] };
-    const setting = await store.upsertPlatformSetting({
-      key: "payments.providers",
-      value,
-      updatedByUserId: auth.userId,
-    });
-    await store.appendPlatformAuditLog({
-      actorUserId: auth.userId,
-      action: "payments.providers.updated",
-      targetType: "platform_setting",
-      targetId: "payments.providers",
-      metadata: { provider: params.data.provider, enabled: parsed.data.enabled },
-    });
-    return { setting };
   });
 
   server.get("/v1/admin/risk/policies", async (request) => {

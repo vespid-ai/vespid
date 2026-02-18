@@ -5,7 +5,6 @@ import { MemoryAppStore } from "./store/memory-store.js";
 import type { OAuthService, OAuthProvider } from "./oauth.js";
 import type { WorkflowRunQueueProducer } from "./queue/producer.js";
 import type { WorkflowRunJobPayload } from "@vespid/shared";
-import type { EnterpriseProvider } from "@vespid/shared";
 
 function extractCookies(input: { headers: Record<string, unknown> }, names: string[]): string {
   const setCookieHeader = input.headers["set-cookie"];
@@ -78,22 +77,7 @@ function createFakeQueueProducer(): FakeQueueProducer {
 }
 
 function createPaidMemoryStore(): MemoryAppStore {
-  const store = new MemoryAppStore();
-  const originalCreateUser = store.createUser.bind(store);
-  store.createUser = (async (input) => {
-    const user = await originalCreateUser(input);
-    await store.upsertUserEntitlement({
-      userId: user.id,
-      tier: "paid",
-      sourceProvider: "test",
-      sourceEventId: `test-bootstrap:${user.id}`,
-      validFrom: new Date(),
-      validUntil: null,
-      active: true,
-    });
-    return user;
-  }) as typeof store.createUser;
-  return store;
+  return new MemoryAppStore();
 }
 
 describe("api hardening foundation", () => {
@@ -216,21 +200,15 @@ describe("api hardening foundation", () => {
     expect((exchangeFailed.json() as { code: string }).code).toBe("OAUTH_EXCHANGE_FAILED");
   });
 
-  it("exposes community capabilities and connector catalog metadata", async () => {
+  it("exposes platform capabilities and connector catalog metadata", async () => {
     const capabilities = await server.inject({
       method: "GET",
       url: "/v1/meta/capabilities",
     });
     expect(capabilities.statusCode).toBe(200);
-    const expectsEnterprise = Boolean(process.env.VESPID_ENTERPRISE_PROVIDER_MODULE);
-    const capabilitiesBody = capabilities.json() as {
-      edition: string;
-      capabilities: string[];
-      provider: { name: string; version: string | null };
-    };
-    expect(capabilitiesBody.edition).toBe(expectsEnterprise ? "enterprise" : "community");
+    const capabilitiesBody = capabilities.json() as { capabilities: string[] };
     expect(capabilitiesBody.capabilities).toContain("workflow_dsl_v2");
-    expect(capabilitiesBody.provider.name).toBe(expectsEnterprise ? "vespid-enterprise" : "community-core");
+    expect(capabilitiesBody.capabilities).toContain("advanced_rbac");
 
     const connectors = await server.inject({
       method: "GET",
@@ -238,11 +216,10 @@ describe("api hardening foundation", () => {
     });
     expect(connectors.statusCode).toBe(200);
     const connectorsBody = connectors.json() as {
-      connectors: Array<{ id: string; source: string }>;
+      connectors: Array<{ id: string }>;
     };
-    expect(connectorsBody.connectors.some((connector) => connector.id === "jira" && connector.source === "community")).toBe(
-      true
-    );
+    expect(connectorsBody.connectors.some((connector) => connector.id === "jira")).toBe(true);
+    expect(connectorsBody.connectors.some((connector) => connector.id === "salesforce")).toBe(true);
   });
 
   it("exposes channel catalog metadata", async () => {
@@ -283,8 +260,8 @@ describe("api hardening foundation", () => {
       queueProducer: createFakeQueueProducer(),
       agentInstaller: {
         enabled: true,
-        repository: "vespid-ai/vespid-community",
-        channel: "community-v0.4.0",
+        repository: "vespid-ai/vespid",
+        channel: "v0.4.0",
         docsUrl: "https://docs.vespid.ai/agent",
       },
     });
@@ -304,8 +281,8 @@ describe("api hardening foundation", () => {
       artifacts: Array<{ platformId: string; fileName: string; downloadUrl: string; archiveType: string }>;
     };
     expect(body.provider).toBe("github-releases");
-    expect(body.repository).toBe("vespid-ai/vespid-community");
-    expect(body.channel).toBe("community-v0.4.0");
+    expect(body.repository).toBe("vespid-ai/vespid");
+    expect(body.channel).toBe("v0.4.0");
     expect(body.docsUrl).toBe("https://docs.vespid.ai/agent");
     expect(body.artifacts.map((artifact) => artifact.platformId)).toEqual(["darwin-arm64", "linux-x64", "windows-x64"]);
     expect(body.artifacts.map((artifact) => artifact.fileName)).toEqual([
@@ -314,14 +291,14 @@ describe("api hardening foundation", () => {
       "vespid-agent-windows-x64.zip",
     ]);
     for (const artifact of body.artifacts) {
-      expect(artifact.downloadUrl).toContain(`/releases/download/community-v0.4.0/${artifact.fileName}`);
+      expect(artifact.downloadUrl).toContain(`/releases/download/v0.4.0/${artifact.fileName}`);
       expect(["tar.gz", "zip"]).toContain(artifact.archiveType);
     }
-    expect(body.checksumsUrl).toContain("/releases/download/community-v0.4.0/vespid-agent-checksums.txt");
+    expect(body.checksumsUrl).toContain("/releases/download/v0.4.0/vespid-agent-checksums.txt");
     await enabledServer.close();
   });
 
-  it("rejects non-loop session engines", async () => {
+  it("accepts codex/claude/opencode engines and rejects legacy loop engine", async () => {
     const signup = await server.inject({
       method: "POST",
       url: "/v1/auth/signup",
@@ -342,7 +319,7 @@ describe("api hardening foundation", () => {
     expect(createOrg.statusCode).toBe(201);
     const orgId = (createOrg.json() as { organization: { id: string } }).organization.id;
 
-    for (const engineId of ["gateway.codex.v2", "gateway.claude.v2"] as const) {
+    for (const engineId of ["gateway.codex.v2", "gateway.claude.v2", "gateway.opencode.v2"] as const) {
       const createSession = await server.inject({
         method: "POST",
         url: `/v1/orgs/${orgId}/sessions`,
@@ -351,14 +328,31 @@ describe("api hardening foundation", () => {
           "x-org-id": orgId,
         },
         payload: {
-          engineId,
+          engine: { id: engineId, model: "test-model" },
+          executorSelector: { pool: "byon" },
           prompt: { instructions: "test" },
           tools: { allow: [] },
         },
       });
-      expect(createSession.statusCode).toBe(400);
-      expect((createSession.json() as { message: string }).message).toBe("Invalid session payload");
+      expect(createSession.statusCode).toBe(201);
     }
+
+    const legacyEngine = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/sessions`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        engine: { id: "gateway.loop.v2", model: "legacy" },
+        executorSelector: { pool: "byon" },
+        prompt: { instructions: "test" },
+        tools: { allow: [] },
+      },
+    });
+    expect(legacyEngine.statusCode).toBe(400);
+    expect((legacyEngine.json() as { message: string }).message).toBe("Invalid session payload");
   });
 
   it("requires service token for internal channel trigger endpoint", async () => {
@@ -1381,7 +1375,8 @@ describe("api hardening foundation", () => {
               id: "agent-1",
               type: "agent.run",
               config: {
-                llm: { provider: "openai", model: "gpt-4.1-mini", auth: { fallbackToEnv: true } },
+                engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+                execution: { mode: "gateway", selector: { pool: "byon" } },
                 prompt: { instructions: "Say hello." },
                 tools: { allow: ["connector.github.issue.create"], execution: "cloud" },
                 limits: { maxTurns: 1, maxToolCalls: 0, timeoutMs: 1000, maxOutputChars: 1000 },
@@ -2145,6 +2140,190 @@ describe("api hardening foundation", () => {
     expect(memberPutDenied.statusCode).toBe(403);
   });
 
+  it("applies engine auth defaults when creating sessions", async () => {
+    const priorKek = process.env.SECRETS_KEK_BASE64;
+    const priorKekId = process.env.SECRETS_KEK_ID;
+    process.env.SECRETS_KEK_ID = "test-kek";
+    process.env.SECRETS_KEK_BASE64 = Buffer.alloc(32, 7).toString("base64");
+
+    try {
+      const ownerSignup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: { email: `session-default-owner-${Date.now()}@example.com`, password: "Password123" },
+      });
+      const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+      const orgRes = await server.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { name: "Session Default Org", slug: `session-default-org-${Date.now()}` },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+      const createdSecret = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          connectorId: "agent.codex",
+          name: "default",
+          value: "sk-codex-default",
+        },
+      });
+      expect(createdSecret.statusCode).toBe(201);
+      const secretId = (createdSecret.json() as { secret: { id: string } }).secret.id;
+
+      const updatedSettings = await server.inject({
+        method: "PUT",
+        url: `/v1/orgs/${orgId}/settings`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          agents: {
+            engineAuthDefaults: {
+              "gateway.codex.v2": { mode: "api_key", secretId },
+              "gateway.claude.v2": { mode: "oauth_executor" },
+            },
+          },
+        },
+      });
+      expect(updatedSettings.statusCode).toBe(200);
+
+      const codexSession = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/sessions`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+          prompt: { instructions: "hello" },
+          tools: { allow: [] },
+        },
+      });
+      expect(codexSession.statusCode).toBe(201);
+      expect((codexSession.json() as any).session.llmSecretId).toBe(secretId);
+
+      const claudeSession = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/sessions`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          engine: { id: "gateway.claude.v2", model: "claude-sonnet-4-20250514" },
+          prompt: { instructions: "hello" },
+          tools: { allow: [] },
+        },
+      });
+      expect(claudeSession.statusCode).toBe(201);
+      expect((claudeSession.json() as any).session.llmSecretId).toBeNull();
+    } finally {
+      if (priorKek === undefined) {
+        delete process.env.SECRETS_KEK_BASE64;
+      } else {
+        process.env.SECRETS_KEK_BASE64 = priorKek;
+      }
+      if (priorKekId === undefined) {
+        delete process.env.SECRETS_KEK_ID;
+      } else {
+        process.env.SECRETS_KEK_ID = priorKekId;
+      }
+    }
+  });
+
+  it("returns per-engine executor OAuth auth status", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `engine-auth-owner-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const outsiderSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `engine-auth-outsider-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const outsiderToken = bearerToken(outsiderSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Engine Auth Org", slug: `engine-auth-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const priorFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          routes: [
+            {
+              executorId: "11111111-1111-4111-8111-111111111111",
+              name: "exec-a",
+              kinds: ["agent.run"],
+              engineAuth: {
+                "gateway.codex.v2": {
+                  oauthVerified: true,
+                  checkedAt: "2026-01-01T00:00:00.000Z",
+                  reason: "verified",
+                },
+                "gateway.claude.v2": {
+                  oauthVerified: false,
+                  checkedAt: "2026-01-01T00:00:00.000Z",
+                  reason: "unauthenticated",
+                },
+              },
+            },
+            {
+              executorId: "22222222-2222-4222-8222-222222222222",
+              name: "exec-b",
+              kinds: ["agent.run"],
+              engineAuth: {
+                "gateway.codex.v2": {
+                  oauthVerified: false,
+                  checkedAt: "2026-01-01T00:00:00.000Z",
+                  reason: "unauthenticated",
+                },
+                "gateway.claude.v2": {
+                  oauthVerified: true,
+                  checkedAt: "2026-01-01T00:00:00.000Z",
+                  reason: "verified",
+                },
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    ) as any;
+
+    try {
+      const statusRes = await server.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/engines/auth-status`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      });
+      expect(statusRes.statusCode).toBe(200);
+      const body = statusRes.json() as any;
+      expect(body.engines["gateway.codex.v2"].onlineExecutors).toBe(2);
+      expect(body.engines["gateway.codex.v2"].verifiedCount).toBe(1);
+      expect(body.engines["gateway.codex.v2"].unverifiedCount).toBe(1);
+      expect(body.engines["gateway.claude.v2"].verifiedCount).toBe(1);
+      expect(body.engines["gateway.claude.v2"].unverifiedCount).toBe(1);
+
+      const denied = await server.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/engines/auth-status`,
+        headers: { authorization: `Bearer ${outsiderToken}`, "x-org-id": orgId },
+      });
+      expect(denied.statusCode).toBe(403);
+    } finally {
+      globalThis.fetch = priorFetch;
+    }
+  });
+
 });
 
 describe("api rbac promotion flow", () => {
@@ -2382,167 +2561,6 @@ describe("api rbac promotion flow", () => {
     expect(meBody.orgs.length).toBeGreaterThan(0);
     const found = meBody.orgs.find((o) => o.id === meBody.defaultOrgId);
     expect(found?.roleKey).toBe("owner");
-  });
-});
-
-describe("personal billing credits (memory store + fake Stripe)", () => {
-  const store = createPaidMemoryStore();
-  const queueProducer = createFakeQueueProducer();
-  let organizationIdForWebhook = "org-from-test";
-
-  const stripe = {
-    customers: {
-      create: vi.fn(async () => ({ id: "cus_test_1" })),
-    },
-    prices: {
-      retrieve: vi.fn(async (priceId: string, opts?: any) => ({
-        id: priceId,
-        currency: "usd",
-        unit_amount: 1000,
-        product: { name: "Vespid credits" },
-      })),
-    },
-    checkout: {
-      sessions: {
-        create: vi.fn(async () => ({ id: "cs_test_1", url: "https://checkout.local/session/cs_test_1" })),
-      },
-    },
-    webhooks: {
-      constructEvent: vi.fn((rawBody: Buffer, signature: string, secret: string) => {
-        return {
-          id: "evt_test_1",
-          type: "checkout.session.completed",
-          data: {
-            object: {
-              id: "cs_test_1",
-              payment_status: "paid",
-              metadata: {
-                organizationId: organizationIdForWebhook,
-                packId: "credits-1m",
-                credits: "10",
-              },
-              amount_total: 1000,
-              currency: "usd",
-            },
-          },
-        };
-      }),
-    },
-  } as any;
-
-  let server: Awaited<ReturnType<typeof buildServer>>;
-
-  beforeAll(async () => {
-    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
-    process.env.STRIPE_CREDITS_PACKS_JSON = JSON.stringify({
-      "credits-1m": { priceId: "price_test_1", credits: 10 },
-    });
-    server = await buildServer({
-      store,
-      oauthService: fakeOAuthService(),
-      orgContextEnforcement: "strict",
-      queueProducer,
-      stripe,
-    });
-  });
-
-  afterAll(async () => {
-    await server.close();
-    delete process.env.STRIPE_WEBHOOK_SECRET;
-    delete process.env.STRIPE_CREDITS_PACKS_JSON;
-  });
-
-  it("creates checkout sessions and applies credits idempotently via webhook", async () => {
-    const signup = await server.inject({
-      method: "POST",
-      url: "/v1/auth/signup",
-      payload: {
-        email: "bill@example.com",
-        password: "Password123",
-      },
-    });
-    expect(signup.statusCode).toBe(201);
-    const signupBody = signup.json() as { session: { token: string } };
-
-    const me = await server.inject({
-      method: "GET",
-      url: "/v1/me",
-      headers: { authorization: `Bearer ${bearerToken(signupBody as any)}` },
-    });
-    const meBody = me.json() as { defaultOrgId: string | null };
-    const orgId = meBody.defaultOrgId as string;
-    expect(typeof orgId).toBe("string");
-    organizationIdForWebhook = orgId;
-
-    const checkout = await server.inject({
-      method: "POST",
-      url: `/v1/orgs/${orgId}/billing/credits/checkout`,
-      headers: {
-        authorization: `Bearer ${bearerToken(signupBody as any)}`,
-        "x-org-id": orgId,
-      },
-      payload: { packId: "credits-1m" },
-    });
-    expect(checkout.statusCode).toBe(200);
-    const checkoutBody = checkout.json() as { checkoutUrl: string };
-    expect(checkoutBody.checkoutUrl).toContain("checkout.local");
-
-    const packs = await server.inject({
-      method: "GET",
-      url: "/v1/billing/credits/packs",
-      headers: {
-        authorization: `Bearer ${bearerToken(signupBody as any)}`,
-      },
-    });
-    expect(packs.statusCode).toBe(200);
-    expect(packs.json()).toMatchObject({
-      enabled: true,
-      packs: [
-        expect.objectContaining({
-          packId: "credits-1m",
-          credits: 10,
-          currency: "usd",
-          unitAmount: 1000,
-        }),
-      ],
-    });
-
-    // Webhook: apply credits to the org from metadata. In this unit test we simply assert idempotency.
-    const webhook1 = await server.inject({
-      method: "POST",
-      url: "/v1/billing/stripe/webhook",
-      headers: {
-        "content-type": "application/json",
-        "stripe-signature": "sig_test",
-      },
-      payload: JSON.stringify({ any: "payload" }),
-    });
-    expect(webhook1.statusCode).toBe(200);
-    expect(webhook1.json()).toMatchObject({ ok: true, applied: true });
-
-    const webhook2 = await server.inject({
-      method: "POST",
-      url: "/v1/billing/stripe/webhook",
-      headers: {
-        "content-type": "application/json",
-        "stripe-signature": "sig_test",
-      },
-      payload: JSON.stringify({ any: "payload" }),
-    });
-    expect(webhook2.statusCode).toBe(200);
-    expect(webhook2.json()).toMatchObject({ ok: true, applied: false });
-
-    const ledger = await server.inject({
-      method: "GET",
-      url: `/v1/orgs/${orgId}/billing/credits/ledger?limit=10`,
-      headers: {
-        authorization: `Bearer ${bearerToken(signupBody as any)}`,
-        "x-org-id": orgId,
-      },
-    });
-    expect(ledger.statusCode).toBe(200);
-    const ledgerBody = ledger.json() as { entries: Array<{ reason: string; deltaCredits: number }> };
-    expect(ledgerBody.entries.some((e) => e.reason === "stripe_topup" && e.deltaCredits === 10)).toBe(true);
   });
 });
 
@@ -2849,56 +2867,6 @@ describe("llm oauth device verification url defaults", () => {
   });
 });
 
-describe("api enterprise provider integration", () => {
-  it("loads inline enterprise provider while preserving community baseline capabilities", async () => {
-    const provider: EnterpriseProvider = {
-      edition: "enterprise",
-      name: "enterprise-inline",
-      version: "0.4.0",
-      getCapabilities() {
-        return ["sso", "advanced_rbac"];
-      },
-      getEnterpriseConnectors() {
-        return [
-          {
-            id: "salesforce",
-            displayName: "Salesforce",
-            requiresSecret: true,
-          },
-        ];
-      },
-    };
-
-    const server = await buildServer({
-      store: createPaidMemoryStore(),
-      oauthService: fakeOAuthService(),
-      queueProducer: createFakeQueueProducer(),
-      enterpriseProvider: provider,
-    });
-
-    const capabilities = await server.inject({
-      method: "GET",
-      url: "/v1/meta/capabilities",
-    });
-    expect(capabilities.statusCode).toBe(200);
-    const capabilitiesBody = capabilities.json() as { edition: string; capabilities: string[] };
-    expect(capabilitiesBody.edition).toBe("enterprise");
-    expect(capabilitiesBody.capabilities).toEqual(expect.arrayContaining(["tenant_rls", "sso", "advanced_rbac"]));
-
-    const connectors = await server.inject({
-      method: "GET",
-      url: "/v1/meta/connectors",
-    });
-    expect(connectors.statusCode).toBe(200);
-    const connectorBody = connectors.json() as { connectors: Array<{ id: string; source: string }> };
-    expect(connectorBody.connectors.some((connector) => connector.id === "salesforce" && connector.source === "enterprise")).toBe(
-      true
-    );
-
-    await server.close();
-  });
-});
-
 describe("api org context warn mode", () => {
   let server: Awaited<ReturnType<typeof buildServer>>;
   const queueProducer = createFakeQueueProducer();
@@ -3027,7 +2995,7 @@ describe("api org context warn mode", () => {
 });
 
 describe("account tier and system admin policies", () => {
-  it("rejects free user organization creation with upgrade-required code", async () => {
+  it("allows organization creation in open-source tier policy", async () => {
     const server = await buildServer({
       store: new MemoryAppStore(),
       oauthService: fakeOAuthService(),
@@ -3048,13 +3016,80 @@ describe("account tier and system admin policies", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { name: "Free Org", slug: `free-org-${Date.now()}` },
     });
-    expect(createOrg.statusCode).toBe(403);
-    expect((createOrg.json() as { code: string }).code).toBe("ORG_PLAN_UPGRADE_REQUIRED");
+    expect(createOrg.statusCode).toBe(201);
 
     await server.close();
   });
 
-  it("enforces paid user organization limits from platform policy", async () => {
+  it("returns ORG_SLUG_CONFLICT when creating an existing slug", async () => {
+    const server = await buildServer({
+      store: new MemoryAppStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `slug-user-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as any);
+    const slug = `dup-slug-${Date.now()}`;
+
+    const createOrg1 = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Org One", slug },
+    });
+    expect(createOrg1.statusCode).toBe(201);
+
+    const createOrg2 = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Org Two", slug },
+    });
+    expect(createOrg2.statusCode).toBe(409);
+    expect((createOrg2.json() as { code: string }).code).toBe("ORG_SLUG_CONFLICT");
+
+    await server.close();
+  });
+
+  it("still creates organization when platform_user_roles table is unavailable", async () => {
+    const store = new MemoryAppStore();
+    vi.spyOn(store, "listPlatformUserRoles").mockImplementation(async () => {
+      const error = Object.assign(new Error('relation "platform_user_roles" does not exist'), { code: "42P01" });
+      throw error;
+    });
+
+    const server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+    });
+
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `missing-role-table-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as any);
+
+    const createOrg = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Fallback Org", slug: `fallback-org-${Date.now()}` },
+    });
+    expect(createOrg.statusCode).toBe(201);
+
+    await server.close();
+  });
+
+  it("does not enforce paid-tier org limit caps in open-source policy", async () => {
     const store = createPaidMemoryStore();
     await store.upsertPlatformSetting({
       key: "org_policy",
@@ -3093,56 +3128,12 @@ describe("account tier and system admin policies", () => {
       headers: { authorization: `Bearer ${token}` },
       payload: { name: "Paid Org 2", slug: `paid-org-b-${Date.now()}` },
     });
-    expect(createOrg2.statusCode).toBe(409);
-    expect((createOrg2.json() as { code: string }).code).toBe("ORG_LIMIT_REACHED");
-
-    await server.close();
-  });
-
-  it("allows multi-org creation when edition is enterprise", async () => {
-    const server = await buildServer({
-      store: new MemoryAppStore(),
-      oauthService: fakeOAuthService(),
-      queueProducer: createFakeQueueProducer(),
-      enterpriseProvider: {
-        edition: "enterprise",
-        name: "enterprise-inline",
-        getCapabilities() {
-          return [];
-        },
-        getEnterpriseConnectors() {
-          return [];
-        },
-      } as EnterpriseProvider,
-    });
-
-    const signup = await server.inject({
-      method: "POST",
-      url: "/v1/auth/signup",
-      payload: { email: `enterprise-user-${Date.now()}@example.com`, password: "Password123" },
-    });
-    expect(signup.statusCode).toBe(201);
-    const token = bearerToken(signup.json() as any);
-
-    const createOrg1 = await server.inject({
-      method: "POST",
-      url: "/v1/orgs",
-      headers: { authorization: `Bearer ${token}` },
-      payload: { name: "Ent Org 1", slug: `ent-org-a-${Date.now()}` },
-    });
-    const createOrg2 = await server.inject({
-      method: "POST",
-      url: "/v1/orgs",
-      headers: { authorization: `Bearer ${token}` },
-      payload: { name: "Ent Org 2", slug: `ent-org-b-${Date.now()}` },
-    });
-    expect(createOrg1.statusCode).toBe(201);
     expect(createOrg2.statusCode).toBe(201);
 
     await server.close();
   });
 
-  it("blocks invitation acceptance when free user would exceed org limit", async () => {
+  it("allows invitation acceptance without free-tier org cap restrictions", async () => {
     const server = await buildServer({
       store: new MemoryAppStore(),
       oauthService: fakeOAuthService(),
@@ -3189,68 +3180,9 @@ describe("account tier and system admin policies", () => {
       url: `/v1/invitations/${inviteToken}/accept`,
       headers: { authorization: `Bearer ${inviteeToken}` },
     });
-    expect(accept.statusCode).toBe(403);
-    expect((accept.json() as { code: string }).code).toBe("ORG_PLAN_UPGRADE_REQUIRED");
+    expect(accept.statusCode).toBe(200);
 
     await server.close();
-  });
-
-  it("creates paid entitlement from stripe payment webhook", async () => {
-    const store = new MemoryAppStore();
-    const stripe = {
-      webhooks: {
-        constructEvent: vi.fn(() => ({
-          id: "evt_paid_1",
-          type: "checkout.session.completed",
-          data: {
-            object: {
-              id: "cs_paid_1",
-              payment_status: "paid",
-              metadata: {
-                payerUserId: undefined,
-                payerEmail: "webhook-paid@example.com",
-              },
-              customer_email: "webhook-paid@example.com",
-              amount_total: 1234,
-              currency: "usd",
-            },
-          },
-        })),
-      },
-    } as any;
-
-    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_paid";
-    const server = await buildServer({
-      store,
-      oauthService: fakeOAuthService(),
-      queueProducer: createFakeQueueProducer(),
-      stripe,
-    });
-
-    const signup = await server.inject({
-      method: "POST",
-      url: "/v1/auth/signup",
-      payload: { email: "webhook-paid@example.com", password: "Password123" },
-    });
-    expect(signup.statusCode).toBe(201);
-    const userId = (signup.json() as { user: { id: string } }).user.id;
-
-    const webhook = await server.inject({
-      method: "POST",
-      url: "/v1/billing/payments/stripe/webhook",
-      headers: {
-        "stripe-signature": "sig",
-        "content-type": "application/json",
-      },
-      payload: "{}",
-    });
-    expect(webhook.statusCode).toBe(200);
-
-    const entitlements = await store.listUserEntitlements({ userId, activeOnly: true });
-    expect(entitlements.some((entitlement) => entitlement.tier === "paid" && entitlement.active)).toBe(true);
-
-    await server.close();
-    delete process.env.STRIPE_WEBHOOK_SECRET;
   });
 
   it("denies admin routes for non-system-admin users", async () => {
@@ -3311,45 +3243,3 @@ describe("account tier and system admin policies", () => {
     delete process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST;
   });
 });
-
-const externalEnterpriseProviderModule = process.env.VESPID_ENTERPRISE_PROVIDER_MODULE;
-
-(externalEnterpriseProviderModule ? describe : describe.skip)(
-  "api external enterprise provider module integration",
-  () => {
-    it("loads enterprise provider from configured module path", async () => {
-      const server = await buildServer({
-        store: createPaidMemoryStore(),
-        oauthService: fakeOAuthService(),
-        queueProducer: createFakeQueueProducer(),
-      });
-
-      const capabilities = await server.inject({
-        method: "GET",
-        url: "/v1/meta/capabilities",
-      });
-
-      expect(capabilities.statusCode).toBe(200);
-      const capabilitiesBody = capabilities.json() as {
-        edition: string;
-        capabilities: string[];
-        provider: { name: string };
-      };
-      expect(capabilitiesBody.edition).toBe("enterprise");
-      expect(capabilitiesBody.capabilities).toEqual(expect.arrayContaining(["sso", "advanced_rbac"]));
-      expect(capabilitiesBody.provider.name).toBe("vespid-enterprise");
-
-      const connectors = await server.inject({
-        method: "GET",
-        url: "/v1/meta/connectors",
-      });
-      expect(connectors.statusCode).toBe(200);
-      const connectorBody = connectors.json() as { connectors: Array<{ id: string; source: string }> };
-      expect(
-        connectorBody.connectors.some((connector) => connector.id === "salesforce" && connector.source === "enterprise")
-      ).toBe(true);
-
-      await server.close();
-    });
-  }
-);

@@ -11,7 +11,6 @@
     "sessions": "对话",
     "models": "模型连接",
     "secrets": "密钥",
-    "billing": "计费",
     "agents": "代理",
     "toolsets": "工具集",
     "auth": "登录",
@@ -181,7 +180,6 @@
     "title": "系统管理",
     "tabs": {
       "governance": "治理",
-      "billing": "计费",
       "risk": "风控",
       "observability": "可观测",
       "tickets": "工单"
@@ -190,10 +188,6 @@
       "orgPolicy": "组织策略",
       "systemAdmins": "系统管理员",
       "adminEmailPlaceholder": "admin@example.com"
-    },
-    "billing": {
-      "providers": "支付提供商",
-      "events": "支付事件"
     },
     "risk": {
       "policies": "风控策略",
@@ -234,7 +228,7 @@
   },
   "auth": {
     "title": "登录",
-    "subtitle": "登录后即可进入对话。",
+    "subtitle": "登录后创建个人工作区并开始构建工作流。",
     "sessionTitle": "会话",
     "loggedInAs": "已登录: {email}",
     "goToApp": "进入应用",
@@ -785,7 +779,7 @@
     },
     "vertex": {
       "title": "高级：Vertex AI（OAuth）",
-      "subtitle": "通过 OAuth（离线）连接 Google Cloud。可选，不影响使用托管 credits。",
+      "subtitle": "通过 OAuth（离线）连接 Google Cloud。可选，适用于使用 Vertex 的团队。",
       "projectId": "项目 ID",
       "location": "区域",
       "connect": "连接",
@@ -797,37 +791,6 @@
     "modelConnectionsTitle": "模型连接",
     "modelConnectionsDescription": "常规配置与授权请使用「模型连接」页面。",
     "openModelConnections": "打开模型连接"
-  },
-  "billing": {
-    "credits": "Credits",
-    "title": "计费",
-    "subtitle": "管理点数余额，并按需充值。",
-    "status": {
-      "success": "充值完成。Credits 将在稍后到账。",
-      "cancel": "已取消支付。"
-    },
-    "balance": {
-      "title": "Credits 余额",
-      "caption": "托管点数在这里计费；使用你自己的密钥由对应提供商计费。"
-    },
-    "topup": {
-      "title": "充值 Credits",
-      "subtitle": "通过 Stripe Checkout 购买 credits。",
-      "cta": "充值",
-      "pack": "Credits 包",
-      "disabledTitle": "Stripe 未配置",
-      "disabledDescription": "设置 STRIPE_SECRET_KEY、STRIPE_WEBHOOK_SECRET 与 STRIPE_CREDITS_PACKS_JSON 才能启用充值。",
-      "noPacksTitle": "未配置 credits 包"
-    },
-    "ledger": {
-      "title": "账单明细",
-      "subtitle": "充值与消耗记录（仅元数据）。",
-      "emptyTitle": "暂无账单记录",
-      "when": "时间",
-      "reason": "原因",
-      "delta": "变更"
-    },
-    "setupGuide": "查看配置说明"
   },
   "marketing": {
     "nav": {
@@ -884,7 +847,7 @@
     "quickstart": {
       "eyebrow": "快速上手",
       "title": "几分钟跑通第一条自动化",
-      "subtitle": "登录后自动创建个人工作区。先用内置额度试跑，后续再 BYOK。",
+      "subtitle": "登录后创建个人工作区并开始构建工作流。",
       "steps": {
         "signIn": {
           "time": "30 秒",
@@ -912,7 +875,7 @@
           "nodeSucceeded": "node_succeeded  n2:connector.action",
           "runSucceeded": "run_succeeded"
         },
-        "callout": "无需 API Key 也能试跑；内置额度用于快速上手。",
+        "callout": "无需 API Key 也能试跑；准备好后可使用 BYON。",
         "cta": "免费开始"
       }
     },
@@ -1070,15 +1033,7 @@
       "eyebrow": "定价",
       "title": "为规模化编排打造的定价",
       "subtitle": "从小规模起步，随着治理与节点执行需求升级。",
-      "footerNote": "支持年付优惠。",
-      "creditsCallout": {
-        "title": "Usage credits + BYOK",
-        "items": {
-          "managedCredits": "托管 credits：快速上手（默认无需 API Key）。",
-          "byok": "支持 BYOK：OpenAI、Anthropic、Gemini。",
-          "vertex": "高级：通过 OAuth 连接 Vertex AI。"
-        }
-      },
+      "footerNote": "支持自托管部署；企业支持请联系我们。",
       "tiers": {
         "starter": {
           "title": "Starter",

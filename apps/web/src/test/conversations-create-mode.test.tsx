@@ -80,7 +80,7 @@ describe("Conversations create modes", () => {
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1));
     const payload = mocks.createSession.mock.calls[0]?.[0] as any;
 
-    expect(payload.engineId).toBe("gateway.loop.v2");
+    expect(payload.engine.id).toBe("gateway.codex.v2");
     expect(payload.prompt.instructions).toBe("Help me accomplish my task safely and efficiently.");
     expect(payload.tools.allow).toEqual(["connector.action"]);
     expect(payload).not.toHaveProperty("title");
@@ -117,7 +117,7 @@ describe("Conversations create modes", () => {
 
     expect(payload.title).toBe("Ops assistant");
     expect(payload.toolsetId).toBe("toolset_1");
-    expect(payload.executorSelector).toEqual({ pool: "managed", tag: "west" });
+    expect(payload.executorSelector).toEqual({ pool: "byon", tag: "west" });
     expect(payload.prompt.system).toBe("System prompt");
     expect(payload.prompt.instructions).toBe("Use policy-safe responses.");
   });

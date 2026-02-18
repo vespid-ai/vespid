@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   canManageOrganizations: false,
   meData: {
     user: { id: "u_1", email: "user@example.com" },
-    account: { tier: "free", isSystemAdmin: false },
+    account: { isSystemAdmin: false },
     orgPolicy: { canManageOrganizations: false, maxOrganizations: 1, currentOrganizations: 1 },
     orgs: [{ id: "org_1", name: "Default Org", roleKey: "owner" }],
     defaultOrgId: "org_1",

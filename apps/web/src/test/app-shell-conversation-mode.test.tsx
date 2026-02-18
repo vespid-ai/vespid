@@ -67,7 +67,7 @@ describe("AppShell conversation mode", () => {
           return new Response(
             JSON.stringify({
               user: { id: "u_1", email: "ops@vespid.ai" },
-              account: { tier: "paid", isSystemAdmin: false },
+              account: { isSystemAdmin: false },
               orgPolicy: { canManageOrganizations: true, maxOrganizations: 5, currentOrganizations: 0 },
               orgs: [],
               defaultOrgId: null,

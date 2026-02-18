@@ -23,9 +23,6 @@ import {
   executionWorkspaces,
   executorPairingTokens,
   managedExecutors,
-  organizationBillingAccounts,
-  organizationCreditBalances,
-  organizationCreditLedger,
   organizationAgents,
   organizationExecutors,
   memberships,
@@ -39,21 +36,29 @@ import {
   supportTickets,
   toolsetBuilderSessions,
   toolsetBuilderTurns,
-  userEntitlements,
-  userPaymentEvents,
   users,
   workflowRunEvents,
   workflowRuns,
   workflows,
 } from "./schema.js";
 
+function readPgErrorCode(error: unknown): string | null {
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (typeof cursor !== "object" || cursor === null) {
+      return null;
+    }
+    const record = cursor as Record<string, unknown>;
+    if (typeof record.code === "string") {
+      return record.code;
+    }
+    cursor = record.cause ?? record.originalError ?? record.driverError ?? null;
+  }
+  return null;
+}
+
 function isPgUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "23505"
-  );
+  return readPgErrorCode(error) === "23505";
 }
 
 export async function ensureDefaultRoles(db: Db): Promise<void> {
@@ -130,7 +135,6 @@ export async function listOrganizationsForUser(db: Db, input: { userId: string }
       organizationId: organizations.id,
       organizationSlug: organizations.slug,
       organizationName: organizations.name,
-      organizationSettings: organizations.settings,
       organizationCreatedAt: organizations.createdAt,
       membershipId: memberships.id,
       membershipOrganizationId: memberships.organizationId,
@@ -148,7 +152,6 @@ export async function listOrganizationsForUser(db: Db, input: { userId: string }
       id: row.organizationId,
       slug: row.organizationSlug,
       name: row.organizationName,
-      settings: row.organizationSettings,
       createdAt: row.organizationCreatedAt,
     },
     membership: {
@@ -164,268 +167,6 @@ export async function listOrganizationsForUser(db: Db, input: { userId: string }
 export async function getOrganizationById(db: Db, input: { organizationId: string }) {
   const [row] = await db.select().from(organizations).where(eq(organizations.id, input.organizationId));
   return row ?? null;
-}
-
-export async function ensureOrganizationCreditBalanceRow(db: Db, input: { organizationId: string }) {
-  const existing = await getOrganizationCreditBalance(db, input);
-  if (existing) {
-    return existing;
-  }
-
-  try {
-    const [row] = await db
-      .insert(organizationCreditBalances)
-      .values({ organizationId: input.organizationId, balanceCredits: 0 })
-      .returning();
-    if (!row) {
-      throw new Error("Failed to create organization credit balance row");
-    }
-    return row;
-  } catch (error) {
-    if (!isPgUniqueViolation(error)) {
-      throw error;
-    }
-    const retry = await getOrganizationCreditBalance(db, input);
-    if (!retry) {
-      throw new Error("Failed to load organization credit balance row after unique violation");
-    }
-    return retry;
-  }
-}
-
-export async function getOrganizationCreditBalance(db: Db, input: { organizationId: string }) {
-  const [row] = await db
-    .select()
-    .from(organizationCreditBalances)
-    .where(eq(organizationCreditBalances.organizationId, input.organizationId));
-  return row ?? null;
-}
-
-export async function tryDebitOrganizationCredits(
-  db: Db,
-  input: {
-    organizationId: string;
-    credits: number;
-    reason: string;
-    stripeEventId?: string | null;
-    workflowRunId?: string | null;
-    createdByUserId?: string | null;
-    metadata?: unknown;
-  }
-): Promise<{ ok: true; balanceCredits: number } | { ok: false; balanceCredits: number }> {
-  const credits = Math.max(0, Math.floor(input.credits));
-  if (credits <= 0) {
-    const balanceRow = await ensureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
-    return { ok: true, balanceCredits: balanceRow.balanceCredits };
-  }
-
-  return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select()
-      .from(organizationCreditBalances)
-      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
-      .limit(1)
-      .for("update");
-
-    const current = locked ?? (await ensureOrganizationCreditBalanceRow(tx as any, { organizationId: input.organizationId }));
-    const balance = current.balanceCredits;
-    if (balance < credits) {
-      return { ok: false, balanceCredits: balance };
-    }
-
-    await tx.insert(organizationCreditLedger).values({
-      organizationId: input.organizationId,
-      deltaCredits: -credits,
-      reason: input.reason,
-      stripeEventId: input.stripeEventId ?? null,
-      workflowRunId: input.workflowRunId ?? null,
-      createdByUserId: input.createdByUserId ?? null,
-      metadata: input.metadata as any,
-    });
-
-    const [updated] = await tx
-      .update(organizationCreditBalances)
-      .set({
-        balanceCredits: balance - credits,
-        updatedAt: new Date(),
-      })
-      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
-      .returning();
-
-    return { ok: true, balanceCredits: updated?.balanceCredits ?? balance - credits };
-  });
-}
-
-export async function creditOrganizationFromStripeEvent(
-  db: Db,
-  input: {
-    organizationId: string;
-    credits: number;
-    stripeEventId: string;
-    metadata?: unknown;
-  }
-): Promise<{ applied: true; balanceCredits: number } | { applied: false; balanceCredits: number }> {
-  const credits = Math.max(0, Math.floor(input.credits));
-  if (credits <= 0) {
-    const balanceRow = await ensureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
-    return { applied: true, balanceCredits: balanceRow.balanceCredits };
-  }
-
-  return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select()
-      .from(organizationCreditBalances)
-      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
-      .limit(1)
-      .for("update");
-    const current = locked ?? (await ensureOrganizationCreditBalanceRow(tx as any, { organizationId: input.organizationId }));
-
-    try {
-      await tx.insert(organizationCreditLedger).values({
-        organizationId: input.organizationId,
-        deltaCredits: credits,
-        reason: "stripe_topup",
-        stripeEventId: input.stripeEventId,
-        metadata: input.metadata as any,
-      });
-    } catch (error) {
-      if (!isPgUniqueViolation(error)) {
-        throw error;
-      }
-      // Already processed.
-      return { applied: false, balanceCredits: current.balanceCredits };
-    }
-
-    const [updated] = await tx
-      .update(organizationCreditBalances)
-      .set({
-        balanceCredits: current.balanceCredits + credits,
-        updatedAt: new Date(),
-      })
-      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
-      .returning();
-
-    return { applied: true, balanceCredits: updated?.balanceCredits ?? current.balanceCredits + credits };
-  });
-}
-
-export async function grantOrganizationCredits(
-  db: Db,
-  input: {
-    organizationId: string;
-    credits: number;
-    reason: string;
-    createdByUserId?: string | null;
-    metadata?: unknown;
-  }
-): Promise<{ balanceCredits: number }> {
-  const credits = Math.max(0, Math.floor(input.credits));
-  if (credits <= 0) {
-    const balanceRow = await ensureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
-    return { balanceCredits: balanceRow.balanceCredits };
-  }
-
-  return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select()
-      .from(organizationCreditBalances)
-      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
-      .limit(1)
-      .for("update");
-    const current = locked ?? (await ensureOrganizationCreditBalanceRow(tx as any, { organizationId: input.organizationId }));
-
-    await tx.insert(organizationCreditLedger).values({
-      organizationId: input.organizationId,
-      deltaCredits: credits,
-      reason: input.reason,
-      createdByUserId: input.createdByUserId ?? null,
-      metadata: input.metadata as any,
-    });
-
-    const [updated] = await tx
-      .update(organizationCreditBalances)
-      .set({
-        balanceCredits: current.balanceCredits + credits,
-        updatedAt: new Date(),
-      })
-      .where(eq(organizationCreditBalances.organizationId, input.organizationId))
-      .returning();
-    return { balanceCredits: updated?.balanceCredits ?? current.balanceCredits + credits };
-  });
-}
-
-export async function listOrganizationCreditLedger(
-  db: Db,
-  input: {
-    organizationId: string;
-    limit: number;
-    cursor?: { createdAt: Date; id: string } | null;
-  }
-): Promise<{ entries: typeof organizationCreditLedger.$inferSelect[]; nextCursor: { createdAt: Date; id: string } | null }> {
-  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(200, Math.floor(input.limit))) : 50;
-
-  const where = and(
-    eq(organizationCreditLedger.organizationId, input.organizationId),
-    input.cursor
-      ? or(
-          lt(organizationCreditLedger.createdAt, input.cursor.createdAt),
-          and(eq(organizationCreditLedger.createdAt, input.cursor.createdAt), lt(organizationCreditLedger.id, input.cursor.id))
-        )
-      : undefined
-  );
-
-  const rows = await db
-    .select()
-    .from(organizationCreditLedger)
-    .where(where)
-    .orderBy(desc(organizationCreditLedger.createdAt), desc(organizationCreditLedger.id))
-    .limit(limit + 1);
-
-  const slice = rows.slice(0, limit);
-  const tail = rows.length > limit ? slice[slice.length - 1] ?? null : null;
-
-  return {
-    entries: slice,
-    nextCursor: tail ? { createdAt: tail.createdAt, id: tail.id } : null,
-  };
-}
-
-export async function getOrganizationBillingAccount(db: Db, input: { organizationId: string }) {
-  const [row] = await db
-    .select()
-    .from(organizationBillingAccounts)
-    .where(eq(organizationBillingAccounts.organizationId, input.organizationId));
-  return row ?? null;
-}
-
-export async function createOrganizationBillingAccount(
-  db: Db,
-  input: { organizationId: string; stripeCustomerId: string }
-) {
-  const existing = await getOrganizationBillingAccount(db, { organizationId: input.organizationId });
-  if (existing) {
-    return existing;
-  }
-
-  try {
-    const [row] = await db
-      .insert(organizationBillingAccounts)
-      .values({ organizationId: input.organizationId, stripeCustomerId: input.stripeCustomerId })
-      .returning();
-    if (!row) {
-      throw new Error("Failed to create billing account");
-    }
-    return row;
-  } catch (error) {
-    if (!isPgUniqueViolation(error)) {
-      throw error;
-    }
-    const retry = await getOrganizationBillingAccount(db, { organizationId: input.organizationId });
-    if (!retry) {
-      throw new Error("Failed to load billing account after unique violation");
-    }
-    return retry;
-  }
 }
 
 export async function updateOrganizationSettings(
@@ -2182,12 +1923,13 @@ export async function createAgentSession(
     resetPolicySnapshot?: unknown;
   }
 ) {
+  const sessionKey = input.sessionKey ?? `session:${crypto.randomUUID()}`;
   const [row] = await db
     .insert(agentSessions)
     .values({
       organizationId: input.organizationId,
       createdByUserId: input.createdByUserId,
-      sessionKey: input.sessionKey ?? `session:${crypto.randomUUID()}`,
+      sessionKey,
       scope: input.scope ?? "main",
       title: input.title ?? "",
       status: input.status ?? "active",
@@ -2209,11 +1951,22 @@ export async function createAgentSession(
       lastActivityAt: new Date(),
       updatedAt: new Date(),
     })
+    .onConflictDoNothing({
+      target: [agentSessions.organizationId, agentSessions.sessionKey],
+    })
     .returning();
-  if (!row) {
+  if (row) {
+    return row;
+  }
+  const [existing] = await db
+    .select()
+    .from(agentSessions)
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.sessionKey, sessionKey)))
+    .limit(1);
+  if (!existing) {
     throw new Error("Failed to create agent session");
   }
-  return row;
+  return existing;
 }
 
 export async function getAgentSessionById(db: Db, input: { organizationId: string; sessionId: string }) {
@@ -3326,32 +3079,28 @@ export async function createPlatformUserRole(
   db: Db,
   input: { userId: string; roleKey: string; grantedByUserId?: string | null }
 ) {
-  try {
-    const [row] = await db
-      .insert(platformUserRoles)
-      .values({
-        userId: input.userId,
-        roleKey: input.roleKey,
-        grantedByUserId: input.grantedByUserId ?? null,
-      })
-      .returning();
-    if (!row) {
-      throw new Error("Failed to create platform user role");
-    }
+  const [row] = await db
+    .insert(platformUserRoles)
+    .values({
+      userId: input.userId,
+      roleKey: input.roleKey,
+      grantedByUserId: input.grantedByUserId ?? null,
+    })
+    .onConflictDoNothing({
+      target: [platformUserRoles.userId, platformUserRoles.roleKey],
+    })
+    .returning();
+  if (row) {
     return row;
-  } catch (error) {
-    if (!isPgUniqueViolation(error)) {
-      throw error;
-    }
-    const [existing] = await db
-      .select()
-      .from(platformUserRoles)
-      .where(and(eq(platformUserRoles.userId, input.userId), eq(platformUserRoles.roleKey, input.roleKey)));
-    if (!existing) {
-      throw new Error("Failed to read existing platform user role");
-    }
-    return existing;
   }
+  const [existing] = await db
+    .select()
+    .from(platformUserRoles)
+    .where(and(eq(platformUserRoles.userId, input.userId), eq(platformUserRoles.roleKey, input.roleKey)));
+  if (!existing) {
+    throw new Error("Failed to read existing platform user role");
+  }
+  return existing;
 }
 
 export async function deletePlatformUserRole(
@@ -3402,147 +3151,6 @@ export async function getPlatformSetting(
 
 export async function listPlatformSettings(db: Db) {
   return await db.select().from(platformSettings).orderBy(asc(platformSettings.key));
-}
-
-export async function createUserPaymentEvent(
-  db: Db,
-  input: {
-    provider: string;
-    providerEventId: string;
-    payerUserId?: string | null;
-    payerEmail?: string | null;
-    status: string;
-    amount?: number | null;
-    currency?: string | null;
-    rawPayload?: unknown;
-  }
-) {
-  try {
-    const [row] = await db
-      .insert(userPaymentEvents)
-      .values({
-        provider: input.provider,
-        providerEventId: input.providerEventId,
-        payerUserId: input.payerUserId ?? null,
-        payerEmail: input.payerEmail ?? null,
-        status: input.status,
-        amount: input.amount ?? null,
-        currency: input.currency ?? null,
-        rawPayload: (input.rawPayload ?? {}) as any,
-      })
-      .returning();
-    if (!row) {
-      throw new Error("Failed to create user payment event");
-    }
-    return row;
-  } catch (error) {
-    if (!isPgUniqueViolation(error)) {
-      throw error;
-    }
-    const [existing] = await db
-      .select()
-      .from(userPaymentEvents)
-      .where(and(eq(userPaymentEvents.provider, input.provider), eq(userPaymentEvents.providerEventId, input.providerEventId)));
-    if (!existing) {
-      throw new Error("Failed to read existing user payment event");
-    }
-    return existing;
-  }
-}
-
-export async function listUserPaymentEvents(
-  db: Db,
-  input?: { provider?: string; limit?: number }
-) {
-  const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
-  const query = db.select().from(userPaymentEvents).orderBy(desc(userPaymentEvents.createdAt)).limit(limit);
-  if (input?.provider) {
-    return await query.where(eq(userPaymentEvents.provider, input.provider));
-  }
-  return await query;
-}
-
-export async function upsertUserEntitlement(
-  db: Db,
-  input: {
-    userId: string;
-    tier: string;
-    sourceProvider: string;
-    sourceEventId: string;
-    validFrom?: Date;
-    validUntil?: Date | null;
-    active?: boolean;
-  }
-) {
-  const [row] = await db
-    .insert(userEntitlements)
-    .values({
-      userId: input.userId,
-      tier: input.tier,
-      sourceProvider: input.sourceProvider,
-      sourceEventId: input.sourceEventId,
-      validFrom: input.validFrom ?? new Date(),
-      validUntil: input.validUntil ?? null,
-      active: input.active ?? true,
-    })
-    .onConflictDoUpdate({
-      target: [userEntitlements.userId, userEntitlements.sourceProvider, userEntitlements.sourceEventId],
-      set: {
-        tier: input.tier,
-        validUntil: input.validUntil ?? null,
-        active: input.active ?? true,
-      },
-    })
-    .returning();
-  if (!row) {
-    throw new Error("Failed to upsert user entitlement");
-  }
-  return row;
-}
-
-export async function listUserEntitlements(
-  db: Db,
-  input: { userId: string; activeOnly?: boolean }
-) {
-  const where: any[] = [eq(userEntitlements.userId, input.userId)];
-  if (input.activeOnly) {
-    where.push(eq(userEntitlements.active, true));
-    where.push(or(isNull(userEntitlements.validUntil), gt(userEntitlements.validUntil, new Date())));
-  }
-  return await db
-    .select()
-    .from(userEntitlements)
-    .where(and(...where))
-    .orderBy(desc(userEntitlements.createdAt));
-}
-
-export async function setUserEntitlementTier(
-  db: Db,
-  input: {
-    userId: string;
-    tier: "free" | "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    actorUserId?: string | null;
-  }
-) {
-  if (input.tier === "free") {
-    await db
-      .update(userEntitlements)
-      .set({ active: false, validUntil: new Date() })
-      .where(and(eq(userEntitlements.userId, input.userId), eq(userEntitlements.active, true)));
-    return null;
-  }
-  const row = await upsertUserEntitlement(db, {
-    userId: input.userId,
-    tier: "paid",
-    sourceProvider: input.sourceProvider,
-    sourceEventId: input.sourceEventId,
-    validFrom: new Date(),
-    validUntil: null,
-    active: true,
-  });
-  return row;
 }
 
 export async function createSupportTicket(

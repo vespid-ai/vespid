@@ -24,10 +24,10 @@ export function SheetContent({
 }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className="fixed inset-0 bg-black/25 backdrop-blur-sm" />
+      <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/25 backdrop-blur-sm" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed top-0 h-dvh w-[min(88vw,360px)] border border-borderSubtle/60 bg-gradient-to-b from-panel/92 to-panel/70 shadow-elev3 shadow-inset outline-none",
+          "fixed top-0 z-50 h-dvh w-[min(88vw,360px)] border border-borderSubtle/60 bg-gradient-to-b from-panel/92 to-panel/70 shadow-elev3 shadow-inset outline-none",
           side === "left" ? "left-0 rounded-r-[var(--radius-lg)]" : "right-0 rounded-l-[var(--radius-lg)]",
           "animate-fade-in",
           className

@@ -11,7 +11,6 @@
     "sessions": "Chat",
     "models": "Model Connections",
     "secrets": "Secrets",
-    "billing": "Billing",
     "agents": "Agents",
     "toolsets": "Toolsets",
     "auth": "Sign in",
@@ -261,7 +260,6 @@
     "title": "Admin",
     "tabs": {
       "governance": "Governance",
-      "billing": "Billing",
       "risk": "Risk",
       "observability": "Observability",
       "tickets": "Tickets"
@@ -270,10 +268,6 @@
       "orgPolicy": "Organization policy",
       "systemAdmins": "System administrators",
       "adminEmailPlaceholder": "admin@example.com"
-    },
-    "billing": {
-      "providers": "Payment providers",
-      "events": "Payment events"
     },
     "risk": {
       "policies": "Risk policies",
@@ -314,7 +308,7 @@
   },
   "auth": {
     "title": "Sign in",
-    "subtitle": "Sign in to continue to Chat.",
+    "subtitle": "Sign in to get a personal workspace and start building workflows.",
     "sessionTitle": "Session",
     "loggedInAs": "Logged in as {email}",
     "goToApp": "Go to App",
@@ -785,7 +779,7 @@
     },
     "vertex": {
       "title": "Advanced: Vertex AI (OAuth)",
-      "subtitle": "Connect Google Cloud via OAuth (offline). This is optional and not required for managed credits.",
+      "subtitle": "Connect Google Cloud via OAuth (offline). Optional for teams using Vertex.",
       "projectId": "Project ID",
       "location": "Location",
       "connect": "Connect",
@@ -797,37 +791,6 @@
     "modelConnectionsTitle": "Model connections",
     "modelConnectionsDescription": "Use Model Connections for normal setup and authorization flows.",
     "openModelConnections": "Open Model Connections"
-  },
-  "billing": {
-    "credits": "Credits",
-    "title": "Billing",
-    "subtitle": "Manage credits and top up when needed.",
-    "status": {
-      "success": "Top up completed. Credits will appear shortly.",
-      "cancel": "Checkout cancelled."
-    },
-    "balance": {
-      "title": "Credits balance",
-      "caption": "Managed credits are billed here. Calls with your own key are billed by your provider."
-    },
-    "topup": {
-      "title": "Top up credits",
-      "subtitle": "Purchase credits via Stripe Checkout.",
-      "cta": "Top up",
-      "pack": "Credits pack",
-      "disabledTitle": "Stripe is not configured",
-      "disabledDescription": "Set STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and STRIPE_CREDITS_PACKS_JSON to enable top-ups.",
-      "noPacksTitle": "No credit packs configured"
-    },
-    "ledger": {
-      "title": "Ledger",
-      "subtitle": "Credit top-ups and usage debits (metadata only).",
-      "emptyTitle": "No ledger entries yet",
-      "when": "When",
-      "reason": "Reason",
-      "delta": "Delta"
-    },
-    "setupGuide": "View setup guide"
   },
   "marketing": {
     "nav": {
@@ -884,7 +847,7 @@
     "quickstart": {
       "eyebrow": "Quickstart",
       "title": "From zero to first run in minutes",
-      "subtitle": "Sign in to get a personal workspace. Try managed credits now, bring your own key later.",
+      "subtitle": "Sign in to get a personal workspace and start building workflows.",
       "steps": {
         "signIn": {
           "time": "30s",
@@ -912,7 +875,7 @@
           "nodeSucceeded": "node_succeeded  n2:connector.action",
           "runSucceeded": "run_succeeded"
         },
-        "callout": "No API key required to try. Managed credits included for quick starts.",
+        "callout": "No API key required to try. BYON is supported when you are ready.",
         "cta": "Start Free"
       }
     },
@@ -1070,15 +1033,7 @@
       "eyebrow": "Pricing",
       "title": "Pricing built for orchestration at scale",
       "subtitle": "Start small, upgrade when you need deeper governance and node execution.",
-      "footerNote": "Annual billing discounts available.",
-      "creditsCallout": {
-        "title": "Usage credits + BYOK",
-        "items": {
-          "managedCredits": "Managed LLM credits included for quick starts (no API key required).",
-          "byok": "BYOK supported: OpenAI, Anthropic, Gemini.",
-          "vertex": "Advanced: connect Vertex AI via OAuth."
-        }
-      },
+      "footerNote": "Self-hosted friendly. Contact us for enterprise support.",
       "tiers": {
         "starter": {
           "title": "Starter",

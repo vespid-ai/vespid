@@ -94,16 +94,8 @@ import {
   markWorkflowRunFailed as dbMarkWorkflowRunFailed,
   updateOrganizationSettings as dbUpdateOrganizationSettings,
   listOrganizationsForUser as dbListOrganizationsForUser,
-  ensureOrganizationCreditBalanceRow as dbEnsureOrganizationCreditBalanceRow,
-  getOrganizationCreditBalance as dbGetOrganizationCreditBalance,
-  grantOrganizationCredits as dbGrantOrganizationCredits,
-  creditOrganizationFromStripeEvent as dbCreditOrganizationFromStripeEvent,
-  listOrganizationCreditLedger as dbListOrganizationCreditLedger,
-  getOrganizationBillingAccount as dbGetOrganizationBillingAccount,
-  createOrganizationBillingAccount as dbCreateOrganizationBillingAccount,
   createPlatformUserRole as dbCreatePlatformUserRole,
   createSupportTicket as dbCreateSupportTicket,
-  createUserPaymentEvent as dbCreateUserPaymentEvent,
   createChannelAccount as dbCreateChannelAccount,
   listChannelAccountsByOrg as dbListChannelAccountsByOrg,
   getChannelAccountById as dbGetChannelAccountById,
@@ -120,16 +112,12 @@ import {
   listPlatformAuditLogs as dbListPlatformAuditLogs,
   listSupportTicketEvents as dbListSupportTicketEvents,
   listSupportTickets as dbListSupportTickets,
-  listUserEntitlements as dbListUserEntitlements,
-  listUserPaymentEvents as dbListUserPaymentEvents,
   appendPlatformAuditLog as dbAppendPlatformAuditLog,
   appendSupportTicketEvent as dbAppendSupportTicketEvent,
   deletePlatformUserRole as dbDeletePlatformUserRole,
   getSupportTicketById as dbGetSupportTicketById,
   patchSupportTicket as dbPatchSupportTicket,
   upsertPlatformSetting as dbUpsertPlatformSetting,
-  upsertUserEntitlement as dbUpsertUserEntitlement,
-  setUserEntitlementTier as dbSetUserEntitlementTier,
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
@@ -153,16 +141,12 @@ import type {
   SupportTicketEventRecord,
   SupportTicketRecord,
   ExecutorPairingTokenRecord,
-  OrganizationCreditLedgerEntryRecord,
-  OrganizationCreditsRecord,
   OrganizationExecutorRecord,
   OrganizationSettings,
   ManagedExecutorRecord,
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
-  UserEntitlementRecord,
   UserOrgSummaryRecord,
-  UserPaymentEventRecord,
 } from "../types.js";
 
 function toIso(value: Date): string {
@@ -505,10 +489,7 @@ export class PgAppStore implements AppStore {
     }));
   }
 
-  async ensurePersonalOrganizationForUser(input: {
-    actorUserId: string;
-    trialCredits: number;
-  }): Promise<{ defaultOrgId: string; created: boolean }> {
+  async ensurePersonalOrganizationForUser(input: { actorUserId: string }): Promise<{ defaultOrgId: string; created: boolean }> {
     const existing = await this.listOrganizationsForUser({ actorUserId: input.actorUserId });
     if (existing.length > 0) {
       return { defaultOrgId: existing[0]!.organization.id, created: false };
@@ -529,19 +510,6 @@ export class PgAppStore implements AppStore {
             ownerUserId: input.actorUserId,
           })
         );
-
-        await this.withOrgContext({ userId: input.actorUserId, organizationId }, async (db) => {
-          await dbEnsureOrganizationCreditBalanceRow(db, { organizationId });
-          if (input.trialCredits > 0) {
-            await dbGrantOrganizationCredits(db, {
-              organizationId,
-              credits: input.trialCredits,
-              reason: "trial_grant",
-              createdByUserId: input.actorUserId,
-              metadata: { kind: "personal_workspace_bootstrap" },
-            });
-          }
-        });
 
         return { defaultOrgId: organizationId, created: true };
       } catch (error) {
@@ -624,113 +592,6 @@ export class PgAppStore implements AppStore {
       value: row.value ?? {},
       updatedByUserId: row.updatedByUserId ?? null,
       updatedAt: toIso(row.updatedAt),
-    };
-  }
-
-  async createUserPaymentEvent(input: {
-    provider: string;
-    providerEventId: string;
-    payerUserId?: string | null;
-    payerEmail?: string | null;
-    status: string;
-    amount?: number | null;
-    currency?: string | null;
-    rawPayload?: unknown;
-  }): Promise<UserPaymentEventRecord> {
-    const row = await this.withUserContext({ userId: input.payerUserId ?? crypto.randomUUID() }, async (db) =>
-      dbCreateUserPaymentEvent(db, input)
-    );
-    return {
-      id: row.id,
-      provider: row.provider,
-      providerEventId: row.providerEventId,
-      payerUserId: row.payerUserId ?? null,
-      payerEmail: row.payerEmail ?? null,
-      status: row.status,
-      amount: row.amount ?? null,
-      currency: row.currency ?? null,
-      rawPayload: row.rawPayload ?? {},
-      createdAt: toIso(row.createdAt),
-    };
-  }
-
-  async listUserPaymentEvents(input?: { provider?: string; limit?: number }): Promise<UserPaymentEventRecord[]> {
-    const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListUserPaymentEvents(db, input));
-    return rows.map((row) => ({
-      id: row.id,
-      provider: row.provider,
-      providerEventId: row.providerEventId,
-      payerUserId: row.payerUserId ?? null,
-      payerEmail: row.payerEmail ?? null,
-      status: row.status,
-      amount: row.amount ?? null,
-      currency: row.currency ?? null,
-      rawPayload: row.rawPayload ?? {},
-      createdAt: toIso(row.createdAt),
-    }));
-  }
-
-  async upsertUserEntitlement(input: {
-    userId: string;
-    tier: "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    validFrom?: Date;
-    validUntil?: Date | null;
-    active?: boolean;
-  }): Promise<UserEntitlementRecord> {
-    const row = await this.withUserContext({ userId: input.userId }, async (db) => dbUpsertUserEntitlement(db, input));
-    return {
-      id: row.id,
-      userId: row.userId,
-      tier: row.tier,
-      sourceProvider: row.sourceProvider,
-      sourceEventId: row.sourceEventId,
-      validFrom: toIso(row.validFrom),
-      validUntil: row.validUntil ? toIso(row.validUntil) : null,
-      active: Boolean(row.active),
-      createdAt: toIso(row.createdAt),
-    };
-  }
-
-  async listUserEntitlements(input: { userId: string; activeOnly?: boolean }): Promise<UserEntitlementRecord[]> {
-    const rows = await this.withUserContext({ userId: input.userId }, async (db) => dbListUserEntitlements(db, input));
-    return rows.map((row) => ({
-      id: row.id,
-      userId: row.userId,
-      tier: row.tier,
-      sourceProvider: row.sourceProvider,
-      sourceEventId: row.sourceEventId,
-      validFrom: toIso(row.validFrom),
-      validUntil: row.validUntil ? toIso(row.validUntil) : null,
-      active: Boolean(row.active),
-      createdAt: toIso(row.createdAt),
-    }));
-  }
-
-  async setUserEntitlementTier(input: {
-    userId: string;
-    tier: "free" | "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    actorUserId?: string | null;
-  }): Promise<UserEntitlementRecord | null> {
-    const row = await this.withUserContext({ userId: input.actorUserId ?? input.userId }, async (db) =>
-      dbSetUserEntitlementTier(db, input)
-    );
-    if (!row) {
-      return null;
-    }
-    return {
-      id: row.id,
-      userId: row.userId,
-      tier: row.tier,
-      sourceProvider: row.sourceProvider,
-      sourceEventId: row.sourceEventId,
-      validFrom: toIso(row.validFrom),
-      validUntil: row.validUntil ? toIso(row.validUntil) : null,
-      active: Boolean(row.active),
-      createdAt: toIso(row.createdAt),
     };
   }
 
@@ -901,9 +762,6 @@ export class PgAppStore implements AppStore {
           ownerUserId: input.ownerUserId,
         })
     );
-    await this.withOrgContext({ userId: input.ownerUserId, organizationId }, async (db) => {
-      await dbEnsureOrganizationCreditBalanceRow(db, { organizationId });
-    });
     return {
       organization: {
         id: organization.id,
@@ -1896,129 +1754,6 @@ export class PgAppStore implements AppStore {
       async (db) => dbDeleteConnectorSecret(db, { organizationId: input.organizationId, secretId: input.secretId })
     );
     return Boolean(row);
-  }
-
-  async getOrganizationCredits(input: { organizationId: string; actorUserId?: string }): Promise<OrganizationCreditsRecord> {
-    const row = await this.withOrgContext(
-      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
-      async (db) => {
-        const existing = await dbGetOrganizationCreditBalance(db, { organizationId: input.organizationId });
-        return existing ?? (await dbEnsureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId }));
-      }
-    );
-
-    return {
-      organizationId: row.organizationId,
-      balanceCredits: row.balanceCredits,
-      updatedAt: toIso(row.updatedAt),
-    };
-  }
-
-  async grantOrganizationCredits(input: {
-    organizationId: string;
-    actorUserId?: string;
-    credits: number;
-    reason: string;
-    metadata?: unknown;
-  }): Promise<OrganizationCreditsRecord> {
-    await this.withOrgContext(
-      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
-      async (db) => {
-        await dbEnsureOrganizationCreditBalanceRow(db, { organizationId: input.organizationId });
-        await dbGrantOrganizationCredits(db, {
-          organizationId: input.organizationId,
-          credits: input.credits,
-          reason: input.reason,
-          createdByUserId: input.actorUserId ?? null,
-          metadata: input.metadata,
-        });
-      }
-    );
-
-    return this.getOrganizationCredits({
-      organizationId: input.organizationId,
-      ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
-    });
-  }
-
-  async creditOrganizationFromStripeEvent(input: {
-    organizationId: string;
-    stripeEventId: string;
-    credits: number;
-    metadata?: unknown;
-  }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }> {
-    const result = await this.withOrgContext({ organizationId: input.organizationId }, async (db) =>
-      dbCreditOrganizationFromStripeEvent(db, {
-        organizationId: input.organizationId,
-        credits: input.credits,
-        stripeEventId: input.stripeEventId,
-        metadata: input.metadata,
-      })
-    );
-
-    const balance = await this.getOrganizationCredits({ organizationId: input.organizationId });
-    return { applied: result.applied, balance };
-  }
-
-  async listOrganizationCreditLedger(input: {
-    organizationId: string;
-    actorUserId: string;
-    limit: number;
-    cursor?: { createdAt: string; id: string } | null;
-  }): Promise<{ entries: OrganizationCreditLedgerEntryRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
-    const cursor = input.cursor
-      ? {
-          createdAt: new Date(input.cursor.createdAt),
-          id: input.cursor.id,
-        }
-      : null;
-
-    const result = await this.withOrgContext({ userId: input.actorUserId, organizationId: input.organizationId }, async (db) =>
-      dbListOrganizationCreditLedger(db, {
-        organizationId: input.organizationId,
-        limit: input.limit,
-        cursor,
-      })
-    );
-
-    return {
-      entries: result.entries.map((row) => ({
-        id: row.id,
-        organizationId: row.organizationId,
-        deltaCredits: row.deltaCredits,
-        reason: row.reason,
-        stripeEventId: row.stripeEventId,
-        workflowRunId: row.workflowRunId,
-        createdByUserId: row.createdByUserId,
-        metadata: row.metadata,
-        createdAt: toIso(row.createdAt),
-      })),
-      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
-    };
-  }
-
-  async getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null> {
-    const row = await this.withOrgContext(
-      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
-      async (db) => dbGetOrganizationBillingAccount(db, { organizationId: input.organizationId })
-    );
-    if (!row) {
-      return null;
-    }
-    return { stripeCustomerId: row.stripeCustomerId };
-  }
-
-  async createOrganizationBillingAccount(input: {
-    organizationId: string;
-    actorUserId?: string;
-    stripeCustomerId: string;
-  }): Promise<{ stripeCustomerId: string }> {
-    const row = await this.withOrgContext(
-      input.actorUserId ? { userId: input.actorUserId, organizationId: input.organizationId } : { organizationId: input.organizationId },
-      async (db) =>
-        dbCreateOrganizationBillingAccount(db, { organizationId: input.organizationId, stripeCustomerId: input.stripeCustomerId })
-    );
-    return { stripeCustomerId: row.stripeCustomerId };
   }
 
   async createAgentPairingToken(input: {

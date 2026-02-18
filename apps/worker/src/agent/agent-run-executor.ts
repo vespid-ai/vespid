@@ -1,82 +1,27 @@
-import type { LlmProviderId, WorkflowNodeExecutor } from "@vespid/shared";
-import { normalizeLlmProviderId } from "@vespid/shared";
+import type { WorkflowNodeExecutor } from "@vespid/shared";
+import { AGENT_ENGINE_IDS } from "@vespid/shared";
 import { z } from "zod";
-
-const agentRunTeamTeammateSchema = z.object({
-  id: z.string().min(1).max(64),
-  displayName: z.string().min(1).max(120).optional(),
-  llm: z
-    .object({
-      model: z.string().min(1).max(120),
-    })
-    .optional(),
-  prompt: z.object({
-    system: z.string().max(200_000).optional(),
-    instructions: z.string().min(1).max(200_000),
-    inputTemplate: z.string().max(200_000).optional(),
-  }),
-  tools: z.object({
-    allow: z.array(z.string().min(1).max(120)),
-    execution: z.literal("cloud").default("cloud"),
-    authDefaults: z
-      .object({
-        connectors: z.record(z.string().min(1).max(80), z.object({ secretId: z.string().uuid() })).optional(),
-      })
-      .optional(),
-  }),
-  limits: z.object({
-    maxTurns: z.number().int().min(1).max(64).default(8),
-    maxToolCalls: z.number().int().min(0).max(200).default(20),
-    timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
-    maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
-    maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
-  }),
-  output: z.object({
-    mode: z.enum(["text", "json"]).default("text"),
-    jsonSchema: z.unknown().optional(),
-  }),
-});
-
-const agentRunTeamSchema = z
-  .object({
-    mode: z.literal("supervisor"),
-    maxParallel: z.number().int().min(1).max(16).default(3),
-    teammates: z.array(agentRunTeamTeammateSchema).min(1).max(32),
-    leadMode: z.enum(["delegate_only", "normal"]).default("normal"),
-  })
-  .optional();
-
-const llmProviderSchema = z.string().min(1).transform((value, ctx) => {
-  const normalized = normalizeLlmProviderId(value);
-  if (!normalized) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Unsupported provider: ${value}`,
-    });
-    return z.NEVER;
-  }
-  return normalized;
-});
 
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
   config: z.object({
     toolsetId: z.string().uuid().optional(),
-    llm: z.object({
-      provider: llmProviderSchema.default("openai"),
-      model: z.string().min(1).max(120),
-      auth: z.object({
-        secretId: z.string().uuid().optional(),
-        fallbackToEnv: z.literal(true).optional(),
-      }),
+    engine: z.object({
+      id: z.enum(AGENT_ENGINE_IDS),
+      model: z.string().min(1).max(120).optional(),
+      auth: z
+        .object({
+          secretId: z.string().uuid().optional(),
+        })
+        .optional(),
     }),
     execution: z
       .object({
         mode: z.literal("gateway").default("gateway"),
         selector: z
           .object({
-            pool: z.enum(["managed", "byon"]).default("managed"),
+            pool: z.enum(["managed", "byon"]).default("byon"),
             labels: z.array(z.string().min(1).max(64)).max(50).optional(),
             group: z.string().min(1).max(64).optional(),
             tag: z.string().min(1).max(64).optional(),
@@ -85,11 +30,6 @@ const agentRunNodeSchema = z.object({
           .optional(),
       })
       .default({ mode: "gateway" }),
-    engine: z
-      .object({
-        id: z.enum(["gateway.loop.v2"]).default("gateway.loop.v2"),
-      })
-      .optional(),
     prompt: z.object({
       system: z.string().max(200_000).optional(),
       instructions: z.string().min(1).max(200_000),
@@ -115,7 +55,6 @@ const agentRunNodeSchema = z.object({
       mode: z.enum(["text", "json"]).default("text"),
       jsonSchema: z.unknown().optional(),
     }),
-    team: agentRunTeamSchema,
   }),
 });
 
@@ -139,32 +78,42 @@ function parseDefaultToolsetId(settings: unknown): string | null {
   return typeof id === "string" && id.trim().length > 0 ? id : null;
 }
 
+function resolveEngineSecretId(input: {
+  organizationSettings: unknown;
+  engineId: (typeof AGENT_ENGINE_IDS)[number];
+  explicitSecretId: string | null;
+}): string | null {
+  if (input.explicitSecretId) {
+    return input.explicitSecretId;
+  }
+  if (!input.organizationSettings || typeof input.organizationSettings !== "object" || Array.isArray(input.organizationSettings)) {
+    return null;
+  }
+  const agents = (input.organizationSettings as any).agents;
+  if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
+    return null;
+  }
+  const engineAuthDefaults = (agents as any).engineAuthDefaults;
+  if (!engineAuthDefaults || typeof engineAuthDefaults !== "object" || Array.isArray(engineAuthDefaults)) {
+    return null;
+  }
+  const engineDefault = (engineAuthDefaults as any)[input.engineId];
+  if (!engineDefault || typeof engineDefault !== "object" || Array.isArray(engineDefault)) {
+    return null;
+  }
+  const mode = (engineDefault as any).mode;
+  const secretId = (engineDefault as any).secretId;
+  if (mode !== "api_key") {
+    return null;
+  }
+  return typeof secretId === "string" && secretId.length > 0 ? secretId : null;
+}
+
 export function createAgentRunExecutor(input: {
   getGithubApiBaseUrl: () => string;
   loadSecretValue: (input: { organizationId: string; userId: string; secretId: string }) => Promise<string>;
-  managedCredits?: {
-    ensureAvailable: (input: { organizationId: string; userId: string; minCredits: number }) => Promise<boolean>;
-    charge: (input: {
-      organizationId: string;
-      userId: string;
-      workflowId: string;
-      runId: string;
-      nodeId: string;
-      attemptCount: number;
-      provider: LlmProviderId;
-      model: string;
-      turn: number;
-      credits: number;
-      inputTokens: number;
-      outputTokens: number;
-    }) => Promise<void>;
-  } | null;
-  loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{
-    id: string;
-    name: string;
-    mcpServers: unknown;
-    agentSkills: unknown;
-  } | null>;
+  managedCredits?: unknown;
+  loadToolsetById?: (input: { organizationId: string; toolsetId: string }) => Promise<{ id: string; name: string; mcpServers: unknown; agentSkills: unknown } | null>;
   fetchImpl?: typeof fetch;
 }): WorkflowNodeExecutor {
   return {
@@ -176,11 +125,8 @@ export function createAgentRunExecutor(input: {
       }
 
       const node = nodeParsed.data;
-      const team = node.config.team ?? null;
       const policyToolAllow = node.config.tools.allow ?? [];
-      const leadMode = team?.leadMode ?? "normal";
-      const leadEffectiveAllow = team && leadMode === "delegate_only" ? ["team.delegate", "team.map"] : policyToolAllow;
-      const effectiveAllow = team ? unique([...leadEffectiveAllow, "team.delegate", "team.map"]) : unique(leadEffectiveAllow);
+      const effectiveAllow = unique(policyToolAllow);
 
       const selector = node.config.execution.selector ?? null;
       const timeoutMs = Math.max(1000, Math.min(10 * 60 * 1000, node.config.limits.timeoutMs));
@@ -203,13 +149,10 @@ export function createAgentRunExecutor(input: {
         };
       }
 
-      const llmProvider = node.config.llm.provider;
-
       const nodeForGateway = {
         ...node,
         config: {
           ...node.config,
-          llm: { ...node.config.llm, provider: llmProvider },
           tools: {
             ...node.config.tools,
             allow: effectiveAllow,
@@ -225,10 +168,16 @@ export function createAgentRunExecutor(input: {
           )
         : {};
 
+      const effectiveEngineSecretId = resolveEngineSecretId({
+        organizationSettings: context.organizationSettings,
+        engineId: node.config.engine.id,
+        explicitSecretId: node.config.engine.auth?.secretId ?? null,
+      });
+
       return {
         status: "blocked",
-          block: {
-            kind: "agent.run",
+        block: {
+          kind: "agent.run",
           payload: {
             nodeId: node.id,
             node: nodeForGateway,
@@ -243,7 +192,7 @@ export function createAgentRunExecutor(input: {
             ...(toolsetPayload ? { toolset: toolsetPayload } : {}),
             env: { githubApiBaseUrl: input.getGithubApiBaseUrl() },
             secretRefs: {
-              ...(node.config.llm.auth.secretId ? { llmSecretId: node.config.llm.auth.secretId } : {}),
+              ...(effectiveEngineSecretId ? { engineSecretId: effectiveEngineSecretId } : {}),
               ...(Object.keys(connectorSecretIdsByConnectorId).length > 0
                 ? { connectorSecretIdsByConnectorId }
                 : {}),

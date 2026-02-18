@@ -5,7 +5,7 @@ import { apiFetchJson } from "../api";
 
 export type MeResponse = {
   user: { id: string; email: string };
-  account: { tier: "free" | "paid" | "enterprise"; isSystemAdmin: boolean };
+  account: { isSystemAdmin: boolean };
   orgPolicy: {
     canManageOrganizations: boolean;
     maxOrganizations: number | null;

@@ -1,0 +1,34 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Signed-off-by on all commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          failures=0
+          for commit in $(git rev-list "${BASE_SHA}..${HEAD_SHA}"); do
+            if ! git log -1 --pretty=%B "$commit" | grep -iq '^Signed-off-by: '; then
+              echo "Missing Signed-off-by trailer in commit $commit" >&2
+              failures=1
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "DCO check failed. Please rebase with signed commits (git commit -s)." >&2
+            exit 1
+          fi

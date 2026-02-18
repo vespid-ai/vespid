@@ -14,7 +14,7 @@ import { useSession } from "../../../../lib/hooks/use-session";
 import { useMe } from "../../../../lib/hooks/use-me";
 import { apiFetchJson, ApiError } from "../../../../lib/api";
 
-type AdminTab = "governance" | "billing" | "risk" | "observability" | "tickets";
+type AdminTab = "governance" | "risk" | "observability" | "tickets";
 
 export default function AdminPage() {
   const t = useTranslations();
@@ -51,19 +51,6 @@ export default function AdminPage() {
     enabled: canAccess,
     queryFn: () =>
       apiFetchJson<{ systemAdmins: Array<{ userId: string; user: { email: string } | null }> }>("/v1/admin/system-admins"),
-  });
-
-  const paymentProvidersQuery = useQuery({
-    queryKey: ["admin", "payment-providers"],
-    enabled: canAccess && tab === "billing",
-    queryFn: () =>
-      apiFetchJson<{ providers: Array<{ provider: string; enabled: boolean; implemented: boolean }> }>("/v1/admin/payments/providers"),
-  });
-
-  const paymentEventsQuery = useQuery({
-    queryKey: ["admin", "payment-events"],
-    enabled: canAccess && tab === "billing",
-    queryFn: () => apiFetchJson<{ events: Array<{ id: string; provider: string; status: string; createdAt: string }> }>("/v1/admin/payments/events"),
   });
 
   const riskPoliciesQuery = useQuery({
@@ -118,20 +105,6 @@ export default function AdminPage() {
       const message = error instanceof ApiError ? error.payload?.message ?? error.message : t("common.unknownError");
       toast.error(message);
     },
-  });
-
-  const toggleProviderMutation = useMutation({
-    mutationFn: async (input: { provider: string; enabled: boolean }) => {
-      return apiFetchJson(`/v1/admin/payments/providers/${input.provider}`, {
-        method: "PUT",
-        body: JSON.stringify({ enabled: input.enabled }),
-      });
-    },
-    onSuccess: () => {
-      toast.success(t("common.saved"));
-      void queryClient.invalidateQueries({ queryKey: ["admin", "payment-providers"] });
-    },
-    onError: () => toast.error(t("common.unknownError")),
   });
 
   const saveRiskPolicyMutation = useMutation({
@@ -195,9 +168,8 @@ export default function AdminPage() {
       </div>
 
       <Tabs value={tab} onValueChange={(next) => setTab(next as AdminTab)} className="grid gap-4">
-        <TabsList className="grid w-full grid-cols-2 gap-2 md:grid-cols-5">
+        <TabsList className="grid w-full grid-cols-2 gap-2 md:grid-cols-4">
           <TabsTrigger value="governance">{t("admin.tabs.governance")}</TabsTrigger>
-          <TabsTrigger value="billing">{t("admin.tabs.billing")}</TabsTrigger>
           <TabsTrigger value="risk">{t("admin.tabs.risk")}</TabsTrigger>
           <TabsTrigger value="observability">{t("admin.tabs.observability")}</TabsTrigger>
           <TabsTrigger value="tickets">{t("admin.tabs.tickets")}</TabsTrigger>
@@ -241,46 +213,6 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="billing" className="grid gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("admin.billing.providers")}</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-2 text-sm">
-              {(paymentProvidersQuery.data?.providers ?? []).map((provider) => (
-                <div key={provider.provider} className="flex items-center justify-between rounded border border-borderSubtle bg-panel/30 px-3 py-2">
-                  <div>
-                    <div className="font-medium">{provider.provider}</div>
-                    <div className="text-xs text-muted">{provider.implemented ? "implemented" : "reserved"}</div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={provider.enabled ? "outline" : "accent"}
-                    onClick={() => toggleProviderMutation.mutate({ provider: provider.provider, enabled: !provider.enabled })}
-                    disabled={toggleProviderMutation.isPending}
-                  >
-                    {provider.enabled ? t("common.disable") : t("common.enable")}
-                  </Button>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("admin.billing.events")}</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-2 text-sm">
-              {(paymentEventsQuery.data?.events ?? []).slice(0, 30).map((event) => (
-                <div key={event.id} className="rounded border border-borderSubtle bg-panel/30 px-3 py-2">
-                  <div className="font-medium">{event.provider}</div>
-                  <div className="text-xs text-muted">{event.status}</div>
-                </div>
-              ))}
             </CardContent>
           </Card>
         </TabsContent>

@@ -181,10 +181,29 @@ function asNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function providerIdToEngineId(providerId: string): "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2" {
+  if (providerId === "anthropic") return "gateway.claude.v2";
+  if (providerId === "opencode") return "gateway.opencode.v2";
+  return "gateway.codex.v2";
+}
+
+function engineIdToProviderId(engineId: string): LlmConfigValue["providerId"] {
+  if (engineId === "gateway.claude.v2") return "anthropic";
+  if (engineId === "gateway.opencode.v2") return "opencode";
+  return "openai-codex";
+}
+
+function normalizeProviderId(input: unknown): LlmConfigValue["providerId"] {
+  const raw = typeof input === "string" ? input : "openai-codex";
+  if (raw === "openai") return "openai-codex";
+  return raw as LlmConfigValue["providerId"];
+}
+
 function readOrgDefaultAgentLlm(settings: any): LlmConfigValue {
   const d = settings?.llm?.defaults?.primary;
-  const providerId = typeof d?.provider === "string" ? d.provider : "openai";
-  const modelId = typeof d?.model === "string" ? d.model : "gpt-5.3-codex";
+  const providerRaw = typeof d?.provider === "string" ? d.provider : "openai-codex";
+  const providerId = providerRaw === "openai" ? "openai-codex" : providerRaw;
+  const modelId = typeof d?.model === "string" ? d.model : "gpt-5-codex";
   const secretId = typeof d?.secretId === "string" ? d.secretId : null;
   return { providerId: providerId as any, modelId, secretId };
 }
@@ -196,17 +215,15 @@ function defaultNodeByType(params: {
 }): WorkflowNodeAny {
   const { type, orgDefaultAgentLlm, secrets } = params;
   if (type === "agent.run") {
+    const engineId = providerIdToEngineId(orgDefaultAgentLlm.providerId);
     return {
       id: "",
       type,
       config: {
-        llm: {
-          provider: orgDefaultAgentLlm.providerId,
+        engine: {
+          id: engineId,
           model: orgDefaultAgentLlm.modelId,
-          auth: {
-            ...(orgDefaultAgentLlm.secretId ? { secretId: orgDefaultAgentLlm.secretId } : {}),
-            fallbackToEnv: true,
-          },
+          ...(orgDefaultAgentLlm.secretId ? { auth: { secretId: orgDefaultAgentLlm.secretId } } : {}),
         },
         prompt: {
           instructions: "Summarize the input and decide the next step.",
@@ -226,7 +243,10 @@ function defaultNodeByType(params: {
           maxRuntimeChars: 200_000,
         },
         execution: {
-          mode: "cloud",
+          mode: "gateway",
+          selector: {
+            pool: "byon",
+          },
         },
       },
     };
@@ -409,8 +429,8 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("form");
 
   const bulkInitRef = useRef(false);
-  const [bulkAgentLlm, setBulkAgentLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5.3-codex", secretId: null });
-  const [bulkTeammateModel, setBulkTeammateModel] = useState<string>("gpt-5.3-codex");
+  const [bulkAgentLlm, setBulkAgentLlm] = useState<LlmConfigValue>({ providerId: "openai-codex", modelId: "gpt-5-codex", secretId: null });
+  const [bulkTeammateModel, setBulkTeammateModel] = useState<string>("gpt-5-codex");
 
   const issueNodeIds = useMemo(
     () => new Set(issues.map((i) => i.nodeId).filter((v): v is string => typeof v === "string" && v.length > 0)),
@@ -696,7 +716,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                   ...exec,
                   mode: nextMode,
                   ...(nextMode === "cloud" ? { selector: undefined } : {}),
-                  ...(nextMode === "executor" && !selector ? { selector: { pool: "managed" } } : {}),
+                  ...(nextMode === "executor" && !selector ? { selector: { pool: "byon" } } : {}),
                 },
               });
             }}
@@ -724,11 +744,11 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                   }
                   const nextSel =
                     v === "tag"
-                      ? { pool: "managed", tag: "" }
+                      ? { pool: "byon", tag: "" }
                       : v === "executorId"
-                        ? { pool: "managed", executorId: "" }
+                        ? { pool: "byon", executorId: "" }
                         : v === "group"
-                          ? { pool: "managed", group: "" }
+                          ? { pool: "byon", group: "" }
                           : undefined;
                   params.onChange({ ...params.config, execution: { ...exec, mode, selector: nextSel } });
                 }}
@@ -753,11 +773,11 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                     const raw = e.target.value;
                     const nextSel =
                       selectorKind === "tag"
-                        ? { pool: "managed", tag: raw }
+                        ? { pool: "byon", tag: raw }
                         : selectorKind === "executorId"
-                          ? { pool: "managed", executorId: raw }
+                          ? { pool: "byon", executorId: raw }
                           : selectorKind === "group"
-                            ? { pool: "managed", group: raw }
+                            ? { pool: "byon", group: raw }
                             : undefined;
                     params.onChange({ ...params.config, execution: { ...exec, mode, selector: nextSel } });
                   }}
@@ -773,17 +793,27 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
   function renderAgentRunForm(node: WorkflowNodeAny) {
     const cfg = asObject(node.config) ?? {};
     const prompt = asObject(cfg["prompt"]) ?? {};
-    const llm = asObject(cfg["llm"]) ?? {};
-    const llmAuth = asObject(llm["auth"]) ?? {};
+    const engine = asObject(cfg["engine"]) ?? {};
+    const engineAuth = asObject(engine["auth"]) ?? {};
+    const legacyLlm = asObject(cfg["llm"]) ?? {};
+    const legacyLlmAuth = asObject(legacyLlm["auth"]) ?? {};
     const tools = asObject(cfg["tools"]) ?? {};
     const limits = asObject(cfg["limits"]) ?? {};
     const output = asObject(cfg["output"]) ?? {};
     const team = asObject(cfg["team"]);
 
     const llmValue: LlmConfigValue = {
-      providerId: (typeof llm["provider"] === "string" ? llm["provider"] : "openai") as any,
-      modelId: asString(llm["model"], "gpt-5.3-codex"),
-      secretId: typeof llmAuth["secretId"] === "string" ? (llmAuth["secretId"] as string) : null,
+      providerId:
+        typeof engine["id"] === "string"
+          ? engineIdToProviderId(engine["id"] as string)
+          : normalizeProviderId(legacyLlm["provider"]),
+      modelId: asString(engine["model"], asString(legacyLlm["model"], "gpt-5-codex")),
+      secretId:
+        typeof engineAuth["secretId"] === "string"
+          ? (engineAuth["secretId"] as string)
+          : typeof legacyLlmAuth["secretId"] === "string"
+            ? (legacyLlmAuth["secretId"] as string)
+            : null,
     };
 
     const toolsAllowText = (Array.isArray(tools["allow"]) ? tools["allow"] : []).filter((v) => typeof v === "string").join("\n");
@@ -796,6 +826,11 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     const timeoutMs = asNumber(limits["timeoutMs"], 60_000);
 
     const toolsetId = typeof cfg["toolsetId"] === "string" ? (cfg["toolsetId"] as string) : "";
+    const executionCfg = asObject(cfg["execution"]) ?? {};
+    const selector = asObject(executionCfg["selector"]) ?? {};
+    const selectorTag = typeof selector["tag"] === "string" ? (selector["tag"] as string) : "";
+    const selectorGroup = typeof selector["group"] === "string" ? (selector["group"] as string) : "";
+    const selectorExecutorId = typeof selector["executorId"] === "string" ? (selector["executorId"] as string) : "";
 
     const teamEnabled = Boolean(team);
     const teamLeadMode =
@@ -814,19 +849,15 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
             onChange={(next) => {
               updateNode(node.id, (cur) => {
                 const curCfg = asObject(cur.config) ?? {};
-                const curLlm = asObject(curCfg["llm"]) ?? {};
-                const provider = next.providerId;
-                const model = next.modelId;
-                const secretId = next.secretId;
+                const engineId = providerIdToEngineId(next.providerId);
                 return {
                   ...cur,
                   config: {
                     ...curCfg,
-                    llm: {
-                      ...curLlm,
-                      provider,
-                      model,
-                      auth: { ...(secretId ? { secretId } : {}), fallbackToEnv: true },
+                    engine: {
+                      id: engineId,
+                      model: next.modelId,
+                      ...(next.secretId ? { auth: { secretId: next.secretId } } : {}),
                     },
                   },
                 };
@@ -944,11 +975,85 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
           />
         </div>
 
-        {renderExecutionSection({
-          nodeId: node.id,
-          config: cfg,
-          onChange: (next) => updateNode(node.id, (cur) => ({ ...cur, config: next })),
-        })}
+        <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+          <div className="text-sm font-medium text-text">Execution</div>
+          <div className="text-xs text-muted">agent.run is BYON-only and always executes through gateway dispatch.</div>
+          <div className="grid gap-1.5">
+            <Label>Selector tag (optional)</Label>
+            <Input
+              value={selectorTag}
+              onChange={(e) => {
+                const raw = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curExec = asObject(curCfg["execution"]) ?? {};
+                  const curSel = asObject(curExec["selector"]) ?? {};
+                  const nextSelector = {
+                    pool: "byon",
+                    ...(raw.trim().length ? { tag: raw } : {}),
+                    ...(typeof curSel["group"] === "string" && String(curSel["group"]).trim().length > 0
+                      ? { group: String(curSel["group"]) }
+                      : {}),
+                    ...(typeof curSel["executorId"] === "string" && String(curSel["executorId"]).trim().length > 0
+                      ? { executorId: String(curSel["executorId"]) }
+                      : {}),
+                  };
+                  return { ...cur, config: { ...curCfg, execution: { ...curExec, mode: "gateway", selector: nextSelector } } };
+                });
+              }}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Selector group (optional)</Label>
+            <Input
+              value={selectorGroup}
+              onChange={(e) => {
+                const raw = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curExec = asObject(curCfg["execution"]) ?? {};
+                  const curSel = asObject(curExec["selector"]) ?? {};
+                  const nextSelector = {
+                    pool: "byon",
+                    ...(typeof curSel["tag"] === "string" && String(curSel["tag"]).trim().length > 0
+                      ? { tag: String(curSel["tag"]) }
+                      : {}),
+                    ...(raw.trim().length ? { group: raw } : {}),
+                    ...(typeof curSel["executorId"] === "string" && String(curSel["executorId"]).trim().length > 0
+                      ? { executorId: String(curSel["executorId"]) }
+                      : {}),
+                  };
+                  return { ...cur, config: { ...curCfg, execution: { ...curExec, mode: "gateway", selector: nextSelector } } };
+                });
+              }}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Executor ID (optional)</Label>
+            <Input
+              value={selectorExecutorId}
+              onChange={(e) => {
+                const raw = e.target.value;
+                updateNode(node.id, (cur) => {
+                  const curCfg = asObject(cur.config) ?? {};
+                  const curExec = asObject(curCfg["execution"]) ?? {};
+                  const curSel = asObject(curExec["selector"]) ?? {};
+                  const nextSelector = {
+                    pool: "byon",
+                    ...(typeof curSel["tag"] === "string" && String(curSel["tag"]).trim().length > 0
+                      ? { tag: String(curSel["tag"]) }
+                      : {}),
+                    ...(typeof curSel["group"] === "string" && String(curSel["group"]).trim().length > 0
+                      ? { group: String(curSel["group"]) }
+                      : {}),
+                    ...(raw.trim().length ? { executorId: raw } : {}),
+                  };
+                  return { ...cur, config: { ...curCfg, execution: { ...curExec, mode: "gateway", selector: nextSelector } } };
+                });
+              }}
+            />
+          </div>
+        </div>
 
         <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
           <div className="text-sm font-medium text-text">Output</div>
@@ -2228,14 +2333,21 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                               const nodeAny = (n as any).data?.node as WorkflowNodeAny | undefined;
                               if (!nodeAny || nodeAny.type !== "agent.run") return n;
                               const cfg = asObject(nodeAny.config) ?? {};
-                              const llm = asObject((cfg as any)["llm"]) ?? {};
+                              const engineId = providerIdToEngineId(bulkAgentLlm.providerId);
                               const nextCfg = {
                                 ...cfg,
-                                llm: {
-                                  ...llm,
-                                  provider: bulkAgentLlm.providerId,
+                                engine: {
+                                  id: engineId,
                                   model: bulkAgentLlm.modelId,
-                                  auth: { ...(bulkAgentLlm.secretId ? { secretId: bulkAgentLlm.secretId } : {}), fallbackToEnv: true },
+                                  ...(bulkAgentLlm.secretId ? { auth: { secretId: bulkAgentLlm.secretId } } : {}),
+                                },
+                                execution: {
+                                  ...(asObject((cfg as any)["execution"]) ?? {}),
+                                  mode: "gateway",
+                                  selector: {
+                                    ...(asObject(asObject((cfg as any)["execution"])?.["selector"]) ?? {}),
+                                    pool: "byon",
+                                  },
                                 },
                               };
                               const nextNode: WorkflowNodeAny = { ...nodeAny, config: nextCfg };
@@ -2255,12 +2367,22 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                           variant="outline"
                           onClick={() => {
                             const cfg = asObject(selectedNode.config) ?? {};
-                            const llm = asObject((cfg as any)["llm"]) ?? {};
-                            const auth = asObject((llm as any)["auth"]) ?? {};
+                            const engine = asObject((cfg as any)["engine"]) ?? {};
+                            const auth = asObject((engine as any)["auth"]) ?? {};
+                            const legacyLlm = asObject((cfg as any)["llm"]) ?? {};
+                            const legacyAuth = asObject((legacyLlm as any)["auth"]) ?? {};
                             const nextBulk: LlmConfigValue = {
-                              providerId: (typeof llm["provider"] === "string" ? llm["provider"] : "openai") as any,
-                              modelId: asString(llm["model"], "gpt-5.3-codex"),
-                              secretId: typeof auth["secretId"] === "string" ? (auth["secretId"] as string) : null,
+                              providerId:
+                                typeof engine["id"] === "string"
+                                  ? engineIdToProviderId(engine["id"] as string)
+                                  : normalizeProviderId(legacyLlm["provider"]),
+                              modelId: asString(engine["model"], asString(legacyLlm["model"], "gpt-5-codex")),
+                              secretId:
+                                typeof auth["secretId"] === "string"
+                                  ? (auth["secretId"] as string)
+                                  : typeof legacyAuth["secretId"] === "string"
+                                    ? (legacyAuth["secretId"] as string)
+                                    : null,
                             };
                             setBulkAgentLlm(nextBulk);
                             toast.success("Copied selected agent.run model into bulk editor");

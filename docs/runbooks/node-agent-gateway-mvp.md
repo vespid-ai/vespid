@@ -62,7 +62,7 @@ Standalone binary examples (when release assets are available):
 
 macOS (arm64):
 ```bash
-curl -fsSL "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-darwin-arm64.tar.gz" -o "vespid-agent-darwin-arm64.tar.gz"
+curl -fsSL "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-darwin-arm64.tar.gz" -o "vespid-agent-darwin-arm64.tar.gz"
 tar -xzf "vespid-agent-darwin-arm64.tar.gz"
 chmod +x ./vespid-agent
 ./vespid-agent connect --pairing-token "<token>" --api-base "http://localhost:3001"
@@ -70,7 +70,7 @@ chmod +x ./vespid-agent
 
 Linux (x64):
 ```bash
-curl -fsSL "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-linux-x64.tar.gz" -o "vespid-agent-linux-x64.tar.gz"
+curl -fsSL "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-linux-x64.tar.gz" -o "vespid-agent-linux-x64.tar.gz"
 tar -xzf "vespid-agent-linux-x64.tar.gz"
 chmod +x ./vespid-agent
 ./vespid-agent connect --pairing-token "<token>" --api-base "http://localhost:3001"
@@ -78,7 +78,7 @@ chmod +x ./vespid-agent
 
 Windows (x64, PowerShell):
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-windows-x64.zip" -OutFile "vespid-agent-windows-x64.zip"
+Invoke-WebRequest -Uri "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-windows-x64.zip" -OutFile "vespid-agent-windows-x64.zip"
 Expand-Archive -Path "vespid-agent-windows-x64.zip" -DestinationPath . -Force
 .\\vespid-agent.exe connect --pairing-token "<token>" --api-base "http://localhost:3001"
 ```

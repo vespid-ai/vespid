@@ -1,10 +1,5 @@
 import { z } from "zod";
-import {
-  isOAuthRequiredProvider,
-  normalizeLlmProviderId,
-  providerSupportsContext,
-  type LlmProviderId,
-} from "@vespid/shared/llm/provider-registry";
+import { AGENT_ENGINE_IDS } from "@vespid/shared/agent-engine-registry";
 
 export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.manual") }),
@@ -26,20 +21,6 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
     }),
   }),
 ]);
-
-const defaultAgentLlmProvider: LlmProviderId = "openai";
-
-const llmProviderSchema = z.string().min(1).transform((value, ctx) => {
-  const normalized = normalizeLlmProviderId(value);
-  if (!normalized) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Unsupported provider: ${value}`,
-    });
-    return z.NEVER;
-  }
-  return normalized;
-});
 
 const conditionConfigSchema = z.object({
   path: z.string().min(1).max(500),
@@ -82,154 +63,75 @@ const agentExecuteSandboxSchema = z.object({
 
 const nodeExecutionSelectorSchema = z
   .object({
-    pool: z.enum(["managed", "byon"]).default("managed"),
+    pool: z.enum(["managed", "byon"]).default("byon"),
     labels: z.array(z.string().min(1).max(64)).max(50).optional(),
     group: z.string().min(1).max(64).optional(),
     tag: z.string().min(1).max(64).optional(),
     executorId: z.string().uuid().optional(),
   })
-  .default({ pool: "managed" });
+  .default({ pool: "byon" });
 
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
   config: z
     .object({
-    toolsetId: z.string().uuid().optional(),
-    llm: z.object({
-      provider: llmProviderSchema.default(defaultAgentLlmProvider),
-      model: z.string().min(1).max(120).default("gpt-5.3-codex"),
-      auth: z
-        .object({
-          secretId: z.string().uuid().optional(),
-          // MVP: always true. The runtime falls back to env vars (e.g. OPENAI_API_KEY).
-          fallbackToEnv: z.literal(true).default(true),
-        })
-        .default({ fallbackToEnv: true }),
-    }),
-    execution: z
-      .object({
-        mode: z.literal("gateway").default("gateway"),
-        selector: nodeExecutionSelectorSchema.optional(),
-      })
-      .default({ mode: "gateway" }),
-    engine: z
-      .object({
-        id: z.enum(["gateway.loop.v2"]).default("gateway.loop.v2"),
-      })
-      .optional(),
-    prompt: z.object({
-      system: z.string().max(200_000).optional(),
-      instructions: z.string().min(1).max(200_000),
-      inputTemplate: z.string().max(200_000).optional(),
-    }),
-    tools: z
-      .object({
-        // Tool IDs; enforcement is runtime-level.
-        allow: z.array(z.string().min(1).max(120)),
-        execution: z.enum(["cloud", "executor"]).default("cloud"),
-        // Optional auth defaults so the agent does not need to reference secret UUIDs in tool calls.
-        authDefaults: z
+      toolsetId: z.string().uuid().optional(),
+      engine: z.object({
+        id: z.enum(AGENT_ENGINE_IDS),
+        model: z.string().min(1).max(120).optional(),
+        auth: z
           .object({
-            connectors: z
-              .record(
-                z.string().min(1).max(80),
-                z.object({
-                  secretId: z.string().uuid(),
-                })
-              )
-              .optional(),
+            secretId: z.string().uuid().optional(),
           })
           .optional(),
-      })
-      .default({ allow: [], execution: "cloud" }),
-    limits: z
-      .object({
-        maxTurns: z.number().int().min(1).max(64).default(8),
-        maxToolCalls: z.number().int().min(0).max(200).default(20),
-        timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
-        maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
-        // Guardrail for persisted agent runtime state (history, tool results, etc.).
-        maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
-      })
-      .default({ maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 }),
-    output: z
-      .object({
-        mode: z.enum(["text", "json"]).default("text"),
-        jsonSchema: z.unknown().optional(),
-      })
-      .default({ mode: "text" }),
-    team: z
-      .object({
-        mode: z.literal("supervisor"),
-        maxParallel: z.number().int().min(1).max(16).default(3),
-        leadMode: z.enum(["delegate_only", "normal"]).default("normal"),
-        teammates: z
-          .array(
-            z.object({
-              id: z.string().min(1).max(64),
-              displayName: z.string().min(1).max(120).optional(),
-              llm: z
-                .object({
-                  model: z.string().min(1).max(120),
-                })
-                .optional(),
-              prompt: z.object({
-                system: z.string().max(200_000).optional(),
-                instructions: z.string().min(1).max(200_000),
-                inputTemplate: z.string().max(200_000).optional(),
-              }),
-              tools: z.object({
-                allow: z.array(z.string().min(1).max(120)),
-                // v1 restriction: teammates run tools in cloud only (no remote blocking).
-                execution: z.literal("cloud").default("cloud"),
-                authDefaults: z
-                  .object({
-                    connectors: z
-                      .record(
-                        z.string().min(1).max(80),
-                        z.object({
-                          secretId: z.string().uuid(),
-                        })
-                      )
-                      .optional(),
+      }),
+      execution: z
+        .object({
+          mode: z.literal("gateway").default("gateway"),
+          selector: nodeExecutionSelectorSchema.optional(),
+        })
+        .default({ mode: "gateway" }),
+      prompt: z.object({
+        system: z.string().max(200_000).optional(),
+        instructions: z.string().min(1).max(200_000),
+        inputTemplate: z.string().max(200_000).optional(),
+      }),
+      tools: z
+        .object({
+          allow: z.array(z.string().min(1).max(120)),
+          execution: z.enum(["cloud", "executor"]).default("cloud"),
+          authDefaults: z
+            .object({
+              connectors: z
+                .record(
+                  z.string().min(1).max(80),
+                  z.object({
+                    secretId: z.string().uuid(),
                   })
-                  .optional(),
-              }),
-              limits: z.object({
-                maxTurns: z.number().int().min(1).max(64).default(8),
-                maxToolCalls: z.number().int().min(0).max(200).default(20),
-                timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
-                maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
-                maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
-              }),
-              output: z.object({
-                mode: z.enum(["text", "json"]).default("text"),
-                jsonSchema: z.unknown().optional(),
-              }),
+                )
+                .optional(),
             })
-          )
-          .min(1)
-          .max(32),
-      })
-      .optional(),
+            .optional(),
+        })
+        .default({ allow: [], execution: "cloud" }),
+      limits: z
+        .object({
+          maxTurns: z.number().int().min(1).max(64).default(8),
+          maxToolCalls: z.number().int().min(0).max(200).default(20),
+          timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
+          maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
+          maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
+        })
+        .default({ maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 }),
+      output: z
+        .object({
+          mode: z.enum(["text", "json"]).default("text"),
+          jsonSchema: z.unknown().optional(),
+        })
+        .default({ mode: "text" }),
     })
-    .superRefine((value, ctx) => {
-      if (!providerSupportsContext(value.llm.provider, "workflowAgentRun")) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `${value.llm.provider} cannot be used in workflowAgentRun context`,
-          path: ["llm", "provider"],
-        });
-      }
-      if (isOAuthRequiredProvider(value.llm.provider) && !value.llm.auth?.secretId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `${value.llm.provider} provider requires llm.auth.secretId`,
-          path: ["llm", "auth", "secretId"],
-        });
-      }
-    }),
+    .strict(),
 });
 
 export const workflowNodeSchema = z.discriminatedUnion("type", [

@@ -1,10 +1,9 @@
-Vespid is distributed under a mixed licensing model:
+Vespid
+Copyright (c) Vespid Authors
 
-- Community Core: AGPL-3.0-only
-- Ecosystem SDK/Client packages (packages/sdk-*): Apache-2.0
-- Enterprise extensions (private distribution): Commercial Proprietary License
+This project is licensed under the Apache License, Version 2.0.
+See the LICENSE file for details.
 
-See:
-- LICENSE
-- COMMERCIAL-LICENSE.md
-- docs/open-source/licensing-and-boundary-policy.md
+Trademark notice:
+Use of the Vespid name and logos is subject to the repository trademark policy.
+See docs/open-source/trademark-policy.md.

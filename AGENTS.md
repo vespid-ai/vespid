@@ -2,34 +2,31 @@
 
 ## Overview
 Vespid is a greenfield, international, multi-tenant SaaS automation platform.
-It is inspired by Shrike’s orchestration spirit, but it is not a code migration.
-Do not copy implementation from legacy repos; rebuild with clean boundaries.
+It is inspired by Shrike's orchestration spirit, but it is not a code migration.
 
-Primary product goals:
-- Multi-tenant SaaS (organization-level isolation from day 1)
-- Internationalization-first (en-US primary, zh-CN supported)
-- General enterprise automation (not limited to software bug workflows)
-- Extensible workflow runtime (agent + browser + node execution)
+Primary goals:
+- Multi-tenant SaaS isolation from day 1
+- Internationalization-first (`en-US` primary, `zh-CN` supported)
+- Extensible workflow runtime (`agent.run`, `agent.execute`, `connector.action`)
+- BYON execution model for code-agent workloads
 
-## Language Policy (Project-Wide)
-- Repository documentation, ADRs, runbooks, code comments, commit messages, and PR text must be written in English.
-- Product internationalization may include `zh-CN` translation resources where needed; do not add Chinese-only summary sections in docs.
+## Language Policy
+- Docs, ADRs, runbooks, comments, commit messages, and PR text must be in English.
+- Product UI may include `zh-CN` translation resources.
 
-## Project Structure & Module Organization
-Use this monorepo layout:
-
-- `apps/web/` Next.js frontend (product UI + BFF-facing routes)
-- `apps/api/` Fastify control plane API (auth/org/workflow/connectors/billing)
-- `apps/worker/` queue consumers and workflow runtime execution
-- `apps/gateway/` execution gateway (WS for node-agents + internal dispatch for worker)
-- `apps/node-agent/` cross-platform node execution agent (CLI, optional Docker mode)
-- `packages/db/` Drizzle schema, migrations, RLS policies, DB utilities
-- `packages/workflow/` workflow DSL v2, runtime contracts, node specs
-- `packages/connectors/` Jira/GitHub/Slack/Email adapters
-- `packages/shared/` shared domain types, errors, auth and observability helpers
-- `tests/` integration/e2e tests
-- `docs/` architecture decisions, runbooks, and product contracts
-- `scripts/` local/dev/CI utility scripts
+## Project Structure
+- `apps/web/`: Next.js frontend
+- `apps/api/`: Fastify control-plane API
+- `apps/worker/`: queue consumers and workflow execution
+- `apps/gateway/`: execution gateway (WS + internal dispatch)
+- `apps/node-agent/`: cross-platform node execution agent
+- `packages/db/`: Drizzle schema, migrations, RLS helpers
+- `packages/workflow/`: workflow DSL v2 and runtime contracts
+- `packages/connectors/`: connector adapters
+- `packages/shared/`: shared types/errors/auth/observability helpers
+- `tests/`: integration/e2e tests
+- `docs/`: ADRs, runbooks, contracts
+- `scripts/`: dev/CI utility scripts
 
 ## Build, Test, and Development Commands
 - `pnpm install`
@@ -42,133 +39,87 @@ Use this monorepo layout:
 - `pnpm db:rollback`
 - `pnpm check:migrations`
 
-## Codex Rules (AI Execution Guardrails)
-This repo includes Codex rules to control what commands may run **outside the sandbox**:
-- `codex/rules/vespid.rules` (primary)
-- `.codex/rules/vespid.rules` (compat)
-
-These rules only apply when the repo is marked as trusted so Codex will load project overrides.
-
-## Repository Truth & Priorities
-When documentation conflicts, trust in this order:
-
+## Repository Truth Order
 1. Committed scripts and package.json commands
-2. `/docs/**` architecture decisions (ADR/runbook/contracts)
+2. `docs/**` architecture decisions and contracts
 3. `AGENTS.md`
-4. README or ad-hoc notes
-
-## Multi-Repo Collaboration Model (AI-Facing)
-
-This product is developed across three sibling repositories (local default under `/Users/mangaohua/src`):
-
-- `vespid` (private, source of truth): `git@github.com:vespid-ai/vespid.git`
-- `vespid-community` (public, generated read-only mirror): `git@github.com:vespid-ai/vespid-community.git`
-- `vespid-enterprise` (private, proprietary modules): `git@github.com:vespid-ai/vespid-enterprise.git`
-
-Hard rules:
-- Community code MUST build/run with no enterprise packages installed.
-- Never add static dependencies from community code to enterprise code/packages.
-- Enterprise features integrate via an optional provider package loaded at runtime (for example `VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-ai/enterprise-provider`).
-- When a task spans multiple repos, implement it as separate commits/PRs in the correct repo (do not mix changes).
-
-Operational guardrails:
-- Before running commands, print the active repo root (`pwd` and `git rev-parse --show-toplevel`).
-- When referencing files across repos, always use absolute paths under `/Users/mangaohua/src/...` and label which repo each path belongs to.
+4. README and ad-hoc notes
 
 ## Open Source Governance (AI-Facing)
-- `Open Source Boundary Invariant`: Open Core separation is mandatory. Community code must remain buildable/runnable without enterprise modules.
-- `License-per-directory Rule`: Every package and directory scope must have explicit SPDX-aligned license ownership; do not introduce mixed-license ambiguity in a single module.
-- `No community->enterprise import rule`: Any dependency from community modules to enterprise modules is forbidden.
-- `Public mirror release gate`: Public source publication must be generated only from `.oss-allowlist` and pass dry-run checks.
-- `CLA required for code contributions`: External code contributions must pass CLA checks before merge.
-- `Trademark protection required for distribution`: Distribution does not grant trademark rights; brand usage must follow trademark policy.
+- Repository license baseline is Apache-2.0.
+- DCO sign-off is required for code contributions.
+- Use SPDX-compliant license metadata in package manifests.
+- Trademark rights are not granted by source distribution; follow trademark policy.
 
 ## Runtime Invariants (AI-Facing)
-- Treat organization isolation as non-negotiable; every tenant-scoped read/write must enforce org boundary.
-- Prefer typed module boundaries and explicit contracts over implicit shared state.
-- Workflow runtime uses Graph DSL v2 (new design), not Shrike GRAPH_V1 compatibility mode.
-- Workflow lifecycle baseline: `draft -> published`, with run state `queued -> running -> succeeded|failed` (`/runs` enqueues, `apps/worker` executes).
-- Workflow execution emits run/node events persisted in PostgreSQL (`workflow_run_events`) and exposed via read APIs; events are tenant-scoped under RLS.
-- Workflow node execution supports a community baseline executor set, plus optional enterprise overrides via `EnterpriseProvider.getWorkflowNodeExecutors()`.
-- Workflow queue runtime is Redis + BullMQ single stack. `POST /runs` must only succeed when enqueue succeeds; queue failures must return `503/QUEUE_UNAVAILABLE` and not leave fresh dirty queued runs.
-- Optional remote execution uses `apps/gateway` + `apps/node-agent` for `agent.execute` and `connector.action` when `execution.mode="node"`.
-- Drizzle is the default DB access path; use parameterized raw SQL only for proven complex queries.
-- Auth model is Email + OAuth first; enterprise SSO can be added later without breaking core auth contracts.
-- Auth runtime is dual-mode: short-lived Bearer access token + HttpOnly refresh cookie.
-- Billing model is Seat + Usage (Stripe), with idempotent webhook processing.
-- Node agent supports CLI-first execution with optional Docker isolation mode.
-- Database migrations must be reversible by default: every `packages/db/migrations/*.sql` must ship with a same-name `*.down.sql` in the same PR.
-- CI must enforce migration up/down pairing via `pnpm check:migrations`.
+- Tenant isolation is non-negotiable: all tenant reads/writes must enforce org boundary.
+- Workflow lifecycle baseline:
+  - draft state: `draft -> published`
+  - run state: `queued -> running -> succeeded|failed`
+- Workflow queue runtime uses Redis + BullMQ. `POST /runs` must fail with `503/QUEUE_UNAVAILABLE` when enqueue fails.
+- Workflow run/node events are persisted in PostgreSQL (`workflow_run_events`) and tenant-scoped under RLS.
+- Code-agent engines are restricted to:
+  - `gateway.codex.v2`
+  - `gateway.claude.v2`
+  - `gateway.opencode.v2`
+- Code-agent sessions/workflows are BYON-only.
+- Node-agent tool bridge v1 supports only:
+  - `connector.action`
+  - `agent.execute`
+- Legacy monetization endpoints are removed from OSS runtime.
+- Drizzle is default DB path; use parameterized raw SQL only for proven complex queries.
+- Migrations must include reversible `*.down.sql` partners and pass `pnpm check:migrations`.
 
-## Security & Multi-Tenant Guardrails
-- Never access tenant data without tenant context (`organization_id` + auth principal).
-- Org-scoped API routes must require `X-Org-Id` and membership validation.
-- Workflow APIs are org-scoped and require `X-Org-Id` with membership checks.
-- Temporary rollout mode `ORG_CONTEXT_ENFORCEMENT=warn` is allowed only for short observation windows and only for header fallback observation; membership checks stay enforced.
-- Queue unavailability must fail fast (no sync execution fallback in API).
+## Security Guardrails
+- Never access tenant data without tenant context (`organization_id` + principal).
+- Org-scoped APIs require `X-Org-Id` plus membership validation.
 - Enforce PostgreSQL RLS for tenant-scoped tables.
-- Encrypt secrets at rest (envelope encryption); never log plaintext credentials/tokens.
-- Connector secrets are org-scoped and must never be returned in plaintext after creation/rotation (metadata-only APIs).
-- Keep audit logs for permission changes, credential changes, workflow publish/deploy actions, and billing mutations.
-- Default retention is 30 days for logs/artifacts unless org policy overrides it.
+- Encrypt secrets at rest; never log plaintext credentials.
+- Secret APIs must not return plaintext values after create/rotate.
+- Queue unavailability must fail fast (no sync fallback).
 
-## Coding Style & Naming Conventions
-- TypeScript-first.
-- Indentation: 2 spaces for JS/TS/JSON/YAML.
+## Coding Style
+- TypeScript-first
+- 2-space indentation for JS/TS/JSON/YAML
 - Naming:
-  - Files: `kebab-case.ts` for TS modules
-  - Types/classes: `PascalCase`
-  - Variables/functions: `camelCase`
-- Keep modules small and single-purpose.
-- Add comments only where behavior is not obvious from code.
+  - files: `kebab-case.ts`
+  - types/classes: `PascalCase`
+  - variables/functions: `camelCase`
+- Keep modules focused and single-purpose.
+- Add comments only where behavior is non-obvious.
 
 ## Testing Guidelines
-- Unit tests for domain logic and adapters.
-- Integration tests for API + DB + queue flows.
-- E2E tests for core user journeys (auth, org setup, workflow run, billing event).
-- Every feature should include:
+- Unit tests for domain logic and adapters
+- Integration tests for API + DB + queue flows
+- E2E tests for critical journeys (auth, org setup, workflow execution)
+- Each feature should include:
   - at least one happy-path test
   - at least one failure-path test
   - tenant-boundary test where applicable
 
 ## Change Type -> Minimum Verification
-- `apps/web/**`: type-check + UI tests for changed flows.
-- `apps/api/**`: API tests + auth/permission checks.
-- `apps/worker/**` or `packages/workflow/**`: runtime integration tests and retry/error-path checks.
-- `packages/db/**`: migration rehearsal + tenant isolation tests.
-- auth/billing changes: idempotency and security regression checks required.
-- workflow DSL/runtime changes: compatibility tests for existing v2 schemas required.
+- `apps/web/**`: typecheck + changed-flow UI tests
+- `apps/api/**`: API tests + auth/permission checks
+- `apps/worker/**` or `packages/workflow/**`: runtime integration tests + retry/error-path checks
+- `packages/db/**`: migration rehearsal + tenant-isolation tests
+- workflow DSL/runtime changes: compatibility checks for existing v2 schemas
 
-## Commit & Pull Request Guidelines
-Use Conventional Commits:
-
+## Commit & PR Guidelines
+Use Conventional Commits, for example:
 - `feat(auth): add organization invitation flow`
 - `fix(workflow): handle retry backoff overflow`
 - `docs(architecture): add tenant isolation ADR`
 
 PRs must include:
-
 - Problem statement
 - Solution summary
-- Verification evidence (commands and outcomes)
+- Verification evidence (commands + outcomes)
 - Risk and rollback notes
-- Screenshots for UI changes where relevant
-
-## AGENTS.md Maintenance Triggers
-Update this file when any of the following changes:
-
-- Core commands (`pnpm dev/build/test/lint`) or script entrypoints
-- Runtime topology (apps/services added/removed)
-- Auth, tenancy, billing, or workflow contracts
-- Open source licensing, boundary policy, CLA flow, or trademark policy
-- Required environment variables
-- Release/deployment model changes (AWS/Cloudflare assumptions)
+- UI screenshots when relevant
 
 ## High-Risk Checklist
 Before merging high-impact changes, verify:
-
 - Tenant isolation cannot be bypassed
-- Auth/session checks are enforced on all protected endpoints
-- Stripe webhook handlers are idempotent
-- Queue workers are safe under retries
-- Secret values are never exposed in logs/errors
+- Auth/session checks are enforced on protected endpoints
+- Queue workers are retry-safe/idempotent
+- Secret values are never exposed in logs or errors

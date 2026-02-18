@@ -10,6 +10,10 @@ export const REMOTE_EXEC_ERROR = {
   GatewayDispatchFailed: "GATEWAY_DISPATCH_FAILED",
   GatewayShutdown: "GATEWAY_SHUTDOWN",
   DockerFailed: "DOCKER_FAILED",
+  ExecutorUnsupportedEngine: "EXECUTOR_UNSUPPORTED_ENGINE",
+  ExecutorOAuthNotVerified: "EXECUTOR_OAUTH_NOT_VERIFIED",
+  ExecutorCliNotFound: "EXECUTOR_CLI_NOT_FOUND",
+  ExecutorCliFailed: "EXECUTOR_CLI_FAILED",
 } as const;
 
 export type RemoteExecErrorCode =

@@ -1,119 +1,52 @@
 # Foundation Architecture
 
 ## Apps
-- `apps/api`: Fastify API for auth/org/rbac foundation endpoints.
-- `apps/web`: Next.js bootstrap UI for auth and org onboarding.
-- `apps/worker`: queue worker for async workflow run execution with retry/backoff.
-- `apps/gateway`: split execution gateway (`edge` + `brain`) for executor remote tool execution.
-- `apps/node-agent`: CLI executor agent that connects to gateway.
-- `apps/engine-runner`: isolated LLM inference service used by gateway brain.
-- `apps/api`: supports optional enterprise provider injection (`VESPID_ENTERPRISE_PROVIDER_MODULE`) with community fallback.
+- `apps/api`: Fastify API for auth/org/workflow/secrets/sessions
+- `apps/web`: Next.js product UI
+- `apps/worker`: queue worker for async workflow execution
+- `apps/gateway`: execution gateway (`edge` + `brain`)
+- `apps/node-agent`: BYON executor agent (CLI-first)
+- `apps/engine-runner`: legacy component retained in repo history; code-agent runtime now routes through gateway + node-agent executors
 
 ## Packages
-- `packages/shared`: shared domain types, auth token utilities, error model.
-- `packages/db`: Drizzle schema, SQL migrations, tenant RLS baseline.
-- `packages/workflow`: workflow DSL v2 schema baseline.
-- `packages/connectors`: connector catalog baseline.
-- `packages/sdk-client`: Apache-licensed client SDK for ecosystem integrations.
+- `packages/shared`: shared domain types, auth utilities, error model
+- `packages/db`: Drizzle schema + migrations + tenant RLS baseline
+- `packages/workflow`: workflow DSL v2 schemas and contracts
+- `packages/connectors`: connector catalog baseline
+- `packages/sdk-client`: client SDK
 
-## Security Baseline
-- Auth uses short-lived bearer access tokens plus HttpOnly refresh cookie sessions.
-- Session state is persisted in PostgreSQL (`auth_sessions`) and supports revoke/revoke-all.
-- OAuth uses real authorization code flow with PKCE/state (`google`, `github`) and nonce validation.
-- Tenant APIs require `X-Org-Id` and membership verification before org-scoped mutations.
-- PostgreSQL RLS is strict: tenant-scoped tables require a valid `app.current_org_id` context.
-- Rollout support: `ORG_CONTEXT_ENFORCEMENT=warn|strict` controls header fallback behavior; membership checks remain enforced in both modes.
-- Rollout observability uses structured events: `org_context_header_fallback`, `org_context_access_denied`, `oauth_callback_failed`, `invitation_accept_failed`.
-- Workflow runtime baseline: API enqueues runs (`queued`) and `apps/worker` consumes runs asynchronously (`queued -> running -> succeeded/failed`) with retry backoff.
-- Queue runtime is Redis + BullMQ only (single stack). If Redis is unavailable, run creation fails fast with `503/QUEUE_UNAVAILABLE`; API rolls back the fresh queued run.
-- Queue observability uses structured events: `workflow_run_enqueued`, `workflow_run_started`, `workflow_run_retried`, `workflow_run_succeeded`, `workflow_run_failed`, `queue_unavailable`.
-- Workflow run/node execution events are persisted in PostgreSQL (`workflow_run_events`) with strict tenant RLS.
-  - Event payloads are capped via `WORKFLOW_EVENT_PAYLOAD_MAX_CHARS` to avoid oversized rows.
-- Connector secrets are encrypted at rest and scoped per organization (`connector_secrets`).
-  - Encryption uses an environment-provided KEK (`SECRETS_KEK_ID`, `SECRETS_KEK_BASE64`).
-- Remote execution (MVP):
-  - Workflows may set `execution.mode="executor"` for `agent.execute` and `connector.action`.
-  - `apps/worker` dispatches work to `apps/gateway` asynchronously and persists a blocked cursor in `workflow_runs`:
-    - `blocked_request_id` (deterministic request id)
-    - `cursor_node_index` (next node position)
-  - A continuation worker polls gateway results and resumes run execution without blocking worker threads.
-  - Gateway dispatch is protected by `GATEWAY_SERVICE_TOKEN`; agent auth uses long-lived agent tokens stored hashed.
-  - Pairing uses short-lived, single-use pairing tokens stored hashed.
-  - Production deployment: terminate TLS in front of gateway (reverse proxy / cloud LB) and keep `/internal/v1/dispatch` private.
-- Node-agent sandbox backends:
-  - Community edition supports a Docker backend for `agent.execute` shell tasks (hardened container, strict limits).
-  - A provider backend hook is reserved for enterprise to integrate fast-start sandboxes (e.g. e2b.dev-style), loaded dynamically at runtime.
-- Session runtime v2 (OpenClaw-aligned hard cutover):
-  - Interactive sessions are stored in PostgreSQL (`agent_sessions`, `agent_session_events`) and are tenant-scoped under RLS.
-  - Canonical WS endpoints are `/ws/client` (control clients) and `/ws/executor` (node hosts).
-  - Interactive turns execute only on pinned node-hosts (`executionMode="pinned-node-host"`); gateway never falls back to in-process execution.
-  - Session executor routing policy is BYON-first with managed fallback by default; explicit `executorSelector.pool="managed"` is managed-only.
-  - Pin metadata is persisted as `pinned_executor_id` and `pinned_executor_pool` (`byon|managed`) with compatibility mirror `pinned_agent_id`.
-  - If a pinned executor goes offline, gateway auto re-pins and emits a system event (`session_executor_failover`); if no pool is available, errors are deterministic (`PINNED_AGENT_OFFLINE`, `NO_AGENT_AVAILABLE`).
-  - Managed pool sessions run with a restricted toolset (safe minimum: conversation + memory tools) and container-oriented runtime class (`runtime_class="container"`).
-  - Session routing is binding-first and deterministic (`peer -> parent_peer -> org_roles -> organization -> team -> account -> channel -> default`) and persists `session_key`, `routed_agent_id`, `binding_id`.
-  - Memory source of truth is markdown (`MEMORY.md`, `memory/YYYY-MM-DD.md`) with provider strategy `qmd -> builtin` fallback.
-  - Multi-agent handoff is represented as first-class session events (`agent_handoff`) and exposed to clients.
-- Open Core boundary baseline: community runtime is independently runnable; enterprise capability is loaded via typed provider interfaces.
-- See `/docs/runbooks/org-context-rollout.md` for rollout/rollback operations.
-- See `/docs/runbooks/workflow-queue-cutover.md` for workflow queue cutover/rollback operations.
-- See `/docs/runbooks/secrets-key-rotation.md` for KEK configuration and secret rotation guidance.
-- See `/docs/runbooks/node-agent-gateway-mvp.md` for node-agent + gateway remote execution operations.
+## Security and Tenancy Baseline
+- Short-lived bearer access token + HttpOnly refresh cookie model.
+- Tenant APIs require `X-Org-Id` plus membership validation.
+- PostgreSQL RLS enforces org boundaries for tenant-scoped tables.
+- Connector secrets are encrypted at rest and never returned in plaintext after write.
+- Queue runtime is Redis + BullMQ; enqueue failures fail fast with `503/QUEUE_UNAVAILABLE`.
 
-## Foundation APIs
-- Auth:
-  - `POST /v1/auth/signup`
-  - `POST /v1/auth/login`
-  - `POST /v1/auth/refresh`
-  - `POST /v1/auth/logout`
-  - `POST /v1/auth/logout-all`
-  - `GET /v1/auth/oauth/:provider/start`
-  - `GET /v1/auth/oauth/:provider/callback`
-- Organization:
-  - `POST /v1/orgs`
-  - `POST /v1/orgs/:orgId/invitations` (`X-Org-Id` required)
-  - `POST /v1/orgs/:orgId/members/:memberId/role` (`X-Org-Id` required)
-  - `POST /v1/invitations/:token/accept`
-- Workflow:
-  - `POST /v1/orgs/:orgId/workflows` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/workflows/:workflowId` (`X-Org-Id` required)
-  - `POST /v1/orgs/:orgId/workflows/:workflowId/publish` (`X-Org-Id` required)
-  - `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/workflows/:workflowId/runs` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events` (`X-Org-Id` required)
-- Secrets:
-  - `GET /v1/orgs/:orgId/secrets` (`X-Org-Id` required, owner/admin only)
-  - `POST /v1/orgs/:orgId/secrets` (`X-Org-Id` required, owner/admin only)
-  - `PUT /v1/orgs/:orgId/secrets/:secretId` (`X-Org-Id` required, owner/admin only)
-  - `DELETE /v1/orgs/:orgId/secrets/:secretId` (`X-Org-Id` required, owner/admin only)
-- Agents:
-  - `GET /v1/orgs/:orgId/agents` (`X-Org-Id` required, owner/admin only)
-  - `POST /v1/orgs/:orgId/agents/pairing-tokens` (`X-Org-Id` required, owner/admin only)
-  - `POST /v1/orgs/:orgId/agents/:agentId/revoke` (`X-Org-Id` required, owner/admin only)
-  - `POST /v1/agents/pair` (pairing token only)
-- Sessions:
-  - `POST /v1/orgs/:orgId/sessions` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/sessions` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/sessions/:sessionId` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/sessions/:sessionId/events` (`X-Org-Id` required)
-  - `POST /v1/orgs/:orgId/sessions/:sessionId/messages` (`X-Org-Id` required)
-  - `POST /v1/orgs/:orgId/sessions/:sessionId/reset` (`X-Org-Id` required)
-- Agent bindings:
-  - `GET /v1/orgs/:orgId/agent-bindings` (`X-Org-Id` required, owner/admin)
-  - `POST /v1/orgs/:orgId/agent-bindings` (`X-Org-Id` required, owner/admin)
-  - `PATCH /v1/orgs/:orgId/agent-bindings/:bindingId` (`X-Org-Id` required, owner/admin)
-  - `DELETE /v1/orgs/:orgId/agent-bindings/:bindingId` (`X-Org-Id` required, owner/admin)
-- Session memory admin:
-  - `POST /v1/orgs/:orgId/memory/sync` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/memory/search` (`X-Org-Id` required)
-  - `GET /v1/orgs/:orgId/memory/docs/:docId` (`X-Org-Id` required)
-- Metadata:
-  - `GET /v1/meta/capabilities`
-  - `GET /v1/meta/connectors`
+## Workflow and Execution Baseline
+- Workflow lifecycle: `draft -> published`.
+- Run lifecycle: `queued -> running -> succeeded|failed`.
+- Run/node events persist to `workflow_run_events` and are exposed via org-scoped read APIs.
+- `agent.run` is executed via gateway dispatch to BYON executors.
+- Tool bridge v1 supports `connector.action` and `agent.execute` within `agent.run` execution.
+
+## Session Runtime Baseline
+- Sessions are persisted in PostgreSQL (`agent_sessions`, `agent_session_events`) under RLS.
+- Session and workflow code-agent execution supports only:
+  - `gateway.codex.v2`
+  - `gateway.claude.v2`
+  - `gateway.opencode.v2`
+- Code-agent sessions/workflows are BYON-only.
+
+## API Surfaces
+- Auth
+- Organization + membership
+- Workflow CRUD/publish/run/events
+- Secrets management
+- Agent pairing and executor registration
+- Session create/list/events/messages
+- Metadata endpoints (`/v1/meta/*`, `/v1/agent/engines`)
 
 ## Licensing Baseline
-- Community core: `AGPL-3.0-only`
-- SDK/client (`packages/sdk-*`): `Apache-2.0`
-- Enterprise modules: commercial proprietary terms
-- Public mirror publishing is gated by `.oss-allowlist` and CI dry-run checks.
+- Repository license: Apache-2.0
+- DCO sign-off required for contributions
+- Trademark rights are governed separately by trademark policy

@@ -65,14 +65,8 @@ jobs:
           SECRETS_KEK_BASE64="$(node -p 'require("crypto").randomBytes(32).toString("base64")')"
           echo "SECRETS_KEK_BASE64=${SECRETS_KEK_BASE64}" >> "$GITHUB_ENV"
 
-      - name: Open core boundary gate
-        run: pnpm check:boundary
-
       - name: License SPDX gate
         run: pnpm check:licenses
-
-      - name: Public mirror dry-run gate
-        run: pnpm check:mirror
 
       - name: Secret scan gate
         run: pnpm check:secrets

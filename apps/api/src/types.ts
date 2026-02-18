@@ -1,4 +1,5 @@
 import type {
+  AgentEngineId,
   AgentSkillBundle,
   BindingDimension,
   ChannelId,
@@ -49,6 +50,17 @@ export type OrganizationSettings = {
     quotas?: {
       maxExecutorInFlight?: number;
     };
+  };
+  agents?: {
+    engineAuthDefaults?: Partial<
+      Record<
+        AgentEngineId,
+        {
+          mode?: "oauth_executor" | "api_key";
+          secretId?: string | null;
+        }
+      >
+    >;
   };
 };
 
@@ -198,26 +210,6 @@ export type UserOrgSummaryRecord = {
   membership: MembershipRecord;
 };
 
-export type OrganizationCreditsRecord = {
-  organizationId: string;
-  balanceCredits: number;
-  updatedAt: string;
-};
-
-export type OrganizationCreditLedgerEntryRecord = {
-  id: string;
-  organizationId: string;
-  deltaCredits: number;
-  reason: string;
-  stripeEventId: string | null;
-  workflowRunId: string | null;
-  createdByUserId: string | null;
-  metadata: unknown;
-  createdAt: string;
-};
-
-export type AccountTier = "free" | "paid" | "enterprise";
-
 export type PlatformUserRoleRecord = {
   id: string;
   userId: string;
@@ -231,31 +223,6 @@ export type PlatformSettingRecord = {
   value: unknown;
   updatedByUserId: string | null;
   updatedAt: string;
-};
-
-export type UserPaymentEventRecord = {
-  id: string;
-  provider: string;
-  providerEventId: string;
-  payerUserId: string | null;
-  payerEmail: string | null;
-  status: "pending" | "paid" | "failed" | "refunded" | string;
-  amount: number | null;
-  currency: string | null;
-  rawPayload: unknown;
-  createdAt: string;
-};
-
-export type UserEntitlementRecord = {
-  id: string;
-  userId: string;
-  tier: "paid" | string;
-  sourceProvider: string;
-  sourceEventId: string;
-  validFrom: string;
-  validUntil: string | null;
-  active: boolean;
-  createdAt: string;
 };
 
 export type SupportTicketRecord = {
@@ -526,10 +493,7 @@ export interface AppStore {
   getUserByEmail(email: string): Promise<UserRecord | null>;
   getUserById(id: string): Promise<UserRecord | null>;
   listOrganizationsForUser(input: { actorUserId: string }): Promise<UserOrgSummaryRecord[]>;
-  ensurePersonalOrganizationForUser(input: {
-    actorUserId: string;
-    trialCredits: number;
-  }): Promise<{ defaultOrgId: string; created: boolean }>;
+  ensurePersonalOrganizationForUser(input: { actorUserId: string }): Promise<{ defaultOrgId: string; created: boolean }>;
   listPlatformUserRoles(input?: { roleKey?: string; userId?: string }): Promise<PlatformUserRoleRecord[]>;
   createPlatformUserRole(input: {
     userId: string;
@@ -544,34 +508,6 @@ export interface AppStore {
     value: unknown;
     updatedByUserId?: string | null;
   }): Promise<PlatformSettingRecord>;
-  createUserPaymentEvent(input: {
-    provider: string;
-    providerEventId: string;
-    payerUserId?: string | null;
-    payerEmail?: string | null;
-    status: string;
-    amount?: number | null;
-    currency?: string | null;
-    rawPayload?: unknown;
-  }): Promise<UserPaymentEventRecord>;
-  listUserPaymentEvents(input?: { provider?: string; limit?: number }): Promise<UserPaymentEventRecord[]>;
-  upsertUserEntitlement(input: {
-    userId: string;
-    tier: "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    validFrom?: Date;
-    validUntil?: Date | null;
-    active?: boolean;
-  }): Promise<UserEntitlementRecord>;
-  listUserEntitlements(input: { userId: string; activeOnly?: boolean }): Promise<UserEntitlementRecord[]>;
-  setUserEntitlementTier(input: {
-    userId: string;
-    tier: "free" | "paid";
-    sourceProvider: string;
-    sourceEventId: string;
-    actorUserId?: string | null;
-  }): Promise<UserEntitlementRecord | null>;
   createSupportTicket(input: {
     requesterUserId?: string | null;
     organizationId?: string | null;
@@ -800,37 +736,6 @@ export interface AppStore {
     actorUserId: string;
     secretId: string;
   }): Promise<boolean>;
-
-  getOrganizationCredits(input: {
-    organizationId: string;
-    actorUserId?: string;
-  }): Promise<OrganizationCreditsRecord>;
-  grantOrganizationCredits(input: {
-    organizationId: string;
-    actorUserId?: string;
-    credits: number;
-    reason: string;
-    metadata?: unknown;
-  }): Promise<OrganizationCreditsRecord>;
-  creditOrganizationFromStripeEvent(input: {
-    organizationId: string;
-    stripeEventId: string;
-    credits: number;
-    metadata?: unknown;
-  }): Promise<{ applied: boolean; balance: OrganizationCreditsRecord }>;
-
-  listOrganizationCreditLedger(input: {
-    organizationId: string;
-    actorUserId: string;
-    limit: number;
-    cursor?: { createdAt: string; id: string } | null;
-  }): Promise<{ entries: OrganizationCreditLedgerEntryRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
-  getOrganizationBillingAccount(input: { organizationId: string; actorUserId?: string }): Promise<{ stripeCustomerId: string } | null>;
-  createOrganizationBillingAccount(input: {
-    organizationId: string;
-    actorUserId?: string;
-    stripeCustomerId: string;
-  }): Promise<{ stripeCustomerId: string }>;
 
   createAgentPairingToken(input: {
     organizationId: string;

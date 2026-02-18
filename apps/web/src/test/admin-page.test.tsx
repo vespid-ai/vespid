@@ -28,7 +28,7 @@ vi.mock("../lib/hooks/use-me", () => ({
     isLoading: false,
     data: {
       user: { id: "u_1", email: "ops@vespid.ai" },
-      account: { tier: "paid", isSystemAdmin: mocks.isSystemAdmin },
+      account: { isSystemAdmin: mocks.isSystemAdmin },
       orgPolicy: { canManageOrganizations: true, maxOrganizations: 5, currentOrganizations: 1 },
       orgs: [{ id: "org_1", name: "Main Org", roleKey: "owner" }],
       defaultOrgId: "org_1",
@@ -76,7 +76,6 @@ describe("Admin page access", () => {
 
     await screen.findByText(messages.admin.title);
     expect(screen.getByRole("tab", { name: messages.admin.tabs.governance })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: messages.admin.tabs.billing })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: messages.admin.tabs.risk })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: messages.admin.tabs.observability })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: messages.admin.tabs.tickets })).toBeInTheDocument();

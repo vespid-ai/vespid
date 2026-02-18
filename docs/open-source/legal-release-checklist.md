@@ -1,28 +1,30 @@
-# Legal Release Checklist
+# Legal and OSS Release Checklist
 
-Use this checklist before every `major` or `minor` community release.
+Use this checklist before each tagged release.
 
 ## IP and Provenance
-- [ ] No enterprise/proprietary code included in public mirror output.
-- [ ] Third-party dependencies are reviewed for license compatibility.
-- [ ] Contributor intake for release scope passed CLA checks.
+- [ ] Third-party dependency license review is complete.
+- [ ] Build provenance attestation is generated and published.
+- [ ] Release artifacts include checksums.
 
 ## Licensing
 - [ ] SPDX checks passed (`pnpm check:licenses`).
-- [ ] Root and package-level license files are present and accurate.
-- [ ] Community/enterprise boundary documentation is up to date.
+- [ ] Root legal files are present and accurate.
+- [ ] Package manifest `license` fields are correct.
 
-## Trademark
-- [ ] Release notes include trademark usage constraints.
-- [ ] No unauthorized logo/brand artifacts are included.
+## Contribution Compliance
+- [ ] DCO checks passed for all release-scope commits.
 
 ## Security and Disclosure
 - [ ] Secret scan passed (`pnpm check:secrets`).
-- [ ] No internal-only URLs, tokens, or non-public operational details leaked.
+- [ ] SBOM generated (`pnpm sbom:generate`).
+- [ ] No private tokens/internal endpoints leaked in artifacts or release notes.
+
+## Trademark
+- [ ] Release notes preserve trademark usage constraints.
 
 ## Approval
 - [ ] Engineering approver signed off.
-- [ ] Legal approver signed off.
 
-## Summary (English Only)
-- Before every major/minor release, complete IP/provenance, licensing, trademark, and secret-leak checks and retain approval records.
+## Summary
+Each release must pass license, DCO, security, SBOM, and provenance attestation gates.

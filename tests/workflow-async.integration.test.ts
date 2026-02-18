@@ -330,12 +330,7 @@ describe("workflow async integration", () => {
       })
     );
 
-    const expectsEnterprise = Boolean(process.env.VESPID_ENTERPRISE_PROVIDER_MODULE);
-    if (expectsEnterprise) {
-      expect(taskId).toContain("enterprise-task");
-    } else {
-      expect(taskId).toContain("-task");
-      expect(taskId).not.toContain("enterprise-task");
-    }
+    expect(taskId).toContain("-task");
+    expect(taskId).not.toContain("enterprise-task");
   });
 });

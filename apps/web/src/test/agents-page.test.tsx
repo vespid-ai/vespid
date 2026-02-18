@@ -15,10 +15,10 @@ const mocks = vi.hoisted(() => ({
   installerMode: "ready" as "ready" | "error" | "loading",
   installerData: {
     provider: "github-releases" as const,
-    repository: "vespid-ai/vespid-community",
+    repository: "vespid-ai/vespid",
     channel: "latest",
     docsUrl: "https://docs.vespid.ai/agent",
-    checksumsUrl: "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-checksums.txt",
+    checksumsUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-checksums.txt",
     artifacts: [
       {
         platformId: "darwin-arm64" as const,
@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
         arch: "arm64" as const,
         fileName: "vespid-agent-darwin-arm64.tar.gz",
         archiveType: "tar.gz" as const,
-        downloadUrl: "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-darwin-arm64.tar.gz",
+        downloadUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-darwin-arm64.tar.gz",
       },
       {
         platformId: "linux-x64" as const,
@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
         arch: "x64" as const,
         fileName: "vespid-agent-linux-x64.tar.gz",
         archiveType: "tar.gz" as const,
-        downloadUrl: "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-linux-x64.tar.gz",
+        downloadUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-linux-x64.tar.gz",
       },
       {
         platformId: "windows-x64" as const,
@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
         arch: "x64" as const,
         fileName: "vespid-agent-windows-x64.zip",
         archiveType: "zip" as const,
-        downloadUrl: "https://github.com/vespid-ai/vespid-community/releases/latest/download/vespid-agent-windows-x64.zip",
+        downloadUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-windows-x64.zip",
       },
     ],
   },

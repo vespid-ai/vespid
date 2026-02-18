@@ -10,16 +10,7 @@ function readJson(path) {
 }
 
 function expectedLicense(path) {
-  if (path.startsWith("packages/sdk-")) {
-    return "Apache-2.0";
-  }
-  if (path.startsWith("packages/enterprise-") || path.startsWith("apps/api-enterprise")) {
-    return "SEE LICENSE IN COMMERCIAL-LICENSE.md";
-  }
-  if (path === "package.json") {
-    return "AGPL-3.0-only";
-  }
-  return "AGPL-3.0-only";
+  return "Apache-2.0";
 }
 
 function main() {

@@ -7,6 +7,14 @@ import { apiFetchJson } from "../api";
 export type OrgSettings = {
   tools: { shellRunEnabled: boolean };
   toolsets: { defaultToolsetId: string | null };
+  agents?: {
+    engineAuthDefaults?: Partial<
+      Record<
+        "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2",
+        { mode?: "oauth_executor" | "api_key"; secretId?: string | null }
+      >
+    >;
+  };
   llm?: {
     defaults?: {
       primary?: {

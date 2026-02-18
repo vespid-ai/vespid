@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import WebSocket from "ws";
 import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
-import { createMemoryManager, runAgentLoop, runLlmInference } from "@vespid/agent-runtime";
-import type { LlmInvokeInput } from "@vespid/agent-runtime";
+import { createMemoryManager } from "@vespid/agent-runtime";
 import type {
+  AgentEngineId,
   GatewayInvokeToolV2,
   GatewayMemoryQueryV2,
   GatewayMemorySyncV2,
@@ -14,10 +15,9 @@ import type {
   GatewaySessionOpenV2,
   GatewaySessionTurnV2,
   GatewayToolResultV2,
-  WorkflowNodeExecutorResult,
   ToolPolicyV1,
 } from "@vespid/shared";
-import { REMOTE_EXEC_ERROR } from "@vespid/shared";
+import { AGENT_ENGINE_IDS, REMOTE_EXEC_ERROR } from "@vespid/shared";
 import { resolveSandboxBackend, type SandboxBackend } from "./sandbox/index.js";
 import { ensureWorkspaceExtracted, snapshotAndUploadWorkspace, verifyWorkspaceDependencies } from "./workspaces/snapshot-cache.js";
 
@@ -73,6 +73,15 @@ function jsonLog(level: "info" | "warn" | "error", payload: Record<string, unkno
   console.info(line);
 }
 
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 async function loadTlsCaFromEnv(gatewayWsUrl: string): Promise<Buffer | null> {
   const caFile = process.env.VESPID_AGENT_TLS_CA_FILE;
   if (!caFile || caFile.trim().length === 0) {
@@ -93,7 +102,7 @@ const invokeToolSchema = z.object({
   requestId: z.string().min(1),
   organizationId: z.string().uuid(),
   userId: z.string().uuid(),
-  kind: z.enum(["connector.action", "agent.execute"]),
+  kind: z.enum(["connector.action", "agent.execute", "agent.run"]),
   payload: z.unknown(),
   secret: z.string().min(1).optional(),
   toolPolicy: z.object({
@@ -129,24 +138,15 @@ const sessionOpenSchema = z.object({
   routedAgentId: z.string().min(1),
   userId: z.string().uuid(),
   sessionConfig: z.object({
-    engineId: z.string().min(1),
-    llm: z.object({
-      provider: z.enum(["openai", "anthropic", "gemini", "vertex"]),
-      model: z.string().min(1),
-      authMode: z.enum(["env", "inline_api_key", "inline_vertex_oauth"]),
+    engine: z.object({
+      id: z.enum(AGENT_ENGINE_IDS),
+      model: z.string().min(1).optional(),
+      authMode: z.enum(["env", "inline_api_key", "oauth_executor"]).default("env"),
       auth: z
-        .discriminatedUnion("kind", [
-          z.object({
-            kind: z.literal("api_key"),
-            apiKey: z.string().min(1),
-          }),
-          z.object({
-            kind: z.literal("vertex_oauth"),
-            refreshToken: z.string().min(1),
-            projectId: z.string().min(1),
-            location: z.string().min(1),
-          }),
-        ])
+        .object({
+          kind: z.literal("api_key"),
+          apiKey: z.string().min(1),
+        })
         .optional(),
     }),
     prompt: z.object({
@@ -252,6 +252,56 @@ const connectorPayloadSchema = z.object({
   env: z.object({ githubApiBaseUrl: z.string().url() }).optional(),
 });
 
+const agentRunPayloadSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    node: z
+      .object({
+        id: z.string().min(1),
+        type: z.literal("agent.run"),
+        config: z.object({
+          engine: z.object({
+            id: z.enum(AGENT_ENGINE_IDS),
+            model: z.string().min(1).optional(),
+          }),
+          prompt: z.object({
+            system: z.string().optional(),
+            instructions: z.string().min(1),
+            inputTemplate: z.string().optional(),
+          }),
+          tools: z
+            .object({
+              allow: z.array(z.string().min(1)).default([]),
+            })
+            .optional(),
+          limits: z
+            .object({
+              maxToolCalls: z.number().int().min(0).max(200).optional(),
+              timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).optional(),
+            })
+            .optional(),
+        }),
+      })
+      .passthrough(),
+    runId: z.string().uuid().optional(),
+    workflowId: z.string().uuid().optional(),
+    attemptCount: z.number().int().min(1).optional(),
+    runInput: z.unknown().optional(),
+    env: z.object({ githubApiBaseUrl: z.string().url() }).optional(),
+    resolvedSecrets: z
+      .object({
+        engine: z.string().nullable().optional(),
+        connectors: z.record(z.string().min(1), z.string()).optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+const bridgeToolCallSchema = z.object({
+  kind: z.enum(["connector.action", "agent.execute"]),
+  payload: z.unknown(),
+});
+
 function safeSend(ws: WebSocket | null, message: unknown): boolean {
   try {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -303,7 +353,7 @@ function normalizeConfig(config: NodeAgentConfig): {
 type SessionContext = {
   opened: z.infer<typeof sessionOpenSchema>;
   memory: ReturnType<typeof createMemoryManager>;
-  runtime: WorkflowNodeExecutorResult["runtime"];
+  history: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   workspaceDir: string;
 };
 
@@ -313,15 +363,244 @@ function normalizePathPart(value: string): string {
   return trimmed.replace(/[^a-z0-9._-]+/g, "-");
 }
 
-function toTextOutput(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
+function resolveEngineCommand(engineId: AgentEngineId): string {
+  if (engineId === "gateway.codex.v2") return process.env.VESPID_CODEX_PATH?.trim() || "codex";
+  if (engineId === "gateway.claude.v2") return process.env.VESPID_CLAUDE_CODE_PATH?.trim() || "claude";
+  return process.env.VESPID_OPENCODE_PATH?.trim() || "opencode";
+}
+
+function defaultEngineModel(engineId: AgentEngineId): string {
+  if (engineId === "gateway.codex.v2") return "gpt-5-codex";
+  if (engineId === "gateway.claude.v2") return "claude-sonnet-4-20250514";
+  return "claude-opus-4-6";
+}
+
+type ExecutorOauthEngineId = Extract<AgentEngineId, "gateway.codex.v2" | "gateway.claude.v2">;
+
+type EngineAuthProbeState = {
+  oauthVerified: boolean;
+  checkedAt: string;
+  reason: string;
+};
+
+const EXECUTOR_OAUTH_ENGINES: readonly ExecutorOauthEngineId[] = ["gateway.codex.v2", "gateway.claude.v2"] as const;
+
+function parseCommandString(raw: string): { command: string; args: string[] } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  if (parts.length === 0) return null;
+  const normalized = parts.map((part) => part.replace(/^["']|["']$/g, ""));
+  const [command, ...args] = normalized;
+  if (!command) return null;
+  return { command, args };
+}
+
+function defaultVerifyCommandAttempts(engineId: ExecutorOauthEngineId): Array<{ command: string; args: string[] }> {
+  const cli = resolveEngineCommand(engineId);
+  if (engineId === "gateway.codex.v2") {
+    return [
+      { command: cli, args: ["login", "status"] },
+      { command: cli, args: ["auth", "status"] },
+      { command: cli, args: ["whoami"] },
+    ];
   }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
+  return [
+    { command: cli, args: ["auth", "status"] },
+    { command: cli, args: ["whoami"] },
+  ];
+}
+
+function verifyCommandAttemptsFromEnv(engineId: ExecutorOauthEngineId): Array<{ command: string; args: string[] }> {
+  const envName = engineId === "gateway.codex.v2" ? "VESPID_CODEX_OAUTH_VERIFY_CMD" : "VESPID_CLAUDE_OAUTH_VERIFY_CMD";
+  const override = process.env[envName];
+  if (!override) {
+    return defaultVerifyCommandAttempts(engineId);
   }
+  const parsed = parseCommandString(override);
+  if (!parsed) {
+    return defaultVerifyCommandAttempts(engineId);
+  }
+  return [parsed];
+}
+
+function defaultProbeState(): EngineAuthProbeState {
+  return {
+    oauthVerified: false,
+    checkedAt: new Date(0).toISOString(),
+    reason: "not_checked",
+  };
+}
+
+async function probeEngineOauthStatus(input: {
+  engineId: ExecutorOauthEngineId;
+  timeoutMs: number;
+}): Promise<EngineAuthProbeState> {
+  const now = new Date().toISOString();
+  let sawNotFound = false;
+  let sawTimeout = false;
+
+  const attempts = verifyCommandAttemptsFromEnv(input.engineId);
+  for (const attempt of attempts) {
+    const result = await runCliCommand({
+      command: attempt.command,
+      args: attempt.args,
+      cwd: process.cwd(),
+      timeoutMs: input.timeoutMs,
+    });
+    if (result.notFound) {
+      sawNotFound = true;
+      continue;
+    }
+    if (result.timedOut) {
+      sawTimeout = true;
+      continue;
+    }
+    if (result.exitCode === 0) {
+      return {
+        oauthVerified: true,
+        checkedAt: now,
+        reason: "verified",
+      };
+    }
+  }
+
+  if (sawNotFound) {
+    return {
+      oauthVerified: false,
+      checkedAt: now,
+      reason: "cli_not_found",
+    };
+  }
+  if (sawTimeout) {
+    return {
+      oauthVerified: false,
+      checkedAt: now,
+      reason: "probe_timeout",
+    };
+  }
+  return {
+    oauthVerified: false,
+    checkedAt: now,
+    reason: "unauthenticated",
+  };
+}
+
+function renderPromptFromMessages(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): string {
+  return messages.map((m) => `[${m.role}] ${m.content}`).join("\n\n");
+}
+
+async function runCliCommand(input: {
+  command: string;
+  args: string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs: number;
+}): Promise<{ exitCode: number; stdout: string; stderr: string; notFound: boolean; timedOut: boolean }> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(input.command, input.args, {
+      cwd: input.cwd,
+      env: { ...process.env, ...(input.env ?? {}) },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, Math.max(1000, input.timeoutMs));
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error.code === "ENOENT") {
+        resolve({ exitCode: 127, stdout, stderr: `${input.command}: command not found`, notFound: true, timedOut: false });
+        return;
+      }
+      reject(error);
+    });
+    child.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ exitCode: code ?? (timedOut ? 124 : 0), stdout, stderr, notFound: false, timedOut });
+    });
+  });
+}
+
+async function executeEnginePrompt(input: {
+  engineId: AgentEngineId;
+  model: string;
+  prompt: string;
+  workspaceDir: string;
+  timeoutMs: number;
+  apiKey?: string | null;
+}): Promise<
+  | { ok: true; content: string; raw: { stdout: string; stderr: string } }
+  | { ok: false; code: string; message: string; raw?: { stdout: string; stderr: string } }
+> {
+  const command = resolveEngineCommand(input.engineId);
+  const env: NodeJS.ProcessEnv = {};
+  if (input.apiKey && input.apiKey.trim().length > 0) {
+    const key = input.apiKey.trim();
+    if (input.engineId === "gateway.claude.v2") env.ANTHROPIC_API_KEY = key;
+    else env.OPENAI_API_KEY = key;
+  }
+
+  const attempts: string[][] =
+    input.engineId === "gateway.codex.v2"
+      ? [
+          ["exec", "--skip-git-repo-check", "--model", input.model, input.prompt],
+          ["run", "--print", input.prompt],
+        ]
+      : input.engineId === "gateway.claude.v2"
+        ? [["--print", "--model", input.model, input.prompt]]
+        : [
+            ["run", "--model", input.model, "--", input.prompt],
+            ["run", "--", input.prompt],
+          ];
+
+  let lastStdout = "";
+  let lastStderr = "";
+  for (const args of attempts) {
+    const result = await runCliCommand({
+      command,
+      args,
+      cwd: input.workspaceDir,
+      env,
+      timeoutMs: input.timeoutMs,
+    });
+    lastStdout = result.stdout;
+    lastStderr = result.stderr;
+    if (result.notFound) {
+      return {
+        ok: false,
+        code: REMOTE_EXEC_ERROR.ExecutorCliNotFound,
+        message: `CLI_NOT_FOUND:${command}`,
+      };
+    }
+    if (result.exitCode === 0) {
+      const content = result.stdout.trim();
+      return { ok: true, content: content.length > 0 ? content : "ok", raw: { stdout: result.stdout, stderr: result.stderr } };
+    }
+  }
+
+  return {
+    ok: false,
+    code: REMOTE_EXEC_ERROR.ExecutorCliFailed,
+    message: lastStderr.trim() || "CLI execution failed",
+    raw: { stdout: lastStdout, stderr: lastStderr },
+  };
 }
 
 async function buildSessionRuntimeManager(input: {
@@ -337,7 +616,6 @@ async function buildSessionRuntimeManager(input: {
 }> {
   const sessions = new Map<string, SessionContext>();
   const memoryRoot = process.env.SESSION_MEMORY_ROOT ?? "/tmp/vespid-memory";
-  const managedSafeTools = new Set(["memory.search", "memory.get", "memory_search", "memory_get"]);
 
   async function openSession(open: z.infer<typeof sessionOpenSchema>) {
     const workspaceDir = path.join(
@@ -353,7 +631,10 @@ async function buildSessionRuntimeManager(input: {
     sessions.set(open.sessionId, {
       opened: open,
       memory,
-      runtime: {},
+      history: [
+        ...(open.sessionConfig.prompt.system ? [{ role: "system" as const, content: open.sessionConfig.prompt.system }] : []),
+        { role: "system" as const, content: open.sessionConfig.prompt.instructions },
+      ],
       workspaceDir,
     });
     return { ok: true } as const;
@@ -365,127 +646,34 @@ async function buildSessionRuntimeManager(input: {
       return { ok: false as const, code: "SESSION_NOT_OPEN", message: "Session has not been opened on this executor." };
     }
 
-    if (input.pool === "managed") {
-      const disallowed = ctx.opened.sessionConfig.toolsAllow.filter((toolId) => !managedSafeTools.has(toolId));
-      if (disallowed.length > 0) {
-        return {
-          ok: false as const,
-          code: "MANAGED_TOOL_NOT_ALLOWED",
-          message: `Managed pool only allows memory tools in v1: ${disallowed.join(", ")}`,
-        };
-      }
+    const maxTurns = Math.max(1, Math.floor(ctx.opened.sessionConfig.limits.maxTurns));
+    if (ctx.history.filter((m) => m.role === "user").length >= maxTurns) {
+      return { ok: false as const, code: "SESSION_LIMIT_REACHED", message: "Session maxTurns reached." };
     }
 
-    let llmAuthOverride:
-      | {
-          kind: "api_key";
-          apiKey: string;
-        }
-      | {
-          kind: "vertex_oauth";
-          refreshToken: string;
-          projectId: string;
-          location: string;
-        }
-      | null = null;
-    if (ctx.opened.sessionConfig.llm.authMode === "inline_api_key" && ctx.opened.sessionConfig.llm.auth?.kind === "api_key") {
-      llmAuthOverride = {
-        kind: "api_key",
-        apiKey: ctx.opened.sessionConfig.llm.auth.apiKey,
-      };
-    } else if (
-      ctx.opened.sessionConfig.llm.authMode === "inline_vertex_oauth" &&
-      ctx.opened.sessionConfig.llm.auth?.kind === "vertex_oauth"
-    ) {
-      llmAuthOverride = {
-        kind: "vertex_oauth",
-        refreshToken: ctx.opened.sessionConfig.llm.auth.refreshToken,
-        projectId: ctx.opened.sessionConfig.llm.auth.projectId,
-        location: ctx.opened.sessionConfig.llm.auth.location,
-      };
-    }
+    const attachmentText =
+      Array.isArray(turn.attachments) && turn.attachments.length > 0
+        ? `\n\nAttachments:\n${JSON.stringify(turn.attachments)}`
+        : "";
+    ctx.history.push({ role: "user", content: `${turn.message}${attachmentText}` });
 
-    let llmResponsePreview = "";
-    const result = await runAgentLoop({
-      organizationId: turn.organizationId,
-      workflowId: `session:${turn.sessionId}`,
-      runId: turn.sessionId,
-      attemptCount: 1,
-      requestedByUserId: turn.userId,
-      nodeId: `session:${turn.sessionId}`,
-      nodeType: "agent.run.session",
-      runInput: {
-        message: turn.message,
-        attachments: turn.attachments ?? [],
-      },
-      steps: [],
-      organizationSettings: {},
-      runtime: ctx.runtime,
-      pendingRemoteResult: null,
-      githubApiBaseUrl: "https://api.github.com",
-      loadSecretValue: async () => "",
-      fetchImpl: fetch,
-      llmInvoke: async (invokeInput: Omit<LlmInvokeInput, "fetchImpl">) =>
-        await runLlmInference({
-          ...invokeInput,
-          fetchImpl: fetch,
-        }),
-      llmAuthOverride,
-      config: {
-        llm: {
-          provider: ctx.opened.sessionConfig.llm.provider,
-          model: ctx.opened.sessionConfig.llm.model,
-          auth: { fallbackToEnv: true },
-        },
-        prompt: {
-          ...(ctx.opened.sessionConfig.prompt.system ? { system: ctx.opened.sessionConfig.prompt.system } : {}),
-          instructions: ctx.opened.sessionConfig.prompt.instructions,
-        },
-        tools: {
-          allow: ctx.opened.sessionConfig.toolsAllow,
-          execution: "cloud",
-        },
-        limits: {
-          maxTurns: ctx.opened.sessionConfig.limits.maxTurns,
-          maxToolCalls: ctx.opened.sessionConfig.limits.maxToolCalls,
-          timeoutMs: ctx.opened.sessionConfig.limits.timeoutMs,
-          maxOutputChars: ctx.opened.sessionConfig.limits.maxOutputChars,
-          maxRuntimeChars: ctx.opened.sessionConfig.limits.maxRuntimeChars,
-        },
-        output: { mode: "text" },
-      },
-      allowRemoteBlocked: false,
-      persistNodeId: `session:${turn.sessionId}`,
-      memory: {
-        sync: async () => {
-          await ctx.memory.sync();
-        },
-        search: async (params: { query: string; maxResults?: number }) => await ctx.memory.search(params),
-        get: async (params: { filePath: string; fromLine?: number; lineCount?: number }) => await ctx.memory.get(params),
-        status: () => ctx.memory.status(),
-      },
-      emitEvent: async (event: { eventType: string; level: "info" | "warn" | "error"; message?: string | null; payload?: unknown }) => {
-        if (event.eventType === "agent_llm_response") {
-          const payload = event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : null;
-          const content = payload && typeof payload.content === "string" ? payload.content : "";
-          if (content.length > 0) {
-            llmResponsePreview = content;
-          }
-        }
-      },
+    const result = await executeEnginePrompt({
+      engineId: ctx.opened.sessionConfig.engine.id,
+      model: ctx.opened.sessionConfig.engine.model ?? defaultEngineModel(ctx.opened.sessionConfig.engine.id),
+      prompt: renderPromptFromMessages(ctx.history),
+      workspaceDir: ctx.workspaceDir,
+      timeoutMs: ctx.opened.sessionConfig.limits.timeoutMs,
+      apiKey:
+        ctx.opened.sessionConfig.engine.authMode === "inline_api_key" && ctx.opened.sessionConfig.engine.auth?.kind === "api_key"
+          ? ctx.opened.sessionConfig.engine.auth.apiKey
+          : null,
     });
-    ctx.runtime = result.runtime ?? ctx.runtime;
-
-    if (result.status === "blocked") {
-      return { ok: false as const, code: "NODE_EXECUTION_BLOCKED", message: "Blocked tool execution is disabled for interactive turns." };
-    }
-    if (result.status === "failed") {
-      return { ok: false as const, code: result.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed, message: result.error ?? "Turn failed." };
+    if (!result.ok) {
+      return { ok: false as const, code: result.code, message: result.message };
     }
 
-    const payload = result.output ?? null;
-    const content = toTextOutput(payload);
-    return { ok: true as const, content: content.length > 0 ? content : llmResponsePreview || "ok", ...(payload !== null ? { payload } : {}) };
+    ctx.history.push({ role: "assistant", content: result.content });
+    return { ok: true as const, content: result.content, payload: { raw: result.raw } };
   }
 
   async function syncMemory(sync: z.infer<typeof memorySyncSchema>) {
@@ -536,6 +724,7 @@ async function buildSessionRuntimeManager(input: {
 async function executeTool(input: {
   incoming: z.infer<typeof invokeToolSchema>;
   sandbox: SandboxBackend;
+  emitToolEvent?: (event: { kind: string; level: "info" | "warn" | "error"; message: string; payload?: unknown }) => void;
 }): Promise<GatewayToolResultV2> {
   const { incoming, sandbox } = input;
   const policy: ToolPolicyV1 | undefined = incoming.toolPolicy as any;
@@ -551,6 +740,76 @@ async function executeTool(input: {
     pointer: normalizeWorkspacePointer(incoming.workspace),
     access: normalizeWorkspaceAccess(incoming.workspaceAccess),
   });
+
+  const emit = (event: { kind: string; level: "info" | "warn" | "error"; message: string; payload?: unknown }) => {
+    input.emitToolEvent?.(event);
+  };
+
+  const runAgentExecuteTask = async (args: {
+    nodeId: string;
+    runId: string | null;
+    workflowId: string | null;
+    attemptCount: number | null;
+    task: { type?: "shell" | undefined; script: string; shell?: "sh" | "bash" | undefined; env?: Record<string, string> | undefined };
+    sandboxCfg?:
+      | {
+          backend?: "docker" | "host" | "provider" | undefined;
+          network?: "none" | "enabled" | undefined;
+          timeoutMs?: number | undefined;
+          docker?: { image?: string | undefined } | undefined;
+        }
+      | null;
+  }) => {
+    const networkMode = policy.networkMode === "enabled" ? "enabled" : "none";
+    return await sandbox.executeShellTask({
+      requestId: incoming.requestId,
+      organizationId: incoming.organizationId,
+      userId: incoming.userId,
+      runId: args.runId,
+      workflowId: args.workflowId,
+      nodeId: args.nodeId,
+      attemptCount: args.attemptCount,
+      script: args.task.script,
+      shell: args.task.shell ?? "sh",
+      taskEnv: args.task.env ?? {},
+      ...(args.sandboxCfg?.backend ? { backend: args.sandboxCfg.backend } : {}),
+      networkMode,
+      timeoutMs: policy.timeoutMs ?? args.sandboxCfg?.timeoutMs ?? null,
+      dockerImage: args.sandboxCfg?.docker?.image ?? null,
+      envPassthroughAllowlist: [],
+      workdirHostPath: workspace.workdir,
+    });
+  };
+
+  const runConnectorTask = async (payload: z.infer<typeof connectorPayloadSchema>, secretOverride?: string | null) => {
+    const action = getCommunityConnectorAction({
+      connectorId: payload.connectorId as ConnectorId,
+      actionId: payload.actionId,
+    });
+    if (!action) {
+      return { status: "failed" as const, error: `ACTION_NOT_SUPPORTED:${payload.connectorId}:${payload.actionId}` };
+    }
+    const inputParsed = action.inputSchema.safeParse(payload.input);
+    if (!inputParsed.success) {
+      return { status: "failed" as const, error: "INVALID_ACTION_INPUT" };
+    }
+    const secret = action.requiresSecret ? secretOverride ?? incoming.secret ?? null : null;
+    if (action.requiresSecret && !secret) {
+      return { status: "failed" as const, error: "SECRET_REQUIRED" };
+    }
+    return await action.execute({
+      organizationId: incoming.organizationId,
+      userId: incoming.userId,
+      connectorId: payload.connectorId as ConnectorId,
+      actionId: payload.actionId,
+      input: inputParsed.data,
+      secret,
+      env: {
+        githubApiBaseUrl: payload.env?.githubApiBaseUrl ?? "https://api.github.com",
+      },
+      fetchImpl: fetch,
+    });
+  };
 
   if (incoming.kind === "agent.execute") {
     const parsed = agentExecutePayloadSchema.safeParse(incoming.payload);
@@ -575,26 +834,13 @@ async function executeTool(input: {
       };
     }
 
-    const sandboxCfg = node?.config?.sandbox;
-    const networkMode = policy.networkMode === "enabled" ? "enabled" : "none";
-    const exec = await sandbox.executeShellTask({
-      requestId: incoming.requestId,
-      organizationId: incoming.organizationId,
-      userId: incoming.userId,
+    const exec = await runAgentExecuteTask({
+      nodeId: parsed.data.nodeId,
       runId: parsed.data.runId ?? null,
       workflowId: parsed.data.workflowId ?? null,
-      nodeId: parsed.data.nodeId,
       attemptCount: parsed.data.attemptCount ?? null,
-      script: task.script,
-      shell: task.shell ?? "sh",
-      taskEnv: task.env ?? {},
-      ...(sandboxCfg?.backend ? { backend: sandboxCfg.backend } : {}),
-      networkMode,
-      timeoutMs: policy.timeoutMs ?? sandboxCfg?.timeoutMs ?? null,
-      dockerImage: sandboxCfg?.docker?.image ?? null,
-      // SaaS default: never pass host env into shell execution.
-      envPassthroughAllowlist: [],
-      workdirHostPath: workspace.workdir,
+      task,
+      sandboxCfg: node?.config?.sandbox ?? null,
     });
 
     let nextWorkspace;
@@ -632,46 +878,136 @@ async function executeTool(input: {
     };
   }
 
+  if (incoming.kind === "agent.run") {
+    const parsed = agentRunPayloadSchema.safeParse(incoming.payload);
+    if (!parsed.success) {
+      return { type: "tool_result_v2", requestId: incoming.requestId, status: "failed", error: "INVALID_AGENT_RUN_PAYLOAD" };
+    }
+
+    const runInputText = parsed.data.runInput === undefined ? "" : JSON.stringify(parsed.data.runInput);
+    const cfg = parsed.data.node.config;
+    const promptBody =
+      cfg.prompt.inputTemplate && cfg.prompt.inputTemplate.includes("{{input}}")
+        ? cfg.prompt.inputTemplate.replaceAll("{{input}}", runInputText)
+        : `${cfg.prompt.instructions}\n\nInput:\n${runInputText}`;
+    const prompt = `${cfg.prompt.system ? `${cfg.prompt.system}\n\n` : ""}${promptBody}`;
+
+    const baseResult = await executeEnginePrompt({
+      engineId: cfg.engine.id,
+      model: cfg.engine.model ?? defaultEngineModel(cfg.engine.id),
+      prompt,
+      workspaceDir: workspace.workdir,
+      timeoutMs: cfg.limits?.timeoutMs ?? policy.timeoutMs ?? 60_000,
+      apiKey: parsed.data.resolvedSecrets?.engine ?? null,
+    });
+    if (!baseResult.ok) {
+      return { type: "tool_result_v2", requestId: incoming.requestId, status: "failed", error: `${baseResult.code}:${baseResult.message}` };
+    }
+
+    const extractToolCalls = (content: string): Array<z.infer<typeof bridgeToolCallSchema>> => {
+      const matches = [...content.matchAll(/```vespid_tool_calls\s*([\s\S]*?)```/g)];
+      const out: Array<z.infer<typeof bridgeToolCallSchema>> = [];
+      for (const m of matches) {
+        const raw = (m[1] ?? "").trim();
+        if (!raw) continue;
+        let parsedJson: unknown;
+        try {
+          parsedJson = JSON.parse(raw);
+        } catch {
+          continue;
+        }
+        const list = Array.isArray(parsedJson) ? parsedJson : (parsedJson as any)?.tool_calls;
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+          const callParsed = bridgeToolCallSchema.safeParse(item);
+          if (callParsed.success) out.push(callParsed.data);
+        }
+      }
+      return out;
+    };
+
+    const allow = new Set(cfg.tools?.allow ?? []);
+    const toolCalls = extractToolCalls(baseResult.content);
+    const maxToolCalls = Math.max(0, cfg.limits?.maxToolCalls ?? 20);
+    const toolResults: unknown[] = [];
+
+    for (const [index, call] of toolCalls.entries()) {
+      if (index >= maxToolCalls) break;
+      if (!allow.has(call.kind)) {
+        emit({ kind: "agent.run.tool.skip", level: "warn", message: `Tool ${call.kind} not in allowlist` });
+        continue;
+      }
+      if (call.kind === "connector.action") {
+        const connectorParsed = connectorPayloadSchema.safeParse(call.payload);
+        if (!connectorParsed.success) {
+          toolResults.push({ kind: call.kind, status: "failed", error: "INVALID_ACTION_PAYLOAD" });
+          continue;
+        }
+        emit({ kind: "agent.run.tool.start", level: "info", message: "connector.action", payload: connectorParsed.data });
+        const secret = parsed.data.resolvedSecrets?.connectors?.[connectorParsed.data.connectorId] ?? null;
+        const res = await runConnectorTask(connectorParsed.data, secret);
+        emit({ kind: "agent.run.tool.done", level: res.status === "failed" ? "error" : "info", message: "connector.action", payload: res });
+        toolResults.push({ kind: call.kind, ...res });
+        continue;
+      }
+      const execParsed = agentExecutePayloadSchema.safeParse(call.payload);
+      if (!execParsed.success || !execParsed.data.node?.config?.task) {
+        toolResults.push({ kind: call.kind, status: "failed", error: "INVALID_EXECUTE_PAYLOAD" });
+        continue;
+      }
+      emit({ kind: "agent.run.tool.start", level: "info", message: "agent.execute", payload: { nodeId: execParsed.data.nodeId } });
+      const res = await runAgentExecuteTask({
+        nodeId: execParsed.data.nodeId,
+        runId: execParsed.data.runId ?? parsed.data.runId ?? null,
+        workflowId: execParsed.data.workflowId ?? parsed.data.workflowId ?? null,
+        attemptCount: execParsed.data.attemptCount ?? parsed.data.attemptCount ?? null,
+        task: execParsed.data.node.config.task,
+        sandboxCfg: execParsed.data.node.config.sandbox ?? null,
+      });
+      emit({ kind: "agent.run.tool.done", level: res.status === "failed" ? "error" : "info", message: "agent.execute", payload: res });
+      toolResults.push({ kind: call.kind, status: res.status, ...(res.output !== undefined ? { output: res.output } : {}), ...(res.status === "failed" ? { error: res.error } : {}) });
+    }
+
+    let finalContent = baseResult.content;
+    if (toolResults.length > 0) {
+      const rerun = await executeEnginePrompt({
+        engineId: cfg.engine.id,
+        model: cfg.engine.model ?? defaultEngineModel(cfg.engine.id),
+        prompt: `${prompt}\n\nTool results:\n${JSON.stringify(toolResults, null, 2)}`,
+        workspaceDir: workspace.workdir,
+        timeoutMs: cfg.limits?.timeoutMs ?? policy.timeoutMs ?? 60_000,
+        apiKey: parsed.data.resolvedSecrets?.engine ?? null,
+      });
+      if (rerun.ok) {
+        finalContent = rerun.content;
+      }
+    }
+
+    const nextWorkspace = await snapshotAndUploadWorkspace({
+      pointer: normalizeWorkspacePointer(incoming.workspace),
+      access: normalizeWorkspaceAccess(incoming.workspaceAccess),
+      workdir: workspace.workdir,
+    });
+
+    return {
+      type: "tool_result_v2",
+      requestId: incoming.requestId,
+      status: "succeeded",
+      output: {
+        text: finalContent,
+        toolResults,
+        raw: baseResult.raw,
+      },
+      workspace: nextWorkspace,
+    };
+  }
+
   const actionParsed = connectorPayloadSchema.safeParse(incoming.payload);
   if (!actionParsed.success) {
     return { type: "tool_result_v2", requestId: incoming.requestId, status: "failed", error: "INVALID_ACTION_PAYLOAD" };
   }
 
-  const action = getCommunityConnectorAction({
-    connectorId: actionParsed.data.connectorId as ConnectorId,
-    actionId: actionParsed.data.actionId,
-  });
-  if (!action) {
-    return {
-      type: "tool_result_v2",
-      requestId: incoming.requestId,
-      status: "failed",
-      error: `ACTION_NOT_SUPPORTED:${actionParsed.data.connectorId}:${actionParsed.data.actionId}`,
-    };
-  }
-
-  const inputParsed = action.inputSchema.safeParse(actionParsed.data.input);
-  if (!inputParsed.success) {
-    return { type: "tool_result_v2", requestId: incoming.requestId, status: "failed", error: "INVALID_ACTION_INPUT" };
-  }
-
-  const secret = action.requiresSecret ? incoming.secret ?? null : null;
-  if (action.requiresSecret && !secret) {
-    return { type: "tool_result_v2", requestId: incoming.requestId, status: "failed", error: "SECRET_REQUIRED" };
-  }
-
-  const result = await action.execute({
-    organizationId: incoming.organizationId,
-    userId: incoming.userId,
-    connectorId: actionParsed.data.connectorId as ConnectorId,
-    actionId: actionParsed.data.actionId,
-    input: inputParsed.data,
-    secret,
-    env: {
-      githubApiBaseUrl: actionParsed.data.env?.githubApiBaseUrl ?? "https://api.github.com",
-    },
-    fetchImpl: fetch,
-  });
+  const result = await runConnectorTask(actionParsed.data);
 
   const nextWorkspace = await snapshotAndUploadWorkspace({
     pointer: normalizeWorkspacePointer(incoming.workspace),
@@ -706,17 +1042,43 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
   const labelsRaw = (normalized.capabilities as any)?.labels ?? (normalized.capabilities as any)?.tags;
   const labels =
     Array.isArray(labelsRaw) && labelsRaw.length > 0 ? labelsRaw.filter((x: unknown): x is string => typeof x === "string") : [];
-  const hello = {
-    type: "executor_hello_v2",
-    executorVersion: normalized.executorVersion,
-    executorId: normalized.executorId,
-    pool: normalized.pool,
-    ...(normalized.pool === "byon" && normalized.organizationId ? { organizationId: normalized.organizationId } : {}),
-    name: normalized.executorName,
-    labels,
-    maxInFlight: Number((normalized.capabilities as any)?.maxInFlight ?? 10),
-    kinds: ["connector.action", "agent.execute", "agent.run"] as const,
+
+  const probeIntervalMs = Math.max(10_000, envNumber("VESPID_ENGINE_AUTH_PROBE_INTERVAL_MS", 60_000));
+  const probeTimeoutMs = Math.max(500, envNumber("VESPID_ENGINE_AUTH_PROBE_TIMEOUT_MS", 5_000));
+  const engineAuthState: Record<ExecutorOauthEngineId, EngineAuthProbeState> = {
+    "gateway.codex.v2": defaultProbeState(),
+    "gateway.claude.v2": defaultProbeState(),
   };
+  let probeInFlight = false;
+
+  function buildExecutorHello(): {
+    type: "executor_hello_v2";
+    executorVersion: string;
+    executorId: string;
+    pool: "managed" | "byon";
+    organizationId?: string;
+    name: string;
+    labels: string[];
+    maxInFlight: number;
+    kinds: ["connector.action", "agent.execute", "agent.run"];
+    engineAuth: Record<ExecutorOauthEngineId, EngineAuthProbeState>;
+  } {
+    return {
+      type: "executor_hello_v2",
+      executorVersion: normalized.executorVersion,
+      executorId: normalized.executorId,
+      pool: normalized.pool,
+      ...(normalized.pool === "byon" && normalized.organizationId ? { organizationId: normalized.organizationId } : {}),
+      name: normalized.executorName,
+      labels,
+      maxInFlight: Number((normalized.capabilities as any)?.maxInFlight ?? 10),
+      kinds: ["connector.action", "agent.execute", "agent.run"],
+      engineAuth: {
+        "gateway.codex.v2": engineAuthState["gateway.codex.v2"],
+        "gateway.claude.v2": engineAuthState["gateway.claude.v2"],
+      },
+    };
+  }
 
   const pingIntervalMs = 15_000;
   const abort = new AbortController();
@@ -730,6 +1092,35 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
   const sandbox = resolveSandboxBackend();
   const sessionRuntime = await buildSessionRuntimeManager({ pool: normalized.pool });
   const tlsCa = await loadTlsCaFromEnv(normalized.gatewayWsUrl);
+
+  async function runEngineAuthProbeCycle(): Promise<void> {
+    if (probeInFlight) return;
+    probeInFlight = true;
+    try {
+      for (const engineId of EXECUTOR_OAUTH_ENGINES) {
+        engineAuthState[engineId] = await probeEngineOauthStatus({
+          engineId,
+          timeoutMs: probeTimeoutMs,
+        });
+      }
+    } finally {
+      probeInFlight = false;
+    }
+  }
+
+  await runEngineAuthProbeCycle();
+
+  const probeTimer = setInterval(() => {
+    void runEngineAuthProbeCycle()
+      .then(() => {
+        if (activeWs && activeWs.readyState === WebSocket.OPEN) {
+          safeSend(activeWs, buildExecutorHello());
+        }
+      })
+      .catch(() => {
+        // ignore probe errors and keep previous heartbeat state
+      });
+  }, probeIntervalMs);
 
   const loop = (async () => {
     let attempt = 0;
@@ -753,9 +1144,9 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
       ws.on("open", () => {
         attempt = 0;
         activeWs = ws;
-        safeSend(ws, hello);
+        safeSend(ws, buildExecutorHello());
         pingTimer = setInterval(() => {
-          safeSend(ws, hello);
+          safeSend(ws, buildExecutorHello());
         }, pingIntervalMs);
         if (readyResolve) {
           readyResolve();
@@ -777,7 +1168,26 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
           const incoming = parsedTool.data;
           let result: GatewayToolResultV2;
           try {
-            result = await executeTool({ incoming, sandbox });
+            let eventSeq = 0;
+            result = await executeTool({
+              incoming,
+              sandbox,
+              emitToolEvent: (evt) => {
+                eventSeq += 1;
+                safeSend(ws, {
+                  type: "tool_event_v2",
+                  requestId: incoming.requestId,
+                  event: {
+                    seq: eventSeq,
+                    ts: Date.now(),
+                    kind: evt.kind,
+                    level: evt.level,
+                    message: evt.message,
+                    ...(evt.payload !== undefined ? { payload: evt.payload } : {}),
+                  },
+                });
+              },
+            });
           } catch (error) {
             const message = error instanceof Error ? error.message : REMOTE_EXEC_ERROR.NodeExecutionFailed;
             result = {
@@ -794,8 +1204,34 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
         const parsedOpen = sessionOpenSchema.safeParse(parsedJson);
         if (parsedOpen.success) {
           const incoming = parsedOpen.data as GatewaySessionOpenV2;
-          const opened = await sessionRuntime.openSession(incoming as any);
+          let opened;
+          try {
+            opened = await sessionRuntime.openSession(incoming as any);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "SESSION_OPEN_FAILED";
+            jsonLog("error", {
+              event: "session_open_failed",
+              sessionId: incoming.sessionId,
+              requestId: incoming.requestId,
+              message,
+            });
+            safeSend(ws, {
+              type: "turn_error",
+              requestId: incoming.requestId,
+              sessionId: incoming.sessionId,
+              code: "SESSION_OPEN_FAILED",
+              message,
+            });
+            return;
+          }
           if (!opened.ok) {
+            jsonLog("warn", {
+              event: "session_open_rejected",
+              sessionId: incoming.sessionId,
+              requestId: incoming.requestId,
+              code: opened.code,
+              message: opened.message,
+            });
             safeSend(ws, {
               type: "turn_error",
               requestId: incoming.requestId,
@@ -921,11 +1357,17 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
     ready,
     async close() {
       abort.abort();
+      clearInterval(probeTimer);
       await loop;
       await sandbox.close();
     },
   };
 }
+
+export const __testables = {
+  parseCommandString,
+  probeEngineOauthStatus,
+};
 
 // Backward-compatible helper export name.
 export function agentTokenHash(token: string): string {

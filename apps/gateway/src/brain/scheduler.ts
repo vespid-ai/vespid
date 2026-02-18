@@ -3,18 +3,37 @@ import { z } from "zod";
 import { executorInFlightKey, executorLastUsedKey, executorRouteKey, orgInFlightKey } from "../bus/keys.js";
 import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";
 
+const engineAuthStateSchema = z.object({
+  oauthVerified: z.boolean(),
+  checkedAt: z.string().min(1),
+  reason: z.string().min(1),
+});
+
 const routeSchema = z.object({
   edgeId: z.string().min(1),
   executorId: z.string().uuid(),
   pool: z.enum(["managed", "byon"]),
   organizationId: z.string().uuid().nullable().optional(),
+  name: z.string().nullable().optional(),
   labels: z.array(z.string()).optional(),
   maxInFlight: z.number().int().min(1).optional(),
   kinds: z.array(z.enum(["connector.action", "agent.execute", "agent.run"])).optional(),
+  engineAuth: z
+    .object({
+      "gateway.codex.v2": engineAuthStateSchema.optional(),
+      "gateway.claude.v2": engineAuthStateSchema.optional(),
+    })
+    .optional(),
   lastSeenAtMs: z.number().optional(),
 });
 
 export type ExecutorRoute = z.infer<typeof routeSchema>;
+
+export type ExecutorOauthEngineId = "gateway.codex.v2" | "gateway.claude.v2";
+
+export function isExecutorOauthVerified(route: Pick<ExecutorRoute, "engineAuth">, engineId: ExecutorOauthEngineId): boolean {
+  return route.engineAuth?.[engineId]?.oauthVerified === true;
+}
 
 export async function getExecutorRoute(redis: Redis, executorId: string): Promise<ExecutorRoute | null> {
   const raw = await redis.get(executorRouteKey(executorId));

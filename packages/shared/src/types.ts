@@ -88,7 +88,7 @@ export type WorkflowRunJobPayload = {
 };
 
 export type GatewayExecutionKind = "connector.action" | "agent.execute" | "agent.run";
-export type GatewayToolKind = Exclude<GatewayExecutionKind, "agent.run">;
+export type GatewayToolKind = GatewayExecutionKind;
 
 export type GatewayDispatchRequest = {
   organizationId: string;
@@ -202,6 +202,16 @@ export type ExecutorSelectorV1 = {
   executorId?: string | undefined;
 };
 
+export type GatewayExecutorOauthEngineId = "gateway.codex.v2" | "gateway.claude.v2";
+
+export type GatewayExecutorEngineAuthState = {
+  oauthVerified: boolean;
+  checkedAt: string;
+  reason: string;
+};
+
+export type GatewayExecutorEngineAuthMap = Partial<Record<GatewayExecutorOauthEngineId, GatewayExecutorEngineAuthState>>;
+
 export type GatewayExecutorHelloV2 = {
   type: "executor_hello_v2";
   executorVersion: string;
@@ -216,6 +226,7 @@ export type GatewayExecutorHelloV2 = {
   // Interactive sessions may pin a host that can run agent turns end-to-end.
   kinds: GatewayExecutionKind[];
   resourceHints?: { cpu?: number; memoryMb?: number };
+  engineAuth?: GatewayExecutorEngineAuthMap;
 };
 
 export type GatewayInvokeToolV2 = {
@@ -527,22 +538,16 @@ export type GatewaySessionOpenV2 = {
   routedAgentId: string;
   userId: string;
   sessionConfig: {
-    engineId: string;
-    llm: {
-      provider: "openai" | "anthropic" | "gemini" | "vertex";
-      model: string;
-      authMode: "env" | "inline_api_key" | "inline_vertex_oauth";
+    engine: {
+      id: "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2";
+      model?: string;
+      authMode: "env" | "inline_api_key" | "oauth_executor";
       auth?:
         | {
             kind: "api_key";
             apiKey: string;
           }
-        | {
-            kind: "vertex_oauth";
-            refreshToken: string;
-            projectId: string;
-            location: string;
-          };
+        | undefined;
     };
     prompt: {
       system?: string | null;

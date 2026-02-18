@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { LlmProviderId } from "@vespid/shared/llm/provider-registry";
 import { apiFetchJson } from "../api";
 
 export type AgentSession = {
@@ -104,13 +103,16 @@ export function useCreateSession(orgId: string | null) {
       scope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
       context?: Record<string, unknown>;
       executionMode?: "pinned-node-host";
-      engineId?: "gateway.loop.v2";
+      engine: {
+        id: "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2";
+        model?: string;
+        auth?: { secretId?: string | null };
+      };
       toolsetId?: string;
-      llm?: { provider: LlmProviderId; model: string; auth?: { secretId?: string | null } };
       prompt: { system?: string; instructions: string };
       tools: { allow: string[] };
       resetPolicy?: unknown;
-      executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string };
+      executorSelector?: { pool: "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string };
     }) => {
       return apiFetchJson<{ session: AgentSession }>(
         `/v1/orgs/${orgId}/sessions`,

@@ -16,11 +16,11 @@ Core tables:
 - `auth_sessions`
 
 Model constraints:
-- Unique user email (case-insensitive).
-- Unique membership (`organization_id`, `user_id`).
-- Role catalog seeded as `owner`, `admin`, `member`.
-- Refresh session tokens are stored as hashes (`auth_sessions.refresh_token_hash`).
+- Unique user email (case-insensitive)
+- Unique membership (`organization_id`, `user_id`)
+- Role catalog seeded as `owner`, `admin`, `member`
+- Refresh session tokens stored as hashes (`auth_sessions.refresh_token_hash`)
 
 ## Consequences
 - Supports organization creation, invitation, and role mutation flows.
-- Provides a stable baseline for workflow and billing tables in next slices.
+- Provides a stable baseline for workflow and runtime-scoped tables.

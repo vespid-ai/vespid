@@ -2,29 +2,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import fs from "node:fs";
 import path from "node:path";
 import ModelConnectionsPage from "../app/[locale]/(app)/models/model-connections-client";
 
-const mocks = vi.hoisted(() => {
-  return {
-    push: vi.fn(),
-    searchParams: new URLSearchParams(),
-    updateSettingsMutate: vi.fn(async () => ({})),
-    createSecretMutate: vi.fn(async () => ({})),
-    rotateSecretMutate: vi.fn(async () => ({})),
-    deleteSecretMutate: vi.fn(async () => ({})),
-    testKeyMutate: vi.fn(async () => ({ valid: true, provider: "openai", apiKind: "openai-compatible", checkedAt: new Date().toISOString() })),
-    apiFetchJson: vi.fn(),
-    refetch: vi.fn(async () => ({})),
-    secrets: [] as Array<{ id: string; connectorId: string; name: string; createdAt: string; updatedAt: string; updatedByUserId: string }>,
-  };
-});
+const mocks = vi.hoisted(() => ({
+  push: vi.fn(),
+  apiFetchJson: vi.fn(),
+  refetch: vi.fn(async () => ({})),
+  authStatusRefetch: vi.fn(async () => ({})),
+  updateOrgSettingsMutate: vi.fn(async () => ({})),
+  createSecretMutate: vi.fn(async () => ({})),
+  rotateSecretMutate: vi.fn(async () => ({})),
+  deleteSecretMutate: vi.fn(async () => ({})),
+  secrets: [] as Array<{ id: string; connectorId: string; name: string; createdAt: string; updatedAt: string; updatedByUserId: string }>,
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
   useParams: () => ({ locale: "en" }),
-  useSearchParams: () => mocks.searchParams,
 }));
 
 vi.mock("../lib/hooks/use-active-org-id", () => ({
@@ -35,71 +32,38 @@ vi.mock("../lib/hooks/use-session", () => ({
   useSession: () => ({ isLoading: false, data: { session: { token: "tok", expiresAt: 1 } } }),
 }));
 
-vi.mock("../lib/hooks/use-org-settings", () => ({
-  useOrgSettings: () => ({
-    data: {
-      settings: {
-        llm: {
-          defaults: {
-            primary: { provider: "openai", model: "gpt-5.3-codex", secretId: null },
-          },
-          providers: {},
-        },
-      },
-    },
-    isError: false,
-    refetch: mocks.refetch,
-  }),
-  useUpdateOrgSettings: () => ({
-    isPending: false,
-    mutateAsync: mocks.updateSettingsMutate,
-  }),
-}));
-
 vi.mock("../lib/hooks/use-secrets", () => ({
   useSecrets: () => ({
     data: { secrets: mocks.secrets },
     isError: false,
     refetch: mocks.refetch,
   }),
-  useCreateSecret: () => ({ mutateAsync: mocks.createSecretMutate }),
-  useRotateSecret: () => ({ mutateAsync: mocks.rotateSecretMutate }),
-  useDeleteSecret: () => ({ mutateAsync: mocks.deleteSecretMutate }),
+  useCreateSecret: () => ({ mutateAsync: mocks.createSecretMutate, isPending: false }),
+  useRotateSecret: () => ({ mutateAsync: mocks.rotateSecretMutate, isPending: false }),
+  useDeleteSecret: () => ({ mutateAsync: mocks.deleteSecretMutate, isPending: false }),
 }));
 
-vi.mock("../lib/hooks/use-llm-provider-key-test", () => ({
-  useTestLlmProviderApiKey: () => ({
-    mutateAsync: mocks.testKeyMutate,
+vi.mock("../lib/hooks/use-org-settings", () => ({
+  useOrgSettings: () => ({
+    data: {
+      settings: {
+        agents: {
+          engineAuthDefaults: {
+            "gateway.codex.v2": { mode: "api_key", secretId: null },
+            "gateway.claude.v2": { mode: "api_key", secretId: null },
+            "gateway.opencode.v2": { mode: "api_key", secretId: null },
+          },
+        },
+      },
+    },
+    isError: false,
   }),
+  useUpdateOrgSettings: () => ({ mutateAsync: mocks.updateOrgSettingsMutate, isPending: false }),
 }));
 
 vi.mock("../lib/api", () => ({
   apiFetchJson: (...args: unknown[]) => mocks.apiFetchJson(...args),
   isUnauthorizedError: () => false,
-}));
-
-vi.mock("../components/app/llm/llm-config-field", () => ({
-  LlmConfigField: () => <div data-testid="llm-config-field" />,
-}));
-
-vi.mock("../components/app/llm/provider-picker", () => ({
-  ProviderPicker: ({
-    value,
-    onChange,
-    items,
-  }: {
-    value: string;
-    onChange: (value: string) => void;
-    items: Array<{ id: string; label: string }>;
-  }) => (
-    <select data-testid="provider-picker" value={value} onChange={(e) => onChange(e.target.value)}>
-      {items.map((item) => (
-        <option key={item.id} value={item.id}>
-          {item.label}
-        </option>
-      ))}
-    </select>
-  ),
 }));
 
 function readMessages() {
@@ -109,103 +73,92 @@ function readMessages() {
 
 function renderPage() {
   const messages = readMessages();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <NextIntlClientProvider locale="en" messages={messages}>
-      <ModelConnectionsPage />
+      <QueryClientProvider client={client}>
+        <ModelConnectionsPage />
+      </QueryClientProvider>
     </NextIntlClientProvider>
   );
 }
 
-describe("ModelConnectionsPage provider connections", () => {
+describe("ModelConnectionsPage engine connections", () => {
   beforeEach(() => {
     mocks.push.mockReset();
-    mocks.updateSettingsMutate.mockClear();
+    mocks.apiFetchJson.mockReset();
+    mocks.refetch.mockReset();
+    mocks.authStatusRefetch.mockReset();
+    mocks.updateOrgSettingsMutate.mockReset();
     mocks.createSecretMutate.mockClear();
     mocks.rotateSecretMutate.mockClear();
     mocks.deleteSecretMutate.mockClear();
-    mocks.testKeyMutate.mockClear();
-    mocks.apiFetchJson.mockReset();
-    mocks.refetch.mockClear();
     mocks.secrets = [];
-  });
 
-  it("does not render expanded API key input by default", () => {
-    renderPage();
-    expect(screen.queryByPlaceholderText("Paste API key...")).not.toBeInTheDocument();
-  });
-
-  it("keeps Save disabled until API key test succeeds", async () => {
-    const user = userEvent.setup();
-    renderPage();
-
-    const openAiRow = screen.getByTestId("provider-row-openai");
-    await user.click(within(openAiRow).getByRole("button", { name: "Connect" }));
-
-    const input = await screen.findByPlaceholderText("Paste API key...");
-    await user.type(input, "sk-live-test");
-
-    const saveButton = screen.getByTestId("api-key-save-button");
-    const testButton = screen.getByTestId("api-key-test-button");
-    expect(saveButton).toBeDisabled();
-
-    await user.click(testButton);
-    await waitFor(() => expect(mocks.testKeyMutate).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(saveButton).toBeEnabled());
-  });
-
-  it("redirects to provider page for OAuth start when authorizationUrl is returned", async () => {
-    const user = userEvent.setup();
-    const openSpy = vi.spyOn(window, "open").mockImplementation(() => window);
     mocks.apiFetchJson.mockImplementation(async (path: string) => {
-      if (path.includes("/llm/oauth/google-antigravity/start")) {
-        return { authorizationUrl: "https://provider.local/oauth/start" };
-      }
-      throw new Error(`Unexpected call: ${path}`);
-    });
-
-    try {
-      renderPage();
-      await user.click(screen.getByRole("tab", { name: "OAuth" }));
-      const row = screen.getByTestId("provider-row-google-antigravity");
-      await user.click(within(row).getByRole("button", { name: "Connect" }));
-
-      await waitFor(() => {
-        expect(openSpy).toHaveBeenCalledWith("https://provider.local/oauth/start", "_self");
-      });
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-
-  it("falls back to device flow and opens verification page", async () => {
-    const user = userEvent.setup();
-    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
-    mocks.apiFetchJson.mockImplementation(async (path: string) => {
-      if (path.includes("/llm/oauth/github-copilot/start")) {
-        throw { payload: { code: "LLM_OAUTH_USE_DEVICE_FLOW" }, message: "Use device flow" };
-      }
-      if (path.includes("/llm/oauth/github-copilot/device/start")) {
+      if (path === "/v1/agent/engines") {
         return {
-          deviceCode: "device-code-1",
-          userCode: "ABCD-1234",
-          verificationUri: "https://device.provider.local/verify",
+          engines: [
+            {
+              id: "gateway.codex.v2",
+              displayName: "Codex",
+              cliCommand: "codex",
+              defaultModel: "gpt-5-codex",
+              defaultSecretConnectorId: "agent.codex",
+            },
+            {
+              id: "gateway.claude.v2",
+              displayName: "Claude Code",
+              cliCommand: "claude",
+              defaultModel: "claude-sonnet-4-20250514",
+              defaultSecretConnectorId: "agent.claude",
+            },
+            {
+              id: "gateway.opencode.v2",
+              displayName: "OpenCode",
+              cliCommand: "opencode",
+              defaultModel: "claude-opus-4-6",
+              defaultSecretConnectorId: "agent.opencode",
+            },
+          ],
+        };
+      }
+      if (path === "/v1/orgs/org_1/engines/auth-status") {
+        return {
+          organizationId: "org_1",
+          engines: {
+            "gateway.codex.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+            "gateway.claude.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+            "gateway.opencode.v2": { onlineExecutors: 0, verifiedCount: 0, unverifiedCount: 0, executors: [] },
+          },
         };
       }
       throw new Error(`Unexpected call: ${path}`);
     });
+  });
 
-    try {
-      renderPage();
-      await user.click(screen.getByRole("tab", { name: "OAuth" }));
-      const row = screen.getByTestId("provider-row-github-copilot");
-      await user.click(within(row).getByRole("button", { name: "Connect" }));
+  it("renders three supported engine cards", async () => {
+    renderPage();
+    await screen.findByTestId("engine-card-gateway.codex.v2");
+    expect(screen.getByTestId("engine-card-gateway.claude.v2")).toBeInTheDocument();
+    expect(screen.getByTestId("engine-card-gateway.opencode.v2")).toBeInTheDocument();
+  });
 
-      await waitFor(() => {
-        expect(openSpy).toHaveBeenCalledWith("https://device.provider.local/verify", "_blank", "noopener,noreferrer");
+  it("creates connector secret for engine API key", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const codexCard = await screen.findByTestId("engine-card-gateway.codex.v2");
+    const input = within(codexCard).getByLabelText("API key");
+    await user.type(input, "sk-codex-test");
+    await user.click(within(codexCard).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mocks.createSecretMutate).toHaveBeenCalledWith({
+        connectorId: "agent.codex",
+        name: "default",
+        value: "sk-codex-test",
       });
-      expect(await screen.findByText("User code: ABCD-1234")).toBeInTheDocument();
-    } finally {
-      openSpy.mockRestore();
-    }
+    });
   });
 });

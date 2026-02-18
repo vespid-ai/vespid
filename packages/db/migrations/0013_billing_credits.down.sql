@@ -1,9 +1,8 @@
--- Down migration template for 0013_billing_credits.sql
--- File: 0013_billing_credits.down.sql
--- Replace this guard with real reverse SQL before using rollback in shared environments.
+drop policy if exists organization_credit_ledger_tenant_isolation_all on organization_credit_ledger;
+drop policy if exists organization_credit_balances_tenant_isolation_all on organization_credit_balances;
 
-DO 2936
-BEGIN
-  RAISE EXCEPTION 'Down migration not implemented for 0013_billing_credits.sql';
-END
-2936;
+drop index if exists organization_credit_ledger_org_created_at_idx;
+drop index if exists organization_credit_ledger_stripe_event_unique;
+
+drop table if exists organization_credit_ledger;
+drop table if exists organization_credit_balances;

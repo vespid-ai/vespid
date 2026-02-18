@@ -6,9 +6,6 @@ import {
   getConnectorSecretById,
   getAgentToolsetById,
   getOrganizationById,
-  ensureOrganizationCreditBalanceRow,
-  getOrganizationCreditBalance,
-  tryDebitOrganizationCredits,
   getWorkflowById,
   getWorkflowRunById,
   markWorkflowRunBlocked,
@@ -22,11 +19,9 @@ import {
 import {
   REMOTE_EXEC_ERROR,
   type LlmProviderId,
-  type EnterpriseProvider,
   type WorkflowNodeExecutor,
   type WorkflowRunJobPayload,
 } from "@vespid/shared";
-import { loadEnterpriseProvider, resolveWorkflowNodeExecutors } from "@vespid/shared/enterprise-provider";
 import { decryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
 import {
   workflowDslAnySchema,
@@ -169,14 +164,10 @@ function buildProgressOutput(steps: WorkflowExecutionStep[], runtime?: unknown):
 }
 
 function buildExecutorRegistry(input: {
-  communityExecutors: WorkflowNodeExecutor[];
-  enterpriseExecutors?: WorkflowNodeExecutor[] | null;
+  executors: WorkflowNodeExecutor[];
 }): ExecutorRegistry {
   const registry: ExecutorRegistry = new Map();
-  for (const executor of input.communityExecutors) {
-    registry.set(executor.nodeType, executor);
-  }
-  for (const executor of input.enterpriseExecutors ?? []) {
+  for (const executor of input.executors) {
     registry.set(executor.nodeType, executor);
   }
   return registry;
@@ -187,7 +178,6 @@ export async function processWorkflowRunJob(
   job: WorkflowRunJobLike,
   input?: {
     executorRegistry?: ExecutorRegistry;
-    enterpriseProvider?: EnterpriseProvider;
     enqueueContinuationPoll?: (input: {
       organizationId: string;
       workflowId: string;
@@ -261,19 +251,10 @@ export async function processWorkflowRunJob(
   };
 
   const managedCredits = {
-    ensureAvailable: async (creditsInput: { organizationId: string; userId: string; minCredits: number }) => {
-      const minCredits = Math.max(0, Math.floor(creditsInput.minCredits));
-      const row = await withTenantContext(
-        pool,
-        { userId: creditsInput.userId, organizationId: creditsInput.organizationId },
-        async (tenantDb) => {
-          const existing = await getOrganizationCreditBalance(tenantDb, { organizationId: creditsInput.organizationId });
-          return existing ?? (await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: creditsInput.organizationId }));
-        }
-      );
-      return row.balanceCredits >= minCredits;
+    ensureAvailable: async (_creditsInput: { organizationId: string; userId: string; minCredits: number }) => {
+      return true;
     },
-    charge: async (chargeInput: {
+    charge: async (_chargeInput: {
       organizationId: string;
       userId: string;
       workflowId: string;
@@ -287,57 +268,21 @@ export async function processWorkflowRunJob(
       inputTokens: number;
       outputTokens: number;
     }) => {
-      const credits = Math.max(0, Math.floor(chargeInput.credits));
-      if (credits <= 0) {
-        return;
-      }
-
-      await withTenantContext(
-        pool,
-        { userId: chargeInput.userId, organizationId: chargeInput.organizationId },
-        async (tenantDb) => {
-          await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: chargeInput.organizationId });
-          await tryDebitOrganizationCredits(tenantDb, {
-            organizationId: chargeInput.organizationId,
-            credits,
-            reason: "llm_usage",
-            workflowRunId: chargeInput.runId,
-            createdByUserId: null,
-            metadata: {
-              provider: chargeInput.provider,
-              model: chargeInput.model,
-              nodeId: chargeInput.nodeId,
-              workflowId: chargeInput.workflowId,
-              runId: chargeInput.runId,
-              attemptCount: chargeInput.attemptCount,
-              turn: chargeInput.turn,
-              inputTokens: chargeInput.inputTokens,
-              outputTokens: chargeInput.outputTokens,
-            },
-          });
-        }
-      );
+      return;
     },
   };
 
   const executorRegistry =
     input?.executorRegistry ??
     (() => {
-      const enterpriseExecutors = input?.enterpriseProvider
-        ? resolveWorkflowNodeExecutors(input.enterpriseProvider)
-        : null;
-
-      const communityExecutors = getCommunityWorkflowNodeExecutors({
+      const executors = getCommunityWorkflowNodeExecutors({
         getGithubApiBaseUrl,
         loadConnectorSecretValue,
         loadToolsetById,
         managedCredits,
       });
 
-      return buildExecutorRegistry({
-        communityExecutors,
-        enterpriseExecutors,
-      });
+      return buildExecutorRegistry({ executors });
     })();
 
   let attemptCount = 0;
@@ -1164,18 +1109,6 @@ export async function startWorkflowWorker(input?: {
   const continuationQueueName = getWorkflowContinuationQueueName();
   const continuationPollMs = Math.max(250, envNumber("WORKFLOW_CONTINUATION_POLL_MS", 2000));
 
-  const enterpriseProvider = await loadEnterpriseProvider({
-    logger: {
-      info(payload) {
-        jsonLog("info", typeof payload === "object" && payload ? (payload as Record<string, unknown>) : { payload });
-      },
-      warn(payload) {
-        jsonLog("warn", typeof payload === "object" && payload ? (payload as Record<string, unknown>) : { payload });
-      },
-    },
-  });
-  const enterpriseExecutors = resolveWorkflowNodeExecutors(enterpriseProvider);
-
   const loadConnectorSecretValue = async (secretInput: {
     organizationId: string;
     userId: string;
@@ -1235,19 +1168,10 @@ export async function startWorkflowWorker(input?: {
   };
 
   const managedCredits = {
-    ensureAvailable: async (creditsInput: { organizationId: string; userId: string; minCredits: number }) => {
-      const minCredits = Math.max(0, Math.floor(creditsInput.minCredits));
-      const row = await withTenantContext(
-        pool,
-        { userId: creditsInput.userId, organizationId: creditsInput.organizationId },
-        async (tenantDb) => {
-          const existing = await getOrganizationCreditBalance(tenantDb, { organizationId: creditsInput.organizationId });
-          return existing ?? (await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: creditsInput.organizationId }));
-        }
-      );
-      return row.balanceCredits >= minCredits;
+    ensureAvailable: async (_creditsInput: { organizationId: string; userId: string; minCredits: number }) => {
+      return true;
     },
-    charge: async (chargeInput: {
+    charge: async (_chargeInput: {
       organizationId: string;
       userId: string;
       workflowId: string;
@@ -1261,47 +1185,18 @@ export async function startWorkflowWorker(input?: {
       inputTokens: number;
       outputTokens: number;
     }) => {
-      const credits = Math.max(0, Math.floor(chargeInput.credits));
-      if (credits <= 0) {
-        return;
-      }
-
-      await withTenantContext(
-        pool,
-        { userId: chargeInput.userId, organizationId: chargeInput.organizationId },
-        async (tenantDb) => {
-          await ensureOrganizationCreditBalanceRow(tenantDb, { organizationId: chargeInput.organizationId });
-          await tryDebitOrganizationCredits(tenantDb, {
-            organizationId: chargeInput.organizationId,
-            credits,
-            reason: "llm_usage",
-            workflowRunId: chargeInput.runId,
-            createdByUserId: null,
-            metadata: {
-              provider: chargeInput.provider,
-              model: chargeInput.model,
-              nodeId: chargeInput.nodeId,
-              workflowId: chargeInput.workflowId,
-              runId: chargeInput.runId,
-              attemptCount: chargeInput.attemptCount,
-              turn: chargeInput.turn,
-              inputTokens: chargeInput.inputTokens,
-              outputTokens: chargeInput.outputTokens,
-            },
-          });
-        }
-      );
+      return;
     },
   };
 
-  const communityExecutors = getCommunityWorkflowNodeExecutors({
+  const executors = getCommunityWorkflowNodeExecutors({
     getGithubApiBaseUrl,
     loadConnectorSecretValue,
     loadToolsetById,
     managedCredits,
   });
 
-  const executorRegistry = buildExecutorRegistry({ communityExecutors, enterpriseExecutors });
+  const executorRegistry = buildExecutorRegistry({ executors });
 
   const runQueue = createWorkflowRunQueue({ queueName, connection });
   const continuationQueue = createContinuationQueue({ queueName: continuationQueueName, connection });

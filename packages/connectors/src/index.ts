@@ -1,6 +1,4 @@
-export type ConnectorId = "jira" | "github" | "slack" | "email" | (string & {});
-
-export type ConnectorSource = "community" | "enterprise";
+export type ConnectorId = "jira" | "github" | "slack" | "email" | "salesforce" | (string & {});
 
 export type ConnectorDefinition = {
   id: ConnectorId;
@@ -8,9 +6,7 @@ export type ConnectorDefinition = {
   requiresSecret: boolean;
 };
 
-export type ConnectorContract = ConnectorDefinition & {
-  source: ConnectorSource;
-};
+export type ConnectorContract = ConnectorDefinition;
 
 export * from "./actions.js";
 
@@ -19,23 +15,20 @@ export const defaultConnectors: ConnectorDefinition[] = [
   { id: "github", displayName: "GitHub", requiresSecret: true },
   { id: "slack", displayName: "Slack", requiresSecret: true },
   { id: "email", displayName: "Email", requiresSecret: false },
+  { id: "salesforce", displayName: "Salesforce", requiresSecret: true },
 ];
 
-export const communityConnectors: ConnectorContract[] = defaultConnectors.map((connector) => ({
-  ...connector,
-  source: "community",
-}));
+export const platformConnectors: ConnectorContract[] = [...defaultConnectors];
 
 export function createConnectorCatalog(input?: {
-  enterpriseConnectors?: ReadonlyArray<ConnectorDefinition | ConnectorContract>;
+  additionalConnectors?: ReadonlyArray<ConnectorDefinition | ConnectorContract>;
 }): ConnectorContract[] {
-  const merged: ConnectorContract[] = [...communityConnectors];
-  for (const connector of input?.enterpriseConnectors ?? []) {
+  const merged: ConnectorContract[] = [...platformConnectors];
+  for (const connector of input?.additionalConnectors ?? []) {
     merged.push({
       id: connector.id,
       displayName: connector.displayName,
       requiresSecret: connector.requiresSecret,
-      source: "enterprise",
     });
   }
 

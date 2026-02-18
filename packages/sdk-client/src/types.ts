@@ -18,19 +18,13 @@ export type VespidApiResponse<T> = {
 };
 
 export type MetaCapabilitiesResponse = {
-  edition: "community" | "enterprise";
   capabilities: string[];
-  provider: {
-    name: string;
-    version: string | null;
-  };
 };
 
 export type ConnectorCatalogItem = {
   id: string;
   displayName: string;
   requiresSecret: boolean;
-  source: "community" | "enterprise";
 };
 
 export type MetaConnectorsResponse = {

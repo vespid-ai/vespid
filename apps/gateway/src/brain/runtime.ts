@@ -15,7 +15,6 @@ import {
   commitExecutionWorkspaceVersion,
   withTenantContext,
 } from "@vespid/db";
-import { runAgentLoop } from "@vespid/agent-runtime";
 import {
   REMOTE_EXEC_ERROR,
   type GatewayExecutionKind,
@@ -27,14 +26,22 @@ import {
   type WorkflowContinuationJobPayload,
 } from "@vespid/shared";
 import { decryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
-import type { LlmInvokeInput, LlmInvokeResult } from "@vespid/agent-runtime";
 import { replyKey, sessionBrainKey, sessionEdgesKey, streamToBrain, streamToEdge } from "../bus/keys.js";
 import { safeJsonParse, safeJsonStringify } from "../bus/codec.js";
 import { ensureConsumerGroup, xaddJson, xreadGroupJson } from "../bus/streams.js";
 import type { EdgeToBrainRequest } from "../bus/types.js";
 import { createInMemoryResultsStore, createRedisResultsStore, type ResultsStore } from "../results-store.js";
 import { buildWorkspaceObjectKey, createWorkspaceS3Client, presignWorkspaceDownloadUrl, presignWorkspaceUploadUrl, readWorkspaceS3ConfigFromEnv } from "../workspaces/s3.js";
-import { getExecutorLastUsedMs, getInFlight, listExecutorRoutes, markExecutorUsed, reserveCapacity, releaseCapacity } from "./scheduler.js";
+import {
+  getExecutorLastUsedMs,
+  getInFlight,
+  isExecutorOauthVerified,
+  listExecutorRoutes,
+  markExecutorUsed,
+  reserveCapacity,
+  releaseCapacity,
+  type ExecutorOauthEngineId,
+} from "./scheduler.js";
 
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -91,16 +98,28 @@ type SelectedExecutor = {
 
 type SelectExecutorResult =
   | { ok: true; selected: SelectedExecutor }
-  | { ok: false; error: "NO_EXECUTOR_AVAILABLE" | "EXECUTOR_OVER_CAPACITY" | "ORG_QUOTA_EXCEEDED" };
+  | {
+      ok: false;
+      error: "NO_EXECUTOR_AVAILABLE" | "EXECUTOR_OVER_CAPACITY" | "ORG_QUOTA_EXCEEDED" | "EXECUTOR_OAUTH_NOT_VERIFIED";
+    };
+
+function requiresExecutorOAuth(engineId: string, hasInlineSecret: boolean): ExecutorOauthEngineId | null {
+  if (hasInlineSecret) return null;
+  if (engineId === "gateway.codex.v2" || engineId === "gateway.claude.v2") {
+    return engineId;
+  }
+  return null;
+}
 
 async function selectExecutorForTool(redis: Redis, input: {
   organizationId: string;
   kind: GatewayExecutionKind;
   selector?: ExecutorSelectorV1 | null;
+  oauthRequiredEngine?: ExecutorOauthEngineId | null;
   orgMaxInFlight: number;
   reserveTtlMs: number;
 }): Promise<SelectExecutorResult> {
-  const selectorPool = input.selector?.pool ?? "managed";
+  const selectorPool = input.selector?.pool ?? "byon";
   const selectorExecutorId = input.selector?.executorId ?? null;
   const selectorLabels = [
     ...(Array.isArray(input.selector?.labels) ? input.selector!.labels! : []),
@@ -136,6 +155,9 @@ async function selectExecutorForTool(redis: Redis, input: {
     if (!matchesSelector(match)) {
       return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
     }
+    if (input.oauthRequiredEngine && !isExecutorOauthVerified(match, input.oauthRequiredEngine)) {
+      return { ok: false, error: "EXECUTOR_OAUTH_NOT_VERIFIED" };
+    }
     const maxInFlight = match.maxInFlight ?? 10;
     const reserved = await reserveCapacity(redis, {
       executorId: match.executorId,
@@ -152,11 +174,17 @@ async function selectExecutorForTool(redis: Redis, input: {
   }
 
   const routes = await listExecutorRoutes(redis, listInput);
-  const candidates = routes
+  const baseCandidates = routes
     .filter((r) => (selectorPool === "byon" ? r.organizationId === input.organizationId : true))
     .filter((r) => (r.kinds ?? []).includes(input.kind))
     .filter((r) => matchesSelector(r));
 
+  const oauthEngine = input.oauthRequiredEngine ?? null;
+  const candidates = oauthEngine ? baseCandidates.filter((route) => isExecutorOauthVerified(route, oauthEngine)) : baseCandidates;
+
+  if (oauthEngine && baseCandidates.length > 0 && candidates.length === 0) {
+    return { ok: false, error: "EXECUTOR_OAUTH_NOT_VERIFIED" };
+  }
   if (candidates.length === 0) return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
 
   // Score by least loaded ratio; tie-break by least recently used.
@@ -203,23 +231,26 @@ function resolveSessionPoolOrder(selector: ExecutorSelectorV1 | null | undefined
   if (selector?.pool === "managed") {
     return ["managed"];
   }
-  return ["byon", "managed"];
+  return ["byon"];
 }
 
 async function selectSessionExecutor(redis: Redis, input: {
   organizationId: string;
   selector: ExecutorSelectorV1 | null | undefined;
+  oauthRequiredEngine?: ExecutorOauthEngineId | null;
   orgMaxInFlight: number;
   reserveTtlMs: number;
 }): Promise<SelectExecutorResult> {
   const poolOrder = resolveSessionPoolOrder(input.selector);
   let sawExecutorOverCapacity = false;
   let sawNoExecutor = false;
+  let sawExecutorOauthNotVerified = false;
 
   for (const pool of poolOrder) {
     const selection = await selectExecutorForTool(redis, {
       organizationId: input.organizationId,
       kind: "agent.run",
+      oauthRequiredEngine: input.oauthRequiredEngine ?? null,
       selector: {
         ...(input.selector ?? { pool }),
         pool,
@@ -236,6 +267,9 @@ async function selectSessionExecutor(redis: Redis, input: {
     if (selection.error === "EXECUTOR_OVER_CAPACITY") {
       sawExecutorOverCapacity = true;
     }
+    if (selection.error === "EXECUTOR_OAUTH_NOT_VERIFIED") {
+      sawExecutorOauthNotVerified = true;
+    }
     if (selection.error === "NO_EXECUTOR_AVAILABLE") {
       sawNoExecutor = true;
     }
@@ -243,6 +277,9 @@ async function selectSessionExecutor(redis: Redis, input: {
 
   if (sawExecutorOverCapacity) {
     return { ok: false, error: "EXECUTOR_OVER_CAPACITY" };
+  }
+  if (sawExecutorOauthNotVerified) {
+    return { ok: false, error: "EXECUTOR_OAUTH_NOT_VERIFIED" };
   }
   if (sawNoExecutor) {
     return { ok: false, error: "NO_EXECUTOR_AVAILABLE" };
@@ -299,6 +336,7 @@ export async function startGatewayBrainRuntime(input?: {
     (process.env.REDIS_URL ? createRedisResultsStore(process.env.REDIS_URL) : createInMemoryResultsStore());
 
   const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
+  const sessionOpenTimeoutMs = Math.max(5_000, envNumber("GATEWAY_SESSION_OPEN_TIMEOUT_MS", 20_000));
   const brainId = input?.brainId ?? process.env.GATEWAY_BRAIN_ID ?? `brain-${crypto.randomBytes(6).toString("hex")}`;
 
   const orgMaxInFlightDefault = Math.max(1, envNumber("GATEWAY_ORG_MAX_INFLIGHT", 50));
@@ -328,82 +366,6 @@ export async function startGatewayBrainRuntime(input?: {
     orgQuotaCache.set(organizationId, { value: resolved, expiresAtMs: now + orgQuotaCacheTtlMs });
     return resolved;
   }
-
-  const engineRunnerBaseUrlRaw = process.env.ENGINE_RUNNER_BASE_URL ?? "";
-  const engineRunnerBaseUrl = engineRunnerBaseUrlRaw.trim().length > 0 ? engineRunnerBaseUrlRaw.replace(/\/+$/, "") : null;
-  const engineRunnerTokenRaw = process.env.ENGINE_RUNNER_TOKEN ?? "";
-  const engineRunnerToken = engineRunnerTokenRaw.trim().length > 0 ? engineRunnerTokenRaw : null;
-  const engineRunnerTimeoutMs = Math.max(1000, envNumber("ENGINE_RUNNER_TIMEOUT_MS", 30_000));
-
-  const invokeViaEngineRunner = async (
-    invokeInput: Omit<LlmInvokeInput, "fetchImpl">
-  ): Promise<LlmInvokeResult> => {
-    if (!engineRunnerBaseUrl || !engineRunnerToken) {
-      return { ok: false, error: "ENGINE_UNAVAILABLE" };
-    }
-    const timeoutMs = Math.max(1000, Math.min(invokeInput.timeoutMs, engineRunnerTimeoutMs));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(`${engineRunnerBaseUrl}/internal/v1/llm/infer`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${engineRunnerToken}`,
-        },
-        body: JSON.stringify({
-          provider: invokeInput.provider,
-          model: invokeInput.model,
-          messages: invokeInput.messages,
-          auth: invokeInput.auth,
-          timeoutMs,
-          maxOutputChars: invokeInput.maxOutputChars,
-        }),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        return { ok: false, error: "ENGINE_UNAVAILABLE" };
-      }
-      const payload = (await response.json()) as unknown;
-      const parsed = z
-        .discriminatedUnion("ok", [
-          z.object({
-            ok: z.literal(true),
-            content: z.string(),
-            usage: z
-              .object({
-                inputTokens: z.number().int().nonnegative(),
-                outputTokens: z.number().int().nonnegative(),
-                totalTokens: z.number().int().nonnegative(),
-              })
-              .optional(),
-          }),
-          z.object({
-            ok: z.literal(false),
-            error: z.string().min(1),
-          }),
-        ])
-        .safeParse(payload);
-      if (!parsed.success) {
-        return { ok: false, error: "ENGINE_UNAVAILABLE" };
-      }
-      if (parsed.data.ok) {
-        return {
-          ok: true,
-          content: parsed.data.content,
-          ...(parsed.data.usage ? { usage: parsed.data.usage } : {}),
-        };
-      }
-      return { ok: false, error: parsed.data.error };
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return { ok: false, error: "ENGINE_UNAVAILABLE" };
-      }
-      return { ok: false, error: "ENGINE_UNAVAILABLE" };
-    } finally {
-      clearTimeout(timer);
-    }
-  };
 
   const s3Config = readWorkspaceS3ConfigFromEnv();
   const s3Client = s3Config ? createWorkspaceS3Client(s3Config) : null;
@@ -438,6 +400,7 @@ export async function startGatewayBrainRuntime(input?: {
     userId: string;
     selector?: ExecutorSelectorV1 | null;
     kind: GatewayToolKind;
+    oauthRequiredEngine?: ExecutorOauthEngineId | null;
     payload: unknown;
     secret?: string;
     timeoutMs: number;
@@ -448,7 +411,8 @@ export async function startGatewayBrainRuntime(input?: {
     const selected = await selectExecutorForTool(redis, {
       organizationId: inputTool.organizationId,
       kind: inputTool.kind,
-      selector: inputTool.selector ?? { pool: "managed" },
+      selector: inputTool.selector ?? { pool: "byon" },
+      oauthRequiredEngine: inputTool.oauthRequiredEngine ?? null,
       orgMaxInFlight,
       reserveTtlMs,
     });
@@ -458,6 +422,9 @@ export async function startGatewayBrainRuntime(input?: {
       }
       if (selected.error === "EXECUTOR_OVER_CAPACITY") {
         return { status: "failed", error: "EXECUTOR_OVER_CAPACITY" };
+      }
+      if (selected.error === "EXECUTOR_OAUTH_NOT_VERIFIED") {
+        return { status: "failed", error: REMOTE_EXEC_ERROR.ExecutorOAuthNotVerified };
       }
       return { status: "failed", error: "NO_EXECUTOR_AVAILABLE" };
     }
@@ -638,7 +605,7 @@ export async function startGatewayBrainRuntime(input?: {
       const tool = await invokeToolOnExecutor({
         organizationId: dispatch.organizationId,
         userId: dispatch.requestedByUserId,
-        selector: (dispatch.executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "managed" },
+        selector: (dispatch.executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "byon" },
         kind: dispatch.kind,
         payload: dispatch.payload,
         ...(typeof dispatch.secret === "string" ? { secret: dispatch.secret } : {}),
@@ -666,87 +633,73 @@ export async function startGatewayBrainRuntime(input?: {
           steps: z.unknown().optional(),
           organizationSettings: z.unknown().optional(),
           env: z.object({ githubApiBaseUrl: z.string().url() }),
+          secretRefs: z
+            .object({
+              engineSecretId: z.string().uuid().optional(),
+              connectorSecretIdsByConnectorId: z.record(z.string().min(1), z.string().uuid()).optional(),
+            })
+            .optional(),
         })
         .safeParse(payload);
       if (!parsed.success) {
         return { status: "failed", error: "INVALID_AGENT_RUN_PAYLOAD" };
       }
+      const secretRefs = parsed.data.secretRefs ?? {};
+      let resolvedEngineSecret: string | null = null;
+      const resolvedConnectorSecrets: Record<string, string> = {};
 
-      const nodeAny = parsed.data.node as any;
-      const cfg = nodeAny?.config as any;
-      const llmProvider = cfg?.llm?.provider ?? "openai";
-      const effectiveToolsAllow = Array.isArray(payload?.effectiveToolsAllow) ? (payload as any).effectiveToolsAllow : (cfg?.tools?.allow ?? []);
-
-      let runtime: unknown = {};
-      let pendingRemoteResult: unknown = null;
-      for (;;) {
-        const result = await runAgentLoop({
-          organizationId: dispatch.organizationId,
-          workflowId: parsed.data.workflowId,
-          runId: parsed.data.runId,
-          attemptCount: parsed.data.attemptCount,
-          requestedByUserId: dispatch.requestedByUserId,
-          nodeId: parsed.data.nodeId,
-          nodeType: "agent.run",
-          runInput: parsed.data.runInput,
-          steps: parsed.data.steps,
-          organizationSettings: parsed.data.organizationSettings,
-          runtime,
-          pendingRemoteResult,
-          githubApiBaseUrl: parsed.data.env.githubApiBaseUrl,
-          loadSecretValue: ({ organizationId, userId, secretId }) => loadSecretValueFromDb({ pool, organizationId, userId, secretId }),
-          fetchImpl: fetch,
-          llmInvoke: invokeViaEngineRunner,
-          config: {
-            llm: {
-              provider: llmProvider,
-              model: cfg?.llm?.model ?? "gpt-4.1-mini",
-              auth: cfg?.llm?.auth ?? { fallbackToEnv: true },
-            },
-            prompt: cfg?.prompt ?? { instructions: "" },
-            tools: {
-              allow: effectiveToolsAllow,
-              execution: cfg?.tools?.execution === "cloud" ? "cloud" : "executor",
-              ...(cfg?.tools?.authDefaults ? { authDefaults: cfg.tools.authDefaults } : {}),
-            },
-            limits: cfg?.limits ?? { maxTurns: 8, maxToolCalls: 20, timeoutMs: inputDispatch.timeoutMs, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
-            output: cfg?.output ?? { mode: "text" },
-          },
-          persistNodeId: parsed.data.nodeId,
-          allowRemoteBlocked: true,
-        });
-
-        if (result.status === "succeeded") {
-          return { status: "succeeded", output: result.output ?? null };
-        }
-        if (result.status === "failed") {
-          return { status: "failed", error: result.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed, ...(result.output !== undefined ? { output: result.output } : {}) };
-        }
-        if (result.status !== "blocked") {
-          return { status: "failed", error: "INVALID_AGENT_LOOP_RESULT" };
-        }
-
-        runtime = (result as any).runtime ?? runtime;
-        const block = (result as any).block;
-        const kind = block?.kind as GatewayToolKind;
-        if (kind !== "agent.execute" && kind !== "connector.action") {
-          return { status: "failed", error: "INVALID_BLOCK_KIND" };
-        }
-        const toolRes = await invokeToolOnExecutor({
+      if (secretRefs.engineSecretId) {
+        resolvedEngineSecret = await loadSecretValueFromDb({
+          pool,
           organizationId: dispatch.organizationId,
           userId: dispatch.requestedByUserId,
-          selector:
-            (block?.executorSelector as ExecutorSelectorV1 | null | undefined) ??
-            ((dispatch.executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "managed" }),
-          kind,
-          payload: block.payload,
-          ...(typeof block.secret === "string" ? { secret: block.secret } : {}),
-          timeoutMs: inputDispatch.timeoutMs,
-          networkMode: "none",
-          workspaceOwner: { ownerType: "workflow_run", ownerId: parsed.data.runId },
+          secretId: secretRefs.engineSecretId,
         });
-        pendingRemoteResult = { requestId: inputDispatch.requestId, result: toolRes };
       }
+      for (const [connectorId, secretId] of Object.entries(secretRefs.connectorSecretIdsByConnectorId ?? {})) {
+        resolvedConnectorSecrets[connectorId] = await loadSecretValueFromDb({
+          pool,
+          organizationId: dispatch.organizationId,
+          userId: dispatch.requestedByUserId,
+          secretId,
+        });
+      }
+
+      const runEngineParsed = z
+        .object({
+          config: z.object({
+            engine: z.object({
+              id: z.string().min(1),
+            }),
+          }),
+        })
+        .safeParse(parsed.data.node);
+      const runEngineId = runEngineParsed.success ? runEngineParsed.data.config.engine.id : "";
+      const resolvedEngineSecretValue = (resolvedEngineSecret ?? "").trim();
+      const oauthRequiredEngine = requiresExecutorOAuth(runEngineId, Boolean(secretRefs.engineSecretId));
+
+      const tool = await invokeToolOnExecutor({
+        organizationId: dispatch.organizationId,
+        userId: dispatch.requestedByUserId,
+        selector: (dispatch.executorSelector as ExecutorSelectorV1 | null | undefined) ?? { pool: "byon" },
+        kind: "agent.run",
+        oauthRequiredEngine,
+        payload: {
+          ...parsed.data,
+          resolvedSecrets: {
+            engine: resolvedEngineSecretValue.length > 0 ? resolvedEngineSecretValue : null,
+            connectors: resolvedConnectorSecrets,
+          },
+        },
+        timeoutMs: inputDispatch.timeoutMs,
+        networkMode: "none",
+        workspaceOwner: { ownerType: "workflow_run", ownerId: parsed.data.runId },
+      });
+      return {
+        status: tool.status,
+        ...(tool.output !== undefined ? { output: tool.output } : {}),
+        ...(tool.error ? { error: tool.error } : {}),
+      };
     }
 
     return { status: "failed", error: "UNSUPPORTED_KIND" };
@@ -818,6 +771,32 @@ export async function startGatewayBrainRuntime(input?: {
       const limits = typeof limitsRaw === "object" && limitsRaw && !Array.isArray(limitsRaw) ? (limitsRaw as any) : {};
       const timeoutMs = typeof limits.timeoutMs === "number" ? limits.timeoutMs : 60_000;
       const orgMaxInFlight = await getOrgMaxInFlight(msg.organizationId);
+      const sessionEngineId = typeof (session as any).engineId === "string" ? ((session as any).engineId as string) : "gateway.codex.v2";
+      if (sessionEngineId !== "gateway.codex.v2" && sessionEngineId !== "gateway.claude.v2" && sessionEngineId !== "gateway.opencode.v2") {
+        await failSession({
+          code: REMOTE_EXEC_ERROR.ExecutorUnsupportedEngine,
+          message: `UNSUPPORTED_SESSION_ENGINE:${sessionEngineId}`,
+        });
+        return;
+      }
+
+      const engineSecretId = typeof (session as any).llmSecretId === "string" ? ((session as any).llmSecretId as string) : null;
+      const engineSecretValue =
+        engineSecretId
+          ? (await loadSecretValueFromDb({
+              pool,
+              organizationId: msg.organizationId,
+              userId: msg.userId,
+              secretId: engineSecretId,
+            })).trim()
+          : "";
+      const oauthRequiredEngine = requiresExecutorOAuth(sessionEngineId, Boolean(engineSecretId));
+      const engineAuthMode: "env" | "inline_api_key" | "oauth_executor" =
+        engineSecretValue.length > 0
+          ? "inline_api_key"
+          : oauthRequiredEngine
+            ? "oauth_executor"
+            : "env";
 
       const existingPinnedExecutorId =
         typeof (session as any).pinnedExecutorId === "string" && (session as any).pinnedExecutorId.length > 0
@@ -835,6 +814,7 @@ export async function startGatewayBrainRuntime(input?: {
         const pinnedSelection = await selectExecutorForTool(redis, {
           organizationId: msg.organizationId,
           kind: "agent.run",
+          oauthRequiredEngine,
           selector: {
             pool: priorPinned.pool,
             executorId: priorPinned.executorId,
@@ -850,6 +830,12 @@ export async function startGatewayBrainRuntime(input?: {
             message: "Organization concurrent execution quota exceeded.",
           });
           return;
+        } else if (pinnedSelection.error === "EXECUTOR_OAUTH_NOT_VERIFIED") {
+          await failSession({
+            code: REMOTE_EXEC_ERROR.ExecutorOAuthNotVerified,
+            message: "Pinned executor is not OAuth-verified for this engine.",
+          });
+          return;
         }
       }
 
@@ -857,6 +843,7 @@ export async function startGatewayBrainRuntime(input?: {
         const selected = await selectSessionExecutor(redis, {
           organizationId: msg.organizationId,
           selector,
+          oauthRequiredEngine,
           orgMaxInFlight,
           reserveTtlMs,
         });
@@ -872,6 +859,13 @@ export async function startGatewayBrainRuntime(input?: {
             await failSession({
               code: "EXECUTOR_OVER_CAPACITY",
               message: "No available capacity on executor pool.",
+            });
+            return;
+          }
+          if (selected.error === "EXECUTOR_OAUTH_NOT_VERIFIED") {
+            await failSession({
+              code: REMOTE_EXEC_ERROR.ExecutorOAuthNotVerified,
+              message: "No OAuth-verified executor is currently available for this engine.",
             });
             return;
           }
@@ -897,15 +891,14 @@ export async function startGatewayBrainRuntime(input?: {
       );
       const shouldPersistPin = Boolean(
         (session as any).pinnedExecutorId !== executor.executorId ||
-          (session as any).pinnedExecutorPool !== executor.pool ||
-          session.pinnedAgentId !== executor.executorId
+          (session as any).pinnedExecutorPool !== executor.pool
       );
       if (shouldPersistPin) {
         const updated = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
           setAgentSessionPinnedAgent(db, {
             organizationId: msg.organizationId,
             sessionId: msg.sessionId,
-            pinnedAgentId: executor.executorId,
+            pinnedAgentId: null,
             pinnedExecutorId: executor.executorId,
             pinnedExecutorPool: executor.pool,
           })
@@ -918,7 +911,7 @@ export async function startGatewayBrainRuntime(input?: {
           sessionId: msg.sessionId,
           pinnedExecutorId: executor.executorId,
           pinnedExecutorPool: executor.pool,
-          pinnedAgentId: executor.executorId,
+          pinnedAgentId: null,
           routedAgentId: (session as any).routedAgentId ?? null,
           scope: (session as any).scope ?? "main",
           executionMode: "pinned-node-host",
@@ -971,77 +964,16 @@ export async function startGatewayBrainRuntime(input?: {
         });
         return;
       }
-      const sessionEngineId = typeof (session as any).engineId === "string" ? ((session as any).engineId as string) : "gateway.loop.v2";
-      if (sessionEngineId !== "gateway.loop.v2") {
+      if (selectedExecutor.pool !== "byon") {
         await failSession({
-          code: REMOTE_EXEC_ERROR.NodeExecutionFailed,
-          message: `UNSUPPORTED_SESSION_ENGINE:${sessionEngineId}`,
+          code: REMOTE_EXEC_ERROR.NoAgentAvailable,
+          message: "Sessions are BYON-only in this release.",
         });
         return;
       }
 
-      const providerRaw = typeof (session as any).llmProvider === "string" ? (session as any).llmProvider : "openai";
-      const llmProvider = providerRaw === "anthropic" || providerRaw === "gemini" || providerRaw === "vertex" ? providerRaw : "openai";
-      let llmAuthMode: "env" | "inline_api_key" | "inline_vertex_oauth" = "env";
-      let llmAuth:
-        | {
-            kind: "api_key";
-            apiKey: string;
-          }
-        | {
-            kind: "vertex_oauth";
-            refreshToken: string;
-            projectId: string;
-            location: string;
-          }
-        | undefined;
-
-      if (selectedExecutor.pool === "managed") {
-        const llmSecretId = typeof (session as any).llmSecretId === "string" ? ((session as any).llmSecretId as string) : null;
-        if (llmSecretId) {
-          const secretValue = (await loadSecretValueFromDb({
-            pool,
-            organizationId: msg.organizationId,
-            userId: msg.userId,
-            secretId: llmSecretId,
-          })).trim();
-          if (secretValue.length > 0) {
-            if (llmProvider === "vertex") {
-              try {
-                const parsed = JSON.parse(secretValue) as Record<string, unknown>;
-                if (
-                  typeof parsed.refreshToken === "string" &&
-                  typeof parsed.projectId === "string" &&
-                  typeof parsed.location === "string"
-                ) {
-                  llmAuthMode = "inline_vertex_oauth";
-                  llmAuth = {
-                    kind: "vertex_oauth",
-                    refreshToken: parsed.refreshToken,
-                    projectId: parsed.projectId,
-                    location: parsed.location,
-                  };
-                }
-              } catch {
-                // Keep env mode when secret shape is not vertex oauth payload.
-              }
-            } else {
-              llmAuthMode = "inline_api_key";
-              llmAuth = {
-                kind: "api_key",
-                apiKey: secretValue,
-              };
-            }
-          }
-        }
-      }
-
       const toolsAllowRaw = Array.isArray((session as any).toolsAllow) ? ((session as any).toolsAllow as string[]) : [];
-      const managedSafeTools = new Set(["memory.search", "memory.get", "memory_search", "memory_get"]);
-      const toolsAllow =
-        selectedExecutor.pool === "managed"
-          ? toolsAllowRaw.filter((toolId) => managedSafeTools.has(toolId))
-          : toolsAllowRaw;
+      const toolsAllow = toolsAllowRaw;
       const memoryProviderRaw = limits.memoryProvider;
       const memoryProvider = memoryProviderRaw === "qmd" ? "qmd" : "builtin";
       const sessionLimits = {
@@ -1065,12 +997,18 @@ export async function startGatewayBrainRuntime(input?: {
           routedAgentId,
           userId: msg.userId,
           sessionConfig: {
-            engineId: sessionEngineId,
-            llm: {
-              provider: llmProvider,
-              model: typeof (session as any).llmModel === "string" ? (session as any).llmModel : "gpt-4.1-mini",
-              authMode: selectedExecutor.pool === "managed" ? llmAuthMode : "env",
-              ...(selectedExecutor.pool === "managed" && llmAuth ? { auth: llmAuth } : {}),
+            engine: {
+              id: sessionEngineId as "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2",
+              ...(typeof (session as any).llmModel === "string" ? { model: (session as any).llmModel } : {}),
+              authMode: engineAuthMode,
+              ...(engineAuthMode === "inline_api_key"
+                ? {
+                    auth: {
+                      kind: "api_key" as const,
+                      apiKey: engineSecretValue,
+                    },
+                  }
+                : {}),
             },
             prompt: {
               ...(typeof (session as any).promptSystem === "string" ? { system: (session as any).promptSystem } : {}),
@@ -1086,7 +1024,11 @@ export async function startGatewayBrainRuntime(input?: {
         },
       });
 
-      const opened = await waitForJsonReply<{ status: "ok" | "failed"; error?: string }>(redis, openRequestId, Math.min(timeoutMs, 10_000));
+      const opened = await waitForJsonReply<{ status: "ok" | "failed"; error?: string }>(
+        redis,
+        openRequestId,
+        Math.min(timeoutMs, sessionOpenTimeoutMs)
+      );
       if (!opened || opened.status !== "ok") {
         await failSession({
           code: selectedExecutor.pool === "byon" ? REMOTE_EXEC_ERROR.PinnedAgentOffline : REMOTE_EXEC_ERROR.NoAgentAvailable,

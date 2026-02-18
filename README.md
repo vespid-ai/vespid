@@ -1,160 +1,74 @@
 # Vespid
 
-Vespid is a greenfield, international, multi-tenant SaaS automation platform.
+Vespid is an open-source, multi-tenant automation platform focused on code-agent execution.
 
-## Foundation Scope (Current)
-- Monorepo baseline (`apps/*`, `packages/*`, `tests`)
-- Auth + organization + RBAC baseline APIs (cookie + bearer sessions)
-- Real Google/GitHub OAuth authorization code flow
-- Drizzle schema + SQL migrations + strict PostgreSQL RLS baseline
-- Minimal Next.js bootstrap pages for auth/org setup/invitation accept
-- CI baseline for migration + RLS + API integration + web checks
-- Workflow Core v2 baseline (create/publish/enqueue-run/get-run for manual trigger)
-- Redis/BullMQ queue baseline (producer in API, consumer in worker, retry/backoff)
-- Worker async execution baseline (`queued -> running -> succeeded|failed`)
-- Workflow run/node execution events persisted in Postgres (`workflow_run_events`)
-- Encrypted connector secrets (org-scoped) for connector actions
-- Node-agent remote execution MVP (gateway + agent pairing + remote `agent.execute` and `connector.action`)
+## License
+This repository is fully open source under Apache-2.0.
+
+## What This Build Supports
+- Multi-tenant org isolation (API + DB + workflow runtime)
+- Workflow DSL v2 (`draft -> published`, run queue lifecycle)
+- BYON execution model for code-agent workloads
+- Three integrated code-agent engines only:
+  - `gateway.codex.v2`
+  - `gateway.claude.v2`
+  - `gateway.opencode.v2`
+- Tool bridge v1 for:
+  - `connector.action`
+  - `agent.execute`
+
+## What Was Removed
+- Legacy monetization API surface from runtime paths
+- Legacy proprietary-provider wiring from primary runtime paths
+- DCO-required contribution policy for code contributions
 
 ## Quick Start
-1. Install dependencies:
+1. Install dependencies
 ```bash
 pnpm install
 ```
-2. (Optional) set environment variables:
+
+2. (Optional) create local env file
 ```bash
 cp .env.example .env
 ```
-   - rollout tip: keep `ORG_CONTEXT_ENFORCEMENT=warn` briefly for header fallback observation, then switch to `strict`.
-   - logging: use `API_LOG_LEVEL` (default `info`) for structured rollout events.
-   - secrets: connector secrets require `SECRETS_KEK_BASE64` (32-byte base64) for API + worker.
-3. Run checks:
+
+3. Validate migrations and baseline checks
 ```bash
 pnpm migrate:check
+pnpm check:migrations
 pnpm lint
 pnpm test
 pnpm build
 ```
-4. Run full local stack (api + web + worker + gateway):
+
+4. Start local services
 ```bash
 pnpm dev
 ```
-5. Redis is required for workflow run enqueue/execution:
+
+5. Ensure Redis is available for workflow queue execution
 ```bash
 redis-server --port 6379
 ```
 
-## Rollout Runbook
-- Org context rollout and rollback guide: `/docs/runbooks/org-context-rollout.md`
-- Workflow queue cutover and rollback guide: `/docs/runbooks/workflow-queue-cutover.md`
-- Secrets KEK configuration and secret rotation guide: `/docs/runbooks/secrets-key-rotation.md`
-- Node-agent + gateway remote execution guide: `/docs/runbooks/node-agent-gateway-mvp.md`
-- Enterprise provider integration guide: `/docs/runbooks/enterprise-provider-integration.md`
-
-## Open Core Licensing
-Vespid uses an Open Core model.
-
-| Area | License | Distribution |
-|---|---|---|
-| Community Core (`apps/api`, `apps/web`, `apps/worker`, `apps/gateway`, `apps/node-agent`, `packages/db`, `packages/workflow`, `packages/shared`, `packages/connectors`) | AGPL-3.0-only | Public |
-| SDK/Client (`packages/sdk-*`) | Apache-2.0 | Public |
-| Enterprise modules (`packages/enterprise-*`, `apps/api-enterprise`, private enterprise repos) | Commercial Proprietary | Private |
-
-Governance and policy references:
-- `/docs/adr/0004-open-core-licensing-strategy.md`
-- `/docs/open-source/licensing-and-boundary-policy.md`
-- `/docs/open-source/cla-policy.md`
-- `/docs/open-source/trademark-policy.md`
-- `/docs/runbooks/community-release.md`
-- `/COMMERCIAL-LICENSE.md`
-
-## Community vs Enterprise
-| Capability | Community | Enterprise |
-|---|---|---|
-| Email + OAuth auth baseline | Yes | Yes |
-| Org and RBAC baseline | Yes | Yes |
-| Workflow DSL v2 + async run queue | Yes | Yes |
-| PostgreSQL RLS tenant isolation | Yes | Yes |
-| Enterprise SSO/SCIM and advanced RBAC | No | Yes |
-| Compliance export and enterprise policy packs | No | Yes |
-| Enterprise connector packs | No | Yes |
-
-## Community Release Artifacts
-- Public source mirror (`.oss-allowlist` controlled)
-- Community Docker images (API/Web/Worker)
-- Apache-licensed SDK packages (`@vespid/sdk-client`)
-
-## Public Mirror Policy
-`vespid-community` is a generated, read-only mirror of the private source-of-truth repository.
-Direct PR intake is not supported on the mirror because `main` is force-pushed by the mirror workflow.
-
-## Commercial Licensing
-For enterprise modules, commercial terms, and private deployment rights:
-- `COMMERCIAL-LICENSE.md`
-- Contact: `legal@vespid.example`
-
-## Enterprise Provider Package Integration
-To load private enterprise features in API runtime:
-
-1. Install private package access in `.npmrc`:
-```ini
-@vespid-ai:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${ENTERPRISE_NPM_TOKEN}
-```
-2. Install provider package:
+## Key Commands
 ```bash
-pnpm add -Dw @vespid-ai/enterprise-provider@latest
-```
-3. Configure runtime:
-```bash
-export VESPID_ENTERPRISE_PROVIDER_MODULE=@vespid-ai/enterprise-provider
-```
-
-Validation endpoints:
-- `GET /v1/meta/capabilities` should return `edition: enterprise`.
-- `GET /v1/meta/connectors` should include enterprise connectors (for bootstrap: `salesforce`).
-
-## Compliance Commands
-```bash
-pnpm check:boundary
-pnpm check:licenses
-pnpm check:mirror
-pnpm check:secrets
+pnpm build
+pnpm test
+pnpm lint
+pnpm dev
+pnpm migrate:check
+pnpm migrate
+pnpm db:rollback
+pnpm check:migrations
 pnpm sbom:generate
 ```
 
-## Workflow Core APIs (Phase 2 Baseline)
-- `POST /v1/orgs/:orgId/workflows`
-- `GET /v1/orgs/:orgId/workflows/:workflowId`
-- `POST /v1/orgs/:orgId/workflows/:workflowId/publish`
-- `POST /v1/orgs/:orgId/workflows/:workflowId/runs` (returns `queued`; returns `503/QUEUE_UNAVAILABLE` if queue is down)
-- `GET /v1/orgs/:orgId/workflows/:workflowId/runs`
-- `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId`
-- `GET /v1/orgs/:orgId/workflows/:workflowId/runs/:runId/events`
-
-## Node-Agent Remote Execution (MVP)
-Remote execution is optional per node via `execution.mode="node"` for:
-- `connector.action`
-- `agent.execute`
-
-Pairing flow:
-1. Create a pairing token (owner/admin):
-   - Web: `/agents`
-   - API: `POST /v1/orgs/:orgId/agents/pairing-tokens` (with `X-Org-Id`)
-2. Pair and start a local agent:
-```bash
-pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001
-```
-
-Tag targeting notes:
-- Control-plane tags are authoritative for routing.
-  - Set them via Web: `/agents` (recommended), or API: `PUT /v1/orgs/:orgId/agents/:agentId/tags`.
-- Agent-reported tags (from the WS `hello.capabilities.tags` field) are shown as `reportedTags` only and are not used for routing.
-- In workflow DSL, use:
-  - `execution.selector.tag = "<tag>"`
-  - `execution.selector.group = "<name>"` (matches agents tagged `group:<name>`)
-
-## Summary (English Only)
-- Open Core licensing: community core is AGPL, SDK is Apache-2.0, enterprise modules are under a commercial license.
-- The private repository is the source of truth; the public community mirror is generated from an allowlist.
-- CI gates enforce boundary rules, license consistency, mirror dry-run checks, and secrets scanning.
+## Governance and Security
+- Contribution guide: `CONTRIBUTING.md`
+- Security policy: `SECURITY.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Governance model: `GOVERNANCE.md`
+- Maintainers: `MAINTAINERS.md`
+- Support channels: `SUPPORT.md`
