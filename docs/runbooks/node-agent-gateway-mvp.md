@@ -46,7 +46,7 @@ Worker:
    - Web: `/agents`
    - API: `POST /v1/orgs/:orgId/agents/pairing-tokens` (requires `Authorization` and `X-Org-Id`)
 2. Preferred UI-first path (recommended):
-   - Open `/agents`, choose platform, copy the generated download + connect commands.
+   - Open `/agents`, copy the generated npm connect/start commands.
    - The connect command is auto-filled with the newly created pairing token.
 3. Pair and start the agent with dev fallback command:
 ```bash
@@ -58,29 +58,10 @@ Optional: report tags for observability (capability hints only):
 pnpm --filter @vespid/node-agent dev -- connect --pairing-token <token> --api-base http://localhost:3001 --tags "east,group:alpha"
 ```
 
-Standalone binary examples (when release assets are available):
-
-macOS (arm64):
+npm command examples:
 ```bash
-curl -fsSL "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-darwin-arm64.tar.gz" -o "vespid-agent-darwin-arm64.tar.gz"
-tar -xzf "vespid-agent-darwin-arm64.tar.gz"
-chmod +x ./vespid-agent
-./vespid-agent connect --pairing-token "<token>" --api-base "http://localhost:3001"
-```
-
-Linux (x64):
-```bash
-curl -fsSL "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-linux-x64.tar.gz" -o "vespid-agent-linux-x64.tar.gz"
-tar -xzf "vespid-agent-linux-x64.tar.gz"
-chmod +x ./vespid-agent
-./vespid-agent connect --pairing-token "<token>" --api-base "http://localhost:3001"
-```
-
-Windows (x64, PowerShell):
-```powershell
-Invoke-WebRequest -Uri "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-windows-x64.zip" -OutFile "vespid-agent-windows-x64.zip"
-Expand-Archive -Path "vespid-agent-windows-x64.zip" -DestinationPath . -Force
-.\\vespid-agent.exe connect --pairing-token "<token>" --api-base "http://localhost:3001"
+npx -y @vespid/node-agent@latest connect --pairing-token "<token>" --api-base "http://127.0.0.1:3001"
+npx -y @vespid/node-agent@latest start
 ```
 
 Notes:

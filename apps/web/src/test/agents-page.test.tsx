@@ -14,37 +14,15 @@ const mocks = vi.hoisted(() => ({
   },
   installerMode: "ready" as "ready" | "error" | "loading",
   installerData: {
-    provider: "github-releases" as const,
-    repository: "vespid-ai/vespid",
-    channel: "latest",
+    provider: "npm-registry" as const,
+    packageName: "@vespid/node-agent",
+    distTag: "latest",
+    registryUrl: "https://registry.npmjs.org",
     docsUrl: "https://docs.vespid.ai/agent",
-    checksumsUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-checksums.txt",
-    artifacts: [
-      {
-        platformId: "darwin-arm64" as const,
-        os: "darwin" as const,
-        arch: "arm64" as const,
-        fileName: "vespid-agent-darwin-arm64.tar.gz",
-        archiveType: "tar.gz" as const,
-        downloadUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-darwin-arm64.tar.gz",
-      },
-      {
-        platformId: "linux-x64" as const,
-        os: "linux" as const,
-        arch: "x64" as const,
-        fileName: "vespid-agent-linux-x64.tar.gz",
-        archiveType: "tar.gz" as const,
-        downloadUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-linux-x64.tar.gz",
-      },
-      {
-        platformId: "windows-x64" as const,
-        os: "windows" as const,
-        arch: "x64" as const,
-        fileName: "vespid-agent-windows-x64.zip",
-        archiveType: "zip" as const,
-        downloadUrl: "https://github.com/vespid-ai/vespid/releases/latest/download/vespid-agent-windows-x64.zip",
-      },
-    ],
+    commands: {
+      connect: 'npx -y @vespid/node-agent@latest connect --pairing-token "<pairing-token>" --api-base "<api-base>"',
+      start: "npx -y @vespid/node-agent@latest start",
+    },
   },
 }));
 
@@ -117,7 +95,7 @@ describe("Agents page installer experience", () => {
     };
   });
 
-  it("shows installer panel and platform tabs", async () => {
+  it("shows installer panel with npm command guidance", async () => {
     const messages = readMessages("en");
     render(
       <NextIntlClientProvider locale="en" messages={messages}>
@@ -126,9 +104,7 @@ describe("Agents page installer experience", () => {
     );
 
     expect(screen.getByText(messages.agents.installer.title)).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: messages.agents.installer.platforms.darwinArm64 })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: messages.agents.installer.platforms.linuxX64 })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: messages.agents.installer.platforms.windowsX64 })).toBeInTheDocument();
+    expect(screen.getByText("@vespid/node-agent@latest")).toBeInTheDocument();
   });
 
   it("builds connect command with the created pairing token", async () => {
@@ -144,7 +120,7 @@ describe("Agents page installer experience", () => {
     await user.click(createButtons[0]!);
 
     await waitFor(() => {
-      expect(screen.getByText(/\.\/vespid-agent connect --pairing-token \"test-pairing-token\"/)).toBeInTheDocument();
+      expect(screen.getByText(/npx -y @vespid\/node-agent@latest connect --pairing-token \"test-pairing-token\"/)).toBeInTheDocument();
     });
   });
 
@@ -159,7 +135,7 @@ describe("Agents page installer experience", () => {
 
     expect(screen.getByText(messages.agents.installer.fallbackTitle)).toBeInTheDocument();
     expect(screen.getByText(messages.agents.installer.fallbackDescription)).toBeInTheDocument();
-    expect(screen.queryByText(messages.agents.installer.downloadCommand)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.connectCommand)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.sourceConnectCommand)).not.toBeInTheDocument();
   });
 
@@ -185,7 +161,7 @@ describe("Agents page installer experience", () => {
     expect(screen.getByText(messages.agents.installer.tokenExpired)).toBeInTheDocument();
   });
 
-  it("shows only three user-facing command blocks", () => {
+  it("shows only connect and restart command blocks", () => {
     const messages = readMessages("en");
     render(
       <NextIntlClientProvider locale="en" messages={messages}>
@@ -193,9 +169,9 @@ describe("Agents page installer experience", () => {
       </NextIntlClientProvider>
     );
 
-    expect(screen.getByText(messages.agents.installer.downloadCommand)).toBeInTheDocument();
     expect(screen.getByText(messages.agents.installer.connectCommand)).toBeInTheDocument();
     expect(screen.getByText("Restart command")).toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.downloadCommand)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.sourceConnectCommand)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.sourceStartCommand)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.binaryArgsConnect)).not.toBeInTheDocument();

@@ -102,18 +102,11 @@ type RefreshTokenPayload = {
   expiresAt: number;
 };
 
-type AgentInstallerArtifact = {
-  platformId: "darwin-arm64" | "linux-x64" | "windows-x64";
-  os: "darwin" | "linux" | "windows";
-  arch: "arm64" | "x64";
-  fileName: string;
-  archiveType: "tar.gz" | "zip";
-};
-
 type AgentInstallerConfig = {
   enabled: boolean;
-  repository: string;
-  channel: string;
+  npmPackage: string;
+  npmDistTag: string;
+  npmRegistryUrl: string;
   docsUrl: string | null;
 };
 
@@ -144,31 +137,9 @@ const INTERNAL_API_SERVICE_TOKEN =
 const GATEWAY_HTTP_URL = process.env.GATEWAY_HTTP_URL ?? "http://localhost:3002";
 const GATEWAY_INTERNAL_SERVICE_TOKEN =
   process.env.GATEWAY_SERVICE_TOKEN ?? process.env.INTERNAL_API_SERVICE_TOKEN ?? process.env.API_SERVICE_TOKEN ?? "dev-gateway-token";
-const DEFAULT_AGENT_INSTALLER_REPOSITORY = "vespid-ai/vespid";
-const DEFAULT_AGENT_INSTALLER_CHANNEL = "latest";
-const AGENT_INSTALLER_ARTIFACTS: AgentInstallerArtifact[] = [
-  {
-    platformId: "darwin-arm64",
-    os: "darwin",
-    arch: "arm64",
-    fileName: "vespid-agent-darwin-arm64.tar.gz",
-    archiveType: "tar.gz",
-  },
-  {
-    platformId: "linux-x64",
-    os: "linux",
-    arch: "x64",
-    fileName: "vespid-agent-linux-x64.tar.gz",
-    archiveType: "tar.gz",
-  },
-  {
-    platformId: "windows-x64",
-    os: "windows",
-    arch: "x64",
-    fileName: "vespid-agent-windows-x64.zip",
-    archiveType: "zip",
-  },
-];
+const DEFAULT_AGENT_INSTALLER_NPM_PACKAGE = "@vespid/node-agent";
+const DEFAULT_AGENT_INSTALLER_NPM_DIST_TAG = "latest";
+const DEFAULT_AGENT_INSTALLER_NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
 const DEFAULT_LLM_OAUTH_VERIFY_URLS: Partial<Record<LlmProviderId, string>> = {
   "openai-codex": "https://chatgpt.com",
@@ -998,17 +969,27 @@ function isOrgSlugConflictError(error: unknown): boolean {
   );
 }
 
-function normalizeAgentInstallerRepository(value: string | null | undefined): string {
+function normalizeAgentInstallerNpmPackage(value: string | null | undefined): string {
   const raw = (value ?? "").trim();
-  if (!raw) {
-    return DEFAULT_AGENT_INSTALLER_REPOSITORY;
-  }
-  return raw.replace(/^https?:\/\/github\.com\//i, "").replace(/\/+$/, "");
+  return raw.length > 0 ? raw : DEFAULT_AGENT_INSTALLER_NPM_PACKAGE;
 }
 
-function normalizeAgentInstallerChannel(value: string | null | undefined): string {
+function normalizeAgentInstallerNpmDistTag(value: string | null | undefined): string {
   const raw = (value ?? "").trim();
-  return raw.length > 0 ? raw : DEFAULT_AGENT_INSTALLER_CHANNEL;
+  return raw.length > 0 ? raw : DEFAULT_AGENT_INSTALLER_NPM_DIST_TAG;
+}
+
+function normalizeAgentInstallerNpmRegistryUrl(value: string | null | undefined): string {
+  const raw = (value ?? "").trim();
+  if (!raw) {
+    return DEFAULT_AGENT_INSTALLER_NPM_REGISTRY_URL;
+  }
+  try {
+    const parsed = new URL(raw);
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return DEFAULT_AGENT_INSTALLER_NPM_REGISTRY_URL;
+  }
 }
 
 function normalizeAgentInstallerDocsUrl(value: string | null | undefined): string | null {
@@ -1031,11 +1012,14 @@ function parseAgentInstallerEnabled(value: string | null | undefined): boolean {
   return !["0", "false", "off", "no"].includes(raw);
 }
 
-function buildAgentInstallerReleaseBase(repository: string, channel: string): string {
-  if (channel === "latest") {
-    return `https://github.com/${repository}/releases/latest/download`;
-  }
-  return `https://github.com/${repository}/releases/download/${encodeURIComponent(channel)}`;
+function buildNodeAgentConnectCommand(input: { npmPackage: string; npmDistTag: string; apiBase: string }): string {
+  const packageRef = `${input.npmPackage}@${input.npmDistTag}`;
+  return `npx -y ${packageRef} connect --pairing-token "<pairing-token>" --api-base "${input.apiBase}"`;
+}
+
+function buildNodeAgentStartCommand(input: { npmPackage: string; npmDistTag: string }): string {
+  const packageRef = `${input.npmPackage}@${input.npmDistTag}`;
+  return `npx -y ${packageRef} start`;
 }
 
 function base64UrlEncode(input: string): string {
@@ -1377,8 +1361,11 @@ export async function buildServer(input?: {
   const agentInstallerEnabled = input?.agentInstaller?.enabled ?? parseAgentInstallerEnabled(process.env.AGENT_INSTALLER_ENABLED);
   const agentInstallerConfig: AgentInstallerConfig = {
     enabled: agentInstallerEnabled,
-    repository: normalizeAgentInstallerRepository(input?.agentInstaller?.repository ?? process.env.AGENT_INSTALLER_REPOSITORY),
-    channel: normalizeAgentInstallerChannel(input?.agentInstaller?.channel ?? process.env.AGENT_INSTALLER_CHANNEL),
+    npmPackage: normalizeAgentInstallerNpmPackage(input?.agentInstaller?.npmPackage ?? process.env.AGENT_INSTALLER_NPM_PACKAGE),
+    npmDistTag: normalizeAgentInstallerNpmDistTag(input?.agentInstaller?.npmDistTag ?? process.env.AGENT_INSTALLER_NPM_DIST_TAG),
+    npmRegistryUrl: normalizeAgentInstallerNpmRegistryUrl(
+      input?.agentInstaller?.npmRegistryUrl ?? process.env.AGENT_INSTALLER_NPM_REGISTRY_URL
+    ),
     docsUrl: normalizeAgentInstallerDocsUrl(input?.agentInstaller?.docsUrl ?? process.env.AGENT_INSTALLER_DOCS_URL),
   };
   const capabilitiesCatalog = listPlatformCapabilities();
@@ -2034,25 +2021,26 @@ export async function buildServer(input?: {
   });
 
   server.get("/v1/meta/agent-installer", async () => {
-    const channel = agentInstallerEnabled ? agentInstallerConfig.channel : DEFAULT_AGENT_INSTALLER_CHANNEL;
-    const repository = agentInstallerEnabled ? agentInstallerConfig.repository : DEFAULT_AGENT_INSTALLER_REPOSITORY;
+    const npmPackage = agentInstallerEnabled ? agentInstallerConfig.npmPackage : DEFAULT_AGENT_INSTALLER_NPM_PACKAGE;
+    const npmDistTag = agentInstallerEnabled ? agentInstallerConfig.npmDistTag : DEFAULT_AGENT_INSTALLER_NPM_DIST_TAG;
+    const npmRegistryUrl = agentInstallerEnabled
+      ? agentInstallerConfig.npmRegistryUrl
+      : DEFAULT_AGENT_INSTALLER_NPM_REGISTRY_URL;
     const docsUrl = agentInstallerEnabled ? agentInstallerConfig.docsUrl : null;
-
-    const releaseBase = buildAgentInstallerReleaseBase(repository, channel);
     return {
-      provider: "github-releases" as const,
-      repository,
-      channel,
+      provider: "npm-registry" as const,
+      packageName: npmPackage,
+      distTag: npmDistTag,
+      registryUrl: npmRegistryUrl,
       docsUrl,
-      artifacts: AGENT_INSTALLER_ARTIFACTS.map((artifact) => ({
-        platformId: artifact.platformId,
-        os: artifact.os,
-        arch: artifact.arch,
-        fileName: artifact.fileName,
-        archiveType: artifact.archiveType,
-        downloadUrl: `${releaseBase}/${artifact.fileName}`,
-      })),
-      checksumsUrl: `${releaseBase}/vespid-agent-checksums.txt`,
+      commands: {
+        connect: buildNodeAgentConnectCommand({
+          npmPackage,
+          npmDistTag,
+          apiBase: "http://127.0.0.1:3001",
+        }),
+        start: buildNodeAgentStartCommand({ npmPackage, npmDistTag }),
+      },
     };
   });
 

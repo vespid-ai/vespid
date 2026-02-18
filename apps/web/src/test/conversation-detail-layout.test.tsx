@@ -80,16 +80,15 @@ vi.mock("../lib/hooks/use-me", () => ({
 vi.mock("../lib/hooks/use-agents", () => ({
   useAgentInstaller: () => ({
     data: {
-      artifacts: [
-        {
-          platformId: "darwin-arm64",
-          os: "darwin",
-          arch: "arm64",
-          fileName: "vespid-agent.tar.gz",
-          archiveType: "tar.gz",
-          downloadUrl: "https://example.com/vespid-agent.tar.gz",
-        },
-      ],
+      provider: "npm-registry",
+      packageName: "@vespid/node-agent",
+      distTag: "latest",
+      registryUrl: "https://registry.npmjs.org",
+      docsUrl: "https://docs.vespid.ai/agent",
+      commands: {
+        connect: 'npx -y @vespid/node-agent@latest connect --pairing-token "<pairing-token>" --api-base "<api-base>"',
+        start: "npx -y @vespid/node-agent@latest start",
+      },
     },
     isLoading: false,
   }),

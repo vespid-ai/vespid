@@ -104,8 +104,8 @@
       "tokenLabel": "Pairing token",
       "creatingToken": "Creating pairing token...",
       "tokenUnavailable": "No pairing token yet. Create one to continue.",
-      "downloadCommand": "1) Download and unpack worker-node installer",
-      "connectCommand": "2) Connect this machine to the organization",
+      "downloadCommand": "1) Run npm connect command",
+      "connectCommand": "2) Run npm start command",
       "regenerateToken": "Create / rotate token",
       "checkStatus": "I have connected it, check again",
       "openAgents": "Open Worker Nodes page",
@@ -212,7 +212,16 @@
           "officialMethods": "Official methods",
           "supportedNow": "Supported in Vespid now",
           "recommendedPath": "Recommended path"
-        }
+        },
+        "mobileOfficial": "Official",
+        "mobileSupported": "Supported now",
+        "mobileRecommended": "Recommended"
+      },
+      "overview": {
+        "connectedEngines": "Connected engines",
+        "onlineExecutors": "Online executors",
+        "oauthReadyEngines": "OAuth-ready engines",
+        "opencodeHosts": "OpenCode hosts online"
       },
       "tabs": {
         "apiKey": "API Key",
@@ -679,29 +688,23 @@
     },
     "installer": {
       "title": "Connector program",
-      "subtitle": "Download the standalone worker-node binary for your platform, then connect this machine.",
-      "platforms": {
-        "darwinArm64": "macOS (Apple Silicon)",
-        "linuxX64": "Linux (x64)",
-        "windowsX64": "Windows (x64)"
-      },
-      "channel": "Release channel: {channel}",
-      "checksums": "Checksums",
+      "subtitle": "Use npm to run the worker-node CLI and connect this machine.",
       "docs": "Setup guide",
-      "downloadCommand": "Download and unpack",
+      "downloadCommand": "npm connect command",
       "connectCommand": "Connect to Vespid",
-      "downloadButton": "Download installer",
+      "startCommand": "Restart command",
       "sourceConnectCommand": "Connect from source (no binary required)",
       "sourceStartCommand": "Restart from source",
       "binaryArgsConnect": "Binary connect arguments",
       "binaryArgsStart": "Binary start arguments",
       "fallbackTitle": "Installer temporarily unavailable",
       "fallbackDescription": "Installer metadata is unavailable right now. Please retry shortly or open the setup guide.",
-      "fallbackUsingDefaults": "Installer metadata is unavailable. Using default release links and commands.",
+      "fallbackUsingDefaults": "Installer metadata is unavailable. Using default npm commands.",
       "tokenMissing": "Create a pairing token to get a copy-ready connect command.",
       "tokenExpired": "The pairing token has expired. Create a new token before connecting.",
-      "copyDownload": "Copy download command",
+      "copyDownload": "Copy npm connect command",
       "copyConnect": "Copy connect command",
+      "copyStart": "Copy restart command",
       "copyFallback": "Copy fallback command",
       "copySourceConnect": "Copy source connect command",
       "copySourceStart": "Copy source start command"

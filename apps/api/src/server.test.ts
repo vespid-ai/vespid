@@ -251,18 +251,21 @@ describe("api hardening foundation", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as {
       provider: string;
-      repository: string;
-      channel: string;
+      packageName: string;
+      distTag: string;
+      registryUrl: string;
       docsUrl: string | null;
-      checksumsUrl: string;
-      artifacts: Array<{ platformId: string; fileName: string; downloadUrl: string; archiveType: string }>;
+      commands: { connect: string; start: string };
     };
-    expect(body.provider).toBe("github-releases");
-    expect(body.repository).toBe("vespid-ai/vespid");
-    expect(body.channel).toBe("latest");
+    expect(body.provider).toBe("npm-registry");
+    expect(body.packageName).toBe("@vespid/node-agent");
+    expect(body.distTag).toBe("latest");
+    expect(body.registryUrl).toBe("https://registry.npmjs.org");
     expect(body.docsUrl).toBeNull();
-    expect(body.artifacts.map((artifact) => artifact.platformId)).toEqual(["darwin-arm64", "linux-x64", "windows-x64"]);
-    expect(body.checksumsUrl).toContain("/releases/latest/download/vespid-agent-checksums.txt");
+    expect(body.commands.connect).toContain('npx -y @vespid/node-agent@latest connect');
+    expect(body.commands.connect).toContain('--pairing-token "<pairing-token>"');
+    expect(body.commands.connect).toContain('--api-base "http://127.0.0.1:3001"');
+    expect(body.commands.start).toBe("npx -y @vespid/node-agent@latest start");
     await disabledServer.close();
   });
 
@@ -273,8 +276,9 @@ describe("api hardening foundation", () => {
       queueProducer: createFakeQueueProducer(),
       agentInstaller: {
         enabled: true,
-        repository: "vespid-ai/vespid",
-        channel: "v0.4.0",
+        npmPackage: "@vespid/node-agent",
+        npmDistTag: "v0.4.0",
+        npmRegistryUrl: "https://registry.npmjs.org",
         docsUrl: "https://docs.vespid.ai/agent",
       },
     });
@@ -287,27 +291,21 @@ describe("api hardening foundation", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as {
       provider: string;
-      repository: string;
-      channel: string;
+      packageName: string;
+      distTag: string;
+      registryUrl: string;
       docsUrl: string | null;
-      checksumsUrl: string;
-      artifacts: Array<{ platformId: string; fileName: string; downloadUrl: string; archiveType: string }>;
+      commands: { connect: string; start: string };
     };
-    expect(body.provider).toBe("github-releases");
-    expect(body.repository).toBe("vespid-ai/vespid");
-    expect(body.channel).toBe("v0.4.0");
+    expect(body.provider).toBe("npm-registry");
+    expect(body.packageName).toBe("@vespid/node-agent");
+    expect(body.distTag).toBe("v0.4.0");
+    expect(body.registryUrl).toBe("https://registry.npmjs.org");
     expect(body.docsUrl).toBe("https://docs.vespid.ai/agent");
-    expect(body.artifacts.map((artifact) => artifact.platformId)).toEqual(["darwin-arm64", "linux-x64", "windows-x64"]);
-    expect(body.artifacts.map((artifact) => artifact.fileName)).toEqual([
-      "vespid-agent-darwin-arm64.tar.gz",
-      "vespid-agent-linux-x64.tar.gz",
-      "vespid-agent-windows-x64.zip",
-    ]);
-    for (const artifact of body.artifacts) {
-      expect(artifact.downloadUrl).toContain(`/releases/download/v0.4.0/${artifact.fileName}`);
-      expect(["tar.gz", "zip"]).toContain(artifact.archiveType);
-    }
-    expect(body.checksumsUrl).toContain("/releases/download/v0.4.0/vespid-agent-checksums.txt");
+    expect(body.commands.connect).toBe(
+      'npx -y @vespid/node-agent@v0.4.0 connect --pairing-token "<pairing-token>" --api-base "http://127.0.0.1:3001"'
+    );
+    expect(body.commands.start).toBe("npx -y @vespid/node-agent@v0.4.0 start");
     await enabledServer.close();
   });
 

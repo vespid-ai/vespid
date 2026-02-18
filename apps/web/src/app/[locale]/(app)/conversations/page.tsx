@@ -17,7 +17,7 @@ import { useMe } from "../../../../lib/hooks/use-me";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions } from "../../../../lib/hooks/use-sessions";
-import { useAgentInstaller, useCreatePairingToken, type AgentInstallerArtifact } from "../../../../lib/hooks/use-agents";
+import { useAgentInstaller, useCreatePairingToken } from "../../../../lib/hooks/use-agents";
 import { useEngineAuthStatus } from "../../../../lib/hooks/use-engine-auth-status";
 import { type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { providersForContext } from "../../../../components/app/llm/model-catalog";
@@ -30,7 +30,6 @@ import { CommandBlock } from "../../../../components/ui/command-block";
 
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
-type PlatformId = "darwin-arm64" | "linux-x64" | "windows-x64";
 
 function formatSessionTime(value: string | null | undefined): string {
   if (!value) {
@@ -48,25 +47,6 @@ function formatSessionTime(value: string | null | undefined): string {
   });
 }
 
-function detectPreferredPlatform(): PlatformId {
-  if (typeof navigator === "undefined") {
-    return "darwin-arm64";
-  }
-  const ua = navigator.userAgent.toLowerCase();
-  const platform = navigator.platform.toLowerCase();
-  if (platform.includes("mac") || ua.includes("mac")) {
-    return "darwin-arm64";
-  }
-  if (platform.includes("win") || ua.includes("windows")) {
-    return "windows-x64";
-  }
-  return "linux-x64";
-}
-
-function shellQuote(value: string): string {
-  return JSON.stringify(value);
-}
-
 function normalizeNodeAgentApiBase(value: string): string {
   try {
     const url = new URL(value);
@@ -80,21 +60,10 @@ function normalizeNodeAgentApiBase(value: string): string {
   }
 }
 
-function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
-  if (artifact.platformId === "windows-x64") {
-    return `powershell -NoProfile -Command "Invoke-WebRequest -Uri '${artifact.downloadUrl}' -OutFile '${artifact.fileName}'; Expand-Archive -Path '${artifact.fileName}' -DestinationPath . -Force"`;
-  }
-  return [
-    `curl -fsSL ${shellQuote(artifact.downloadUrl)} -o ${shellQuote(artifact.fileName)}`,
-    `tar -xzf ${shellQuote(artifact.fileName)}`,
-    "chmod +x ./vespid-agent",
-  ].join("\n");
-}
-
-function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
-  const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
-  const apiBase = normalizeNodeAgentApiBase(input.apiBase);
-  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(apiBase)}`;
+function buildConnectCommand(input: { template: string; pairingToken: string; apiBase: string }): string {
+  return input.template
+    .replaceAll("<pairing-token>", input.pairingToken)
+    .replaceAll("<api-base>", normalizeNodeAgentApiBase(input.apiBase));
 }
 
 export default function ConversationsPage() {
@@ -139,7 +108,6 @@ export default function ConversationsPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
-  const [platformId, setPlatformId] = useState<PlatformId>(() => detectPreferredPlatform());
 
   const [llm, setLlm] = useState<LlmConfigValue>({ providerId: "openai", modelId: "gpt-5-codex", secretId: null });
   const llmInitRef = useRef(false);
@@ -168,26 +136,17 @@ export default function ConversationsPage() {
     return Array.from(new Set([...base, ...extras]));
   }, [allowShellRun, allowConnectorAction, extraToolsRaw]);
 
-  const installerArtifacts = installerQuery.data?.artifacts ?? [];
-  const installerByPlatform = useMemo(() => {
-    const map = new Map<PlatformId, AgentInstallerArtifact>();
-    for (const artifact of installerArtifacts) {
-      map.set(artifact.platformId, artifact);
-    }
-    return map;
-  }, [installerArtifacts]);
-
   const pairingExpiresMs = pairingExpiresAt ? Date.parse(pairingExpiresAt) : NaN;
   const pairingTokenExpired =
     Boolean(pairingToken) && Number.isFinite(pairingExpiresMs) && pairingExpiresMs <= Date.now();
   const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
   const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
 
-  const activeInstallerArtifact = installerByPlatform.get(platformId) ?? installerArtifacts[0] ?? null;
-  const downloadCommand = activeInstallerArtifact ? buildDownloadCommand(activeInstallerArtifact) : "";
-  const connectCommand = activeInstallerArtifact
-    ? buildConnectCommand({ artifact: activeInstallerArtifact, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
+  const installerCommands = installerQuery.data?.commands ?? null;
+  const connectCommand = installerCommands
+    ? buildConnectCommand({ template: installerCommands.connect, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
     : "";
+  const startCommand = installerCommands?.start ?? "";
 
   const onlineExecutorCount = useMemo(() => {
     const engines = engineAuthStatusQuery.data?.engines;
@@ -221,16 +180,6 @@ export default function ConversationsPage() {
     }
     llmInitRef.current = true;
   }, [settingsQuery.data?.settings]);
-
-  useEffect(() => {
-    if (installerByPlatform.has(platformId)) {
-      return;
-    }
-    const fallback = installerArtifacts[0];
-    if (fallback) {
-      setPlatformId(fallback.platformId);
-    }
-  }, [installerArtifacts, installerByPlatform, platformId]);
 
   useEffect(() => {
     setPairingToken(null);
@@ -524,15 +473,15 @@ export default function ConversationsPage() {
                       )}
                     </div>
 
-                    {activeInstallerArtifact ? (
+                    {installerCommands ? (
                       <div className="grid gap-3">
-                        <div className="grid gap-1">
-                          <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.downloadCommand")}</div>
-                          <CommandBlock command={downloadCommand} copyLabel={t("agents.installer.copyDownload")} />
-                        </div>
                         <div className="grid gap-1">
                           <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.connectCommand")}</div>
                           <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
+                        </div>
+                        <div className="grid gap-1">
+                          <div className="text-xs font-medium text-muted">{t("agents.installer.startCommand")}</div>
+                          <CommandBlock command={startCommand} copyLabel={t("agents.installer.copyStart")} />
                         </div>
                         {!hasUsablePairingToken ? (
                           <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">

@@ -78,6 +78,21 @@ function parseCsvList(value: string | undefined): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
+function printHelp(): void {
+  // eslint-disable-next-line no-console
+  console.log(`vespid-agent
+
+Usage:
+  vespid-agent connect --pairing-token <token> [--api-base <url>] [--name <name>] [--tags <a,b>] [--config-path <path>]
+  vespid-agent start [--config-path <path>]
+  vespid-agent start --pool byon --executor-id <id> --executor-token <token> --organization-id <orgId> --gateway-ws-url <url> [--api-base <url>]
+
+Notes:
+  - connect will pair with control-plane, save config, and start immediately.
+  - start without explicit credentials loads saved config from ~/.vespid/agent.json by default.
+`);
+}
+
 function parseArgs(argv: string[]): z.infer<typeof argsSchema> {
   const commandIndex = locateCommandIndex(argv);
   const command = commandIndex >= 0 && argv[commandIndex] === "connect" ? "connect" : "start";
@@ -214,6 +229,10 @@ async function pairAgent(input: {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    printHelp();
+    return;
+  }
   const parsed = parseArgs(process.argv);
 
   if (parsed.command === "connect") {

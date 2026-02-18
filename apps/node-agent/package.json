@@ -1,15 +1,22 @@
 {
   "name": "@vespid/node-agent",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "license": "Apache-2.0",
   "type": "module",
-  "main": "dist/cli.js",
+  "main": "dist/npm/cli.cjs",
+  "files": [
+    "dist/npm"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
-    "vespid-agent": "dist/cli.js"
+    "vespid-agent": "dist/npm/cli.cjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:npm-bundle": "node scripts/build-npm-bundle.mjs",
     "build:standalone": "node scripts/build-standalone.mjs",
     "dev": "tsx watch src/cli.ts",
     "start": "node dist/cli.js",
@@ -18,15 +25,15 @@
     "test": "vitest run --exclude 'dist/**' --passWithNoTests"
   },
   "dependencies": {
-    "@vespid/agent-runtime": "workspace:*",
-    "@vespid/connectors": "workspace:*",
-    "@vespid/shared": "workspace:*",
-    "@vespid/workflow": "workspace:*",
     "ajv": "^8.17.1",
     "ws": "^8.18.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@vespid/agent-runtime": "workspace:*",
+    "@vespid/connectors": "workspace:*",
+    "@vespid/shared": "workspace:*",
+    "@vespid/workflow": "workspace:*",
     "@types/node": "^24.3.0",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.27.0",

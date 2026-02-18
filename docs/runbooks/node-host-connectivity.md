@@ -85,7 +85,8 @@ pnpm dev
 2. Pair and start a node host:
 
 ```bash
-pnpm --filter @vespid/node-agent dev
+npx -y @vespid/node-agent@latest connect --pairing-token "<token>" --api-base "http://127.0.0.1:3001"
+npx -y @vespid/node-agent@latest start
 ```
 
 3. Configure LLM credentials on the node host environment:

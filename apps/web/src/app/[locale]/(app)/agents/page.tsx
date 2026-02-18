@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -12,7 +12,6 @@ import { DataTable } from "../../../../components/ui/data-table";
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Separator } from "../../../../components/ui/separator";
-import { Tabs, TabsList, TabsTrigger } from "../../../../components/ui/tabs";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
@@ -23,11 +22,8 @@ import {
   useCreatePairingToken,
   useRevokeAgent,
   useUpdateAgentTags,
-  type AgentInstallerArtifact,
 } from "../../../../lib/hooks/use-agents";
 import { getApiBase, isUnauthorizedError } from "../../../../lib/api";
-
-type PlatformId = "darwin-arm64" | "linux-x64" | "windows-x64";
 
 function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   const normalized = status.toLowerCase();
@@ -35,28 +31,6 @@ function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   if (normalized.includes("revoked") || normalized.includes("disabled")) return "danger";
   if (normalized.includes("stale") || normalized.includes("unknown")) return "warn";
   return "neutral";
-}
-
-function detectPreferredPlatform(): PlatformId {
-  if (typeof navigator === "undefined") {
-    return "darwin-arm64";
-  }
-  const ua = navigator.userAgent.toLowerCase();
-  const platform = navigator.platform.toLowerCase();
-  if (platform.includes("mac") || ua.includes("mac")) {
-    if (platform.includes("arm") || ua.includes("arm64") || ua.includes("apple")) {
-      return "darwin-arm64";
-    }
-    return "darwin-arm64";
-  }
-  if (platform.includes("win") || ua.includes("windows")) {
-    return "windows-x64";
-  }
-  return "linux-x64";
-}
-
-function shellQuote(value: string): string {
-  return JSON.stringify(value);
 }
 
 function normalizeNodeAgentApiBase(value: string): string {
@@ -72,28 +46,10 @@ function normalizeNodeAgentApiBase(value: string): string {
   }
 }
 
-function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
-  if (artifact.platformId === "windows-x64") {
-    return [
-      `powershell -NoProfile -Command "Invoke-WebRequest -Uri '${artifact.downloadUrl}' -OutFile '${artifact.fileName}'; Expand-Archive -Path '${artifact.fileName}' -DestinationPath . -Force"`,
-    ].join("\n");
-  }
-  return [
-    `curl -fsSL ${shellQuote(artifact.downloadUrl)} -o ${shellQuote(artifact.fileName)}`,
-    `tar -xzf ${shellQuote(artifact.fileName)}`,
-    "chmod +x ./vespid-agent",
-  ].join("\n");
-}
-
-function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
-  const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
-  const apiBase = normalizeNodeAgentApiBase(input.apiBase);
-  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(apiBase)}`;
-}
-
-function buildStartCommand(artifact: AgentInstallerArtifact): string {
-  const executable = artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
-  return `${executable} start`;
+function buildConnectCommand(input: { template: string; pairingToken: string; apiBase: string }): string {
+  return input.template
+    .replaceAll("<pairing-token>", input.pairingToken)
+    .replaceAll("<api-base>", normalizeNodeAgentApiBase(input.apiBase));
 }
 
 export default function AgentsPage() {
@@ -115,7 +71,6 @@ export default function AgentsPage() {
 
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
-  const [platformId, setPlatformId] = useState<PlatformId>(() => detectPreferredPlatform());
   const [tagsDraftByAgentId, setTagsDraftByAgentId] = useState<Record<string, string>>({});
 
   const canOperate = Boolean(scopedOrgId);
@@ -127,34 +82,13 @@ export default function AgentsPage() {
   const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
   const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
 
-  const installerArtifacts = installerQuery.data?.artifacts ?? [];
-  const installerByPlatform = useMemo(() => {
-    const map = new Map<PlatformId, AgentInstallerArtifact>();
-    for (const artifact of installerArtifacts) {
-      map.set(artifact.platformId, artifact);
-    }
-    return map;
-  }, [installerArtifacts]);
-
-  useEffect(() => {
-    const hasSelected = installerByPlatform.has(platformId);
-    if (hasSelected) {
-      return;
-    }
-    const first = installerArtifacts[0];
-    if (first) {
-      setPlatformId(first.platformId);
-    }
-  }, [installerByPlatform, installerArtifacts, platformId]);
-
-  const activeArtifact = installerByPlatform.get(platformId) ?? null;
-  const showInstallerCommands = Boolean(activeArtifact);
+  const installerCommands = installerQuery.data?.commands ?? null;
+  const showInstallerCommands = Boolean(installerCommands);
   const showInstallerUnavailable = !installerQuery.isLoading && !showInstallerCommands;
-  const downloadCommand = activeArtifact ? buildDownloadCommand(activeArtifact) : "";
-  const connectCommand = activeArtifact
-    ? buildConnectCommand({ artifact: activeArtifact, pairingToken: resolvedPairingToken, apiBase })
+  const connectCommand = installerCommands
+    ? buildConnectCommand({ template: installerCommands.connect, pairingToken: resolvedPairingToken, apiBase })
     : "";
-  const startCommand = activeArtifact ? buildStartCommand(activeArtifact) : "";
+  const startCommand = installerCommands?.start ?? "";
   const isZh = locale.toLowerCase().startsWith("zh");
   const startCommandLabel = isZh ? "后续重启命令" : "Restart command";
 
@@ -346,20 +280,6 @@ export default function AgentsPage() {
               <div className="mt-1 text-xs text-muted">{t("agents.installer.subtitle")}</div>
             </div>
 
-            <Tabs value={platformId} onValueChange={(value) => setPlatformId(value as PlatformId)}>
-              <TabsList>
-                <TabsTrigger value="darwin-arm64">
-                  {t("agents.installer.platforms.darwinArm64")}
-                </TabsTrigger>
-                <TabsTrigger value="linux-x64">
-                  {t("agents.installer.platforms.linuxX64")}
-                </TabsTrigger>
-                <TabsTrigger value="windows-x64">
-                  {t("agents.installer.platforms.windowsX64")}
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-
             {installerQuery.isLoading ? (
               <div className="text-xs text-muted">{t("common.loading")}</div>
             ) : null}
@@ -367,26 +287,12 @@ export default function AgentsPage() {
             {showInstallerCommands ? (
               <div className="grid gap-3">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                  <span>{t("agents.installer.channel", { channel: installerQuery.data?.channel ?? "latest" })}</span>
-                  {installerQuery.data?.checksumsUrl ? (
-                    <a
-                      href={installerQuery.data.checksumsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline underline-offset-2"
-                    >
-                      {t("agents.installer.checksums")}
-                    </a>
-                  ) : null}
+                  <span>{`${installerQuery.data?.packageName ?? "@vespid/node-agent"}@${installerQuery.data?.distTag ?? "latest"}`}</span>
                   {installerQuery.data?.docsUrl ? (
                     <a href={installerQuery.data.docsUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">
                       {t("agents.installer.docs")}
                     </a>
                   ) : null}
-                </div>
-                <div className="grid gap-1">
-                  <div className="text-xs font-medium text-muted">{t("agents.installer.downloadCommand")}</div>
-                  <CommandBlock command={downloadCommand} copyLabel={t("agents.installer.copyDownload")} />
                 </div>
                 <div className="grid gap-1">
                   <div className="text-xs font-medium text-muted">{t("agents.installer.connectCommand")}</div>
@@ -396,15 +302,6 @@ export default function AgentsPage() {
                   <div className="text-xs font-medium text-muted">{startCommandLabel}</div>
                   <CommandBlock command={startCommand} copyLabel={startCommandLabel} />
                 </div>
-                {activeArtifact ? (
-                  <div className="flex justify-start">
-                    <Button asChild size="sm" variant="outline">
-                      <a href={activeArtifact.downloadUrl} target="_blank" rel="noreferrer">
-                        {t("agents.installer.downloadButton")}
-                      </a>
-                    </Button>
-                  </div>
-                ) : null}
               </div>
             ) : null}
 

@@ -113,7 +113,16 @@
           "officialMethods": "官方连接方式",
           "supportedNow": "当前在 Vespid 支持",
           "recommendedPath": "推荐路径"
-        }
+        },
+        "mobileOfficial": "官方方式",
+        "mobileSupported": "当前支持",
+        "mobileRecommended": "推荐路径"
+      },
+      "overview": {
+        "connectedEngines": "已连接引擎",
+        "onlineExecutors": "在线执行器",
+        "oauthReadyEngines": "OAuth 就绪引擎",
+        "opencodeHosts": "OpenCode 在线主机"
       },
       "tabs": {
         "apiKey": "API Key",
@@ -580,29 +589,23 @@
     },
     "installer": {
       "title": "连接程序",
-      "subtitle": "下载当前平台的独立工作节点程序，然后将当前机器连接到服务。",
-      "platforms": {
-        "darwinArm64": "macOS（Apple Silicon）",
-        "linuxX64": "Linux（x64）",
-        "windowsX64": "Windows（x64）"
-      },
-      "channel": "发布通道：{channel}",
-      "checksums": "校验和",
+      "subtitle": "使用 npm 运行工作节点 CLI 并连接当前机器。",
       "docs": "安装说明",
-      "downloadCommand": "下载并解压",
+      "downloadCommand": "npm 连接命令",
       "connectCommand": "连接到 Vespid",
-      "downloadButton": "下载连接程序",
+      "startCommand": "重启命令",
       "sourceConnectCommand": "源码方式连接（无需二进制）",
       "sourceStartCommand": "源码方式重启",
       "binaryArgsConnect": "二进制 connect 参数",
       "binaryArgsStart": "二进制 start 参数",
       "fallbackTitle": "连接程序暂不可用",
       "fallbackDescription": "当前无法获取安装包元数据，请稍后重试或查看安装说明。",
-      "fallbackUsingDefaults": "安装包元数据不可用，已使用默认发布链接和命令。",
+      "fallbackUsingDefaults": "安装包元数据不可用，已使用默认 npm 命令。",
       "tokenMissing": "请先创建配对令牌，再复制可直接执行的连接命令。",
       "tokenExpired": "配对令牌已过期，请创建新的令牌后再连接。",
-      "copyDownload": "复制下载命令",
+      "copyDownload": "复制 npm 连接命令",
       "copyConnect": "复制连接命令",
+      "copyStart": "复制重启命令",
       "copyFallback": "复制回退命令",
       "copySourceConnect": "复制源码连接命令",
       "copySourceStart": "复制源码重启命令"
@@ -641,8 +644,8 @@
       "tokenLabel": "配对令牌",
       "creatingToken": "正在创建配对令牌...",
       "tokenUnavailable": "暂无可用配对令牌，请先创建。",
-      "downloadCommand": "1）下载并解压执行器安装包",
-      "connectCommand": "2）将当前机器连接到组织",
+      "downloadCommand": "1）执行 npm 连接命令",
+      "connectCommand": "2）执行 npm 启动命令",
       "regenerateToken": "创建/轮换令牌",
       "checkStatus": "我已连接，重新检查",
       "openAgents": "打开工作节点页面",

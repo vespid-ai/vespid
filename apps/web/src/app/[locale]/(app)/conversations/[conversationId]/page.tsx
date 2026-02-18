@@ -11,7 +11,7 @@ import { Textarea } from "../../../../../components/ui/textarea";
 import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { cn } from "../../../../../lib/cn";
 import { getApiBase, isUnauthorizedError } from "../../../../../lib/api";
-import { useAgentInstaller, useCreatePairingToken, type AgentInstallerArtifact } from "../../../../../lib/hooks/use-agents";
+import { useAgentInstaller, useCreatePairingToken } from "../../../../../lib/hooks/use-agents";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import { useEngineAuthStatus } from "../../../../../lib/hooks/use-engine-auth-status";
 import { useMe } from "../../../../../lib/hooks/use-me";
@@ -88,7 +88,6 @@ type ChatMessage = {
   createdAt: string;
   seq: number;
 };
-type PlatformId = "darwin-arm64" | "linux-x64" | "windows-x64";
 const EXECUTOR_SETUP_ERROR_CODES = new Set(["NO_AGENT_AVAILABLE", "PINNED_AGENT_OFFLINE"]);
 
 function gatewayWsBase(): string {
@@ -110,25 +109,6 @@ function formatTime(value: string | null | undefined): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function detectPreferredPlatform(): PlatformId {
-  if (typeof navigator === "undefined") {
-    return "darwin-arm64";
-  }
-  const ua = navigator.userAgent.toLowerCase();
-  const platform = navigator.platform.toLowerCase();
-  if (platform.includes("mac") || ua.includes("mac")) {
-    return "darwin-arm64";
-  }
-  if (platform.includes("win") || ua.includes("windows")) {
-    return "windows-x64";
-  }
-  return "linux-x64";
-}
-
-function shellQuote(value: string): string {
-  return JSON.stringify(value);
-}
-
 function normalizeNodeAgentApiBase(value: string): string {
   try {
     const url = new URL(value);
@@ -142,21 +122,10 @@ function normalizeNodeAgentApiBase(value: string): string {
   }
 }
 
-function buildDownloadCommand(artifact: AgentInstallerArtifact): string {
-  if (artifact.platformId === "windows-x64") {
-    return `powershell -NoProfile -Command "Invoke-WebRequest -Uri '${artifact.downloadUrl}' -OutFile '${artifact.fileName}'; Expand-Archive -Path '${artifact.fileName}' -DestinationPath . -Force"`;
-  }
-  return [
-    `curl -fsSL ${shellQuote(artifact.downloadUrl)} -o ${shellQuote(artifact.fileName)}`,
-    `tar -xzf ${shellQuote(artifact.fileName)}`,
-    "chmod +x ./vespid-agent",
-  ].join("\n");
-}
-
-function buildConnectCommand(input: { artifact: AgentInstallerArtifact; pairingToken: string; apiBase: string }): string {
-  const executable = input.artifact.platformId === "windows-x64" ? ".\\vespid-agent.exe" : "./vespid-agent";
-  const apiBase = normalizeNodeAgentApiBase(input.apiBase);
-  return `${executable} connect --pairing-token ${shellQuote(input.pairingToken)} --api-base ${shellQuote(apiBase)}`;
+function buildConnectCommand(input: { template: string; pairingToken: string; apiBase: string }): string {
+  return input.template
+    .replaceAll("<pairing-token>", input.pairingToken)
+    .replaceAll("<api-base>", normalizeNodeAgentApiBase(input.apiBase));
 }
 
 function mergeBySeq(existing: AgentSessionEvent[], incoming: AgentSessionEvent[]): AgentSessionEvent[] {
@@ -293,7 +262,6 @@ export default function ConversationDetailPage() {
   const [message, setMessage] = useState("");
   const [pairingToken, setPairingToken] = useState<string | null>(null);
   const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
-  const [platformId, setPlatformId] = useState<PlatformId>(() => detectPreferredPlatform());
   const [sessionErrorCodes, setSessionErrorCodes] = useState<string[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -341,26 +309,17 @@ export default function ConversationDetailPage() {
   const roleKey = meQuery.data?.orgs?.find((o) => o.id === scopedOrgId)?.roleKey ?? null;
   const canManageExecutors = roleKey === "owner" || roleKey === "admin";
 
-  const installerArtifacts = installerQuery.data?.artifacts ?? [];
-  const installerByPlatform = useMemo(() => {
-    const map = new Map<PlatformId, AgentInstallerArtifact>();
-    for (const artifact of installerArtifacts) {
-      map.set(artifact.platformId, artifact);
-    }
-    return map;
-  }, [installerArtifacts]);
-
   const pairingExpiresMs = pairingExpiresAt ? Date.parse(pairingExpiresAt) : NaN;
   const pairingTokenExpired =
     Boolean(pairingToken) && Number.isFinite(pairingExpiresMs) && pairingExpiresMs <= Date.now();
   const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
   const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
 
-  const activeInstallerArtifact = installerByPlatform.get(platformId) ?? installerArtifacts[0] ?? null;
-  const downloadCommand = activeInstallerArtifact ? buildDownloadCommand(activeInstallerArtifact) : "";
-  const connectCommand = activeInstallerArtifact
-    ? buildConnectCommand({ artifact: activeInstallerArtifact, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
+  const installerCommands = installerQuery.data?.commands ?? null;
+  const connectCommand = installerCommands
+    ? buildConnectCommand({ template: installerCommands.connect, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
     : "";
+  const startCommand = installerCommands?.start ?? "";
 
   const eventErrorCodes = useMemo(() => {
     const set = new Set<string>();
@@ -394,16 +353,6 @@ export default function ConversationDetailPage() {
     }
     return false;
   }, [eventErrorCodes, hasOnlineExecutors, sessionErrorCodes]);
-
-  useEffect(() => {
-    if (installerByPlatform.has(platformId)) {
-      return;
-    }
-    const fallback = installerArtifacts[0];
-    if (fallback) {
-      setPlatformId(fallback.platformId);
-    }
-  }, [installerArtifacts, installerByPlatform, platformId]);
 
   useEffect(() => {
     setPairingToken(null);
@@ -796,15 +745,15 @@ export default function ConversationDetailPage() {
                   )}
                 </div>
 
-                {activeInstallerArtifact ? (
+                {installerCommands ? (
                   <div className="grid gap-3">
-                    <div className="grid gap-1">
-                      <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.downloadCommand")}</div>
-                      <CommandBlock command={downloadCommand} copyLabel={t("agents.installer.copyDownload")} />
-                    </div>
                     <div className="grid gap-1">
                       <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.connectCommand")}</div>
                       <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
+                    </div>
+                    <div className="grid gap-1">
+                      <div className="text-xs font-medium text-muted">{t("agents.installer.startCommand")}</div>
+                      <CommandBlock command={startCommand} copyLabel={t("agents.installer.copyStart")} />
                     </div>
                     {!hasUsablePairingToken ? (
                       <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">

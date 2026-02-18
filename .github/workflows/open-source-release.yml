@@ -13,52 +13,7 @@ permissions:
   id-token: write
 
 jobs:
-  build-node-agent-binaries:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform_id: darwin-arm64
-            archive_name: vespid-agent-darwin-arm64.tar.gz
-            runner: macos-14
-          - platform_id: linux-x64
-            archive_name: vespid-agent-linux-x64.tar.gz
-            runner: ubuntu-latest
-          - platform_id: windows-x64
-            archive_name: vespid-agent-windows-x64.zip
-            runner: windows-latest
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.29.3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build standalone node-agent binary
-        run: pnpm --filter @vespid/node-agent build:standalone
-
-      - name: Upload node-agent archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-agent-${{ matrix.platform_id }}
-          path: apps/node-agent/artifacts/${{ matrix.archive_name }}
-          if-no-files-found: error
-
   release:
-    needs:
-      - build-node-agent-binaries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -92,57 +47,34 @@ jobs:
       - name: Verify SBOM exists
         run: test -s artifacts/sbom/community-sbom.json
 
-      - name: Download node-agent archives
-        uses: actions/download-artifact@v4
-        with:
-          path: .release-assets
-          pattern: node-agent-*
-          merge-multiple: true
-
-      - name: Validate node-agent archives and generate checksums
+      - name: Generate release checksums
         run: |
           set -euo pipefail
-          test -f .release-assets/vespid-agent-darwin-arm64.tar.gz
-          test -f .release-assets/vespid-agent-linux-x64.tar.gz
-          test -f .release-assets/vespid-agent-windows-x64.zip
-          sha256sum \
-            .release-assets/vespid-agent-darwin-arm64.tar.gz \
-            .release-assets/vespid-agent-linux-x64.tar.gz \
-            .release-assets/vespid-agent-windows-x64.zip \
-            artifacts/sbom/community-sbom.json \
-            > .release-assets/vespid-release-checksums.txt
+          sha256sum artifacts/sbom/community-sbom.json > artifacts/sbom/vespid-release-checksums.txt
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
           name: vespid-release-assets
           path: |
-            .release-assets/vespid-agent-darwin-arm64.tar.gz
-            .release-assets/vespid-agent-linux-x64.tar.gz
-            .release-assets/vespid-agent-windows-x64.zip
-            .release-assets/vespid-release-checksums.txt
             artifacts/sbom/community-sbom.json
+            artifacts/sbom/vespid-release-checksums.txt
           if-no-files-found: error
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            .release-assets/vespid-agent-darwin-arm64.tar.gz
-            .release-assets/vespid-agent-linux-x64.tar.gz
-            .release-assets/vespid-agent-windows-x64.zip
             artifacts/sbom/community-sbom.json
+            artifacts/sbom/vespid-release-checksums.txt
 
       - name: Publish release assets to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            .release-assets/vespid-agent-darwin-arm64.tar.gz
-            .release-assets/vespid-agent-linux-x64.tar.gz
-            .release-assets/vespid-agent-windows-x64.zip
-            .release-assets/vespid-release-checksums.txt
             artifacts/sbom/community-sbom.json
+            artifacts/sbom/vespid-release-checksums.txt
           fail_on_unmatched_files: true
 
       - name: Set up Docker Buildx
@@ -178,6 +110,20 @@ jobs:
           file: docker/community/worker.Dockerfile
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/vespid-worker:${{ github.ref_name }}
+
+      - name: Publish node-agent package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not set; skipping npm publish."
+            exit 0
+          fi
+          printf "//registry.npmjs.org/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > ~/.npmrc
+          pnpm --filter @vespid/node-agent test
+          pnpm --filter @vespid/node-agent build:npm-bundle
+          cd apps/node-agent/dist/npm
+          npm publish --access public --provenance
 
       - name: Publish SDK package
         env:
