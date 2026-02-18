@@ -1,12 +1,11 @@
 "use client";
 
-import { Send, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Send, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
@@ -18,13 +17,13 @@ import { useMe } from "../../../../lib/hooks/use-me";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
 import { useCreateSession, useSessions } from "../../../../lib/hooks/use-sessions";
-import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { providersForContext } from "../../../../components/app/llm/model-catalog";
 import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { isUnauthorizedError } from "../../../../lib/api";
-import { QuickCreatePanel } from "../../../../components/app/quick-create-panel";
 import { AdvancedConfigSheet } from "../../../../components/app/advanced-config-sheet";
+import { SessionModelChip } from "../../../../components/app/llm/session-model-chip";
 
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
@@ -93,6 +92,7 @@ export default function ConversationsPage() {
   const llmSecretMissing = isOAuthRequiredProvider(llm.providerId) && !llm.secretId;
 
   const selectedToolset = toolsets.find((ts: any) => ts.id === toolsetId) ?? null;
+  const sessionAllowedProviders = providersForContext("session");
 
   const toolAllow = useMemo(() => {
     const base: string[] = [];
@@ -254,41 +254,100 @@ export default function ConversationsPage() {
   }
 
   return (
-    <div className="grid gap-4">
-      <div>
-        <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{t("sessions.title")}</div>
-        <div className="mt-1 text-sm text-muted">{t("sessions.subtitle")}</div>
-      </div>
+    <div className="grid gap-6" data-testid="conversation-create-layout">
+      <div className="mx-auto w-full max-w-4xl">
+        <div className="grid gap-6">
+          <div className="grid gap-1 text-center">
+            <div className="font-[var(--font-display)] text-4xl font-semibold tracking-tight">{t("sessions.create.heroTitle")}</div>
+            <div className="text-sm text-muted">{t("sessions.create.heroSubtitle")}</div>
+          </div>
 
-      <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)]">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <CardTitle>{t("sessions.list.title")}</CardTitle>
-                <CardDescription>{t("sessions.list.subtitle")}</CardDescription>
+          <section
+            className="rounded-[var(--radius-lg)] border border-borderSubtle/65 bg-panel/72 p-4 shadow-elev1 md:p-5"
+            data-testid="conversation-composer"
+          >
+            <Label htmlFor="session-message" className="sr-only">
+              {t("sessions.chat.message")}
+            </Label>
+            <Textarea
+              id="session-message"
+              rows={5}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder={t("sessions.chat.placeholder")}
+              disabled={!canOperate}
+              className="min-h-[150px] resize-y border-0 bg-transparent px-0 py-0 shadow-none focus:border-transparent focus:ring-0"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void startConversation();
+                }
+              }}
+            />
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-borderSubtle/60 pt-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <SessionModelChip
+                  value={{ providerId: llm.providerId, modelId: llm.modelId }}
+                  allowedProviders={sessionAllowedProviders}
+                  disabled={!canOperate || memberReadOnlyDefaults}
+                  onChange={(next) =>
+                    setLlm((prev) => ({
+                      ...prev,
+                      providerId: next.providerId,
+                      modelId: next.modelId,
+                    }))
+                  }
+                />
+                <Button variant="outline" size="sm" onClick={openAdvancedSettings} disabled={!canOperate} className="rounded-full">
+                  <SlidersHorizontal className="h-4 w-4" />
+                  {t("sessions.create.configureAdvanced")}
+                </Button>
               </div>
-              <Button size="sm" variant="outline" onClick={resetDraft}>
-                {t("sessions.create.title")}
+
+              <Button
+                variant="accent"
+                size="sm"
+                className="rounded-full"
+                disabled={!canOperate || createSession.isPending || message.trim().length === 0 || llmSecretMissing}
+                onClick={() => void startConversation()}
+              >
+                <Send className="mr-1 h-4 w-4" />
+                {t("sessions.chat.send")}
               </Button>
             </div>
-          </CardHeader>
-          <CardContent>
+
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
+              <span>{t("sessions.chat.shortcutHint")}</span>
+              {llmSecretMissing ? <span className="text-warn">{t("sessions.create.oauthRequired")}</span> : null}
+              {memberReadOnlyDefaults ? <span>{t("sessions.create.memberDefaults")}</span> : null}
+            </div>
+          </section>
+
+          <section className="grid gap-2" data-testid="conversation-recent-list">
+            <div className="grid gap-0.5">
+              <div className="text-sm font-medium text-text">{t("sessions.list.title")}</div>
+              <div className="text-xs text-muted">{t("sessions.list.subtitle")}</div>
+            </div>
             {sessionsQuery.isLoading ? (
-              <EmptyState title={t("common.loading")} />
+              <div className="rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/55 p-3 text-sm text-muted">
+                {t("common.loading")}
+              </div>
             ) : sortedSessions.length === 0 ? (
-              <EmptyState title={t("sessions.list.empty")} />
+              <div className="rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/55 p-3 text-sm text-muted">
+                {t("sessions.list.empty")}
+              </div>
             ) : (
               <div className="grid gap-2">
                 {sortedSessions.map((session) => (
                   <button
                     key={session.id}
                     type="button"
-                    className="rounded-[var(--radius-sm)] border border-borderSubtle bg-panel/30 px-3 py-2 text-left hover:border-borderStrong/60 hover:bg-panel/45"
+                    className="w-full rounded-[var(--radius-sm)] border border-borderSubtle/55 bg-panel/45 px-3 py-2 text-left transition-[background-color,border-color] hover:border-borderStrong/70 hover:bg-panel/70"
                     onClick={() => router.push(`/${locale}/conversations/${session.id}`)}
                   >
                     <div className="truncate text-sm font-medium text-text">{session.title?.trim() || t("sessions.untitled")}</div>
-                    <div className="mt-1 text-xs text-muted">
+                    <div className="mt-0.5 text-[11px] text-muted">
                       {session.llmProvider}:{session.llmModel}
                     </div>
                     <div className="mt-1 text-[11px] text-muted">{formatSessionTime(session.lastActivityAt)}</div>
@@ -296,60 +355,7 @@ export default function ConversationsPage() {
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-4">
-          <QuickCreatePanel
-            title={t("sessions.create.title")}
-            icon={<Sparkles className="h-4 w-4 text-accent" />}
-          >
-            <div className="grid gap-2">
-              <Label>{t("sessions.fields.model")}</Label>
-              <LlmConfigField
-                orgId={scopedOrgId}
-                mode="session"
-                value={llm}
-                allowedProviders={providersForContext("session")}
-                onChange={setLlm}
-                disabled={!canOperate || memberReadOnlyDefaults}
-              />
-              {llmSecretMissing ? <div className="text-xs text-warn">This provider requires a connected OAuth account.</div> : null}
-              {memberReadOnlyDefaults ? <div className="text-xs text-muted">Members use organization default model settings.</div> : null}
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="session-message">{t("sessions.chat.message")}</Label>
-              <Textarea
-                id="session-message"
-                rows={4}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder={t("sessions.chat.placeholder")}
-                disabled={!canOperate}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void startConversation();
-                  }
-                }}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="accent"
-                  disabled={!canOperate || createSession.isPending || message.trim().length === 0 || llmSecretMissing}
-                  onClick={() => void startConversation()}
-                >
-                  <Send className="mr-2 h-4 w-4" />
-                  {t("sessions.chat.send")}
-                </Button>
-                <Button variant="outline" onClick={openAdvancedSettings} disabled={!canOperate}>
-                  <SlidersHorizontal className="h-4 w-4" />
-                  {t("sessions.create.configureAdvanced")}
-                </Button>
-              </div>
-            </div>
-          </QuickCreatePanel>
+          </section>
 
           <AdvancedConfigSheet
             open={advancedOpen}

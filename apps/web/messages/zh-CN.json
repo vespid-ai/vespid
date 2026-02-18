@@ -502,12 +502,12 @@
     },
     "pairingSteps": {
       "step1": "1. 创建配对令牌",
-      "step2": "2. 使用该令牌运行 node-agent 命令",
+      "step2": "2. 使用该令牌运行连接命令",
       "step3": "3. 刷新本页并确认代理在线"
     },
     "installer": {
       "title": "连接程序",
-      "subtitle": "下载独立 agent 程序并执行一条命令，将当前机器连接到服务。",
+      "subtitle": "下载当前平台的独立 agent 程序，然后将当前机器连接到服务。",
       "platforms": {
         "darwinArm64": "macOS（Apple Silicon）",
         "linuxX64": "Linux（x64）",
@@ -518,13 +518,21 @@
       "docs": "安装说明",
       "downloadCommand": "下载并解压",
       "connectCommand": "连接到 Vespid",
+      "downloadButton": "下载连接程序",
+      "sourceConnectCommand": "源码方式连接（无需二进制）",
+      "sourceStartCommand": "源码方式重启",
+      "binaryArgsConnect": "二进制 connect 参数",
+      "binaryArgsStart": "二进制 start 参数",
       "fallbackTitle": "连接程序暂不可用",
       "fallbackDescription": "当前无法获取安装包元数据，请稍后重试或查看安装说明。",
+      "fallbackUsingDefaults": "安装包元数据不可用，已使用默认发布链接和命令。",
       "tokenMissing": "请先创建配对令牌，再复制可直接执行的连接命令。",
       "tokenExpired": "配对令牌已过期，请创建新的令牌后再连接。",
       "copyDownload": "复制下载命令",
       "copyConnect": "复制连接命令",
-      "copyFallback": "复制回退命令"
+      "copyFallback": "复制回退命令",
+      "copySourceConnect": "复制源码连接命令",
+      "copySourceStart": "复制源码重启命令"
     }
   },
   "sessions": {
@@ -541,10 +549,16 @@
     "create": {
       "title": "新建对话",
       "subtitle": "先选模型，再输入消息并发送。",
+      "heroTitle": "我们先从哪里开始呢？",
+      "heroSubtitle": "先输入你的问题，模型和设置随时可调整。",
       "configureAdvanced": "高级设置",
       "advancedTitle": "对话高级设置",
       "button": "创建",
-      "created": "对话已创建。"
+      "created": "对话已创建。",
+      "modelChipAria": "选择模型",
+      "modelChipFallback": "选择模型",
+      "oauthRequired": "该模型提供方需要先连接账号。",
+      "memberDefaults": "成员将使用组织默认模型设置。"
     },
     "list": {
       "title": "最近对话",
@@ -579,11 +593,15 @@
     },
     "chat": {
       "title": "对话",
-      "subtitle": "消息会保存为事件。按 Enter 发送，Shift+Enter 换行。",
+      "subtitle": "消息会保存为事件。",
       "empty": "暂无事件，发送一条消息开始。",
       "message": "消息",
       "placeholder": "告诉智能体你想完成什么...",
-      "send": "发送"
+      "send": "发送",
+      "shortcutHint": "Enter 发送，Shift+Enter 换行。",
+      "roleUser": "你",
+      "roleAssistant": "助手",
+      "roleSystem": "系统"
     },
     "details": {
       "title": "对话详情",

@@ -5,10 +5,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import { Button } from "../../../../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../../components/ui/card";
 import { EmptyState } from "../../../../../components/ui/empty-state";
 import { Textarea } from "../../../../../components/ui/textarea";
-import { AdvancedSection } from "../../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
 import { cn } from "../../../../../lib/cn";
 import { isUnauthorizedError } from "../../../../../lib/api";
@@ -447,19 +445,7 @@ export default function ConversationDetailPage() {
     sendText(trimmed);
   }
 
-  function resetPin() {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.error(t("sessions.ws.notConnected"));
-      return;
-    }
-    const payload: GatewayClientMessage = { type: "session_reset_agent", sessionId: conversationId };
-    ws.send(JSON.stringify(payload));
-  }
-
   const session = sessionQuery.data?.session ?? null;
-  const pinnedExecutorId = session?.pinnedExecutorId ?? session?.pinnedAgentId ?? null;
-  const pinnedExecutorPool = session?.pinnedExecutorPool ?? (session?.pinnedAgentId ? "byon" : null);
   const headerTitle = session?.title?.trim().length ? session.title : t("sessions.untitled");
 
   if (!authSession.isLoading && !authSession.data?.session) {
@@ -571,12 +557,16 @@ export default function ConversationDetailPage() {
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="mx-auto grid w-full max-w-4xl gap-4" data-testid="conversation-detail-layout">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="font-[var(--font-display)] text-3xl font-semibold tracking-tight">{headerTitle}</div>
-          <div className="mt-1 text-xs text-muted">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
             <span className="font-mono">{conversationId}</span>
+            <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5", connected ? "border-emerald-400/60 text-emerald-700" : "border-borderSubtle")}>
+              <span className={cn("h-1.5 w-1.5 rounded-full", connected ? "bg-emerald-500" : "bg-muted")} />
+              {connected ? t("sessions.ws.connected") : t("sessions.ws.disconnected")}
+            </span>
           </div>
         </div>
 
@@ -590,140 +580,73 @@ export default function ConversationDetailPage() {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("sessions.chat.title")}</CardTitle>
-          <CardDescription>{t("sessions.chat.subtitle")}</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <div className="rounded-2xl border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
-            {chatMessages.length === 0 ? (
-              <EmptyState
-                title={t("sessions.chat.empty")}
-                action={
-                  <Button size="sm" variant="outline" onClick={() => connectWs()} disabled={!canConnect || connected}>
-                    {t("sessions.ws.reconnect")}
-                  </Button>
-                }
-              />
-            ) : (
-              <div className="grid gap-3">
-                {chatMessages.map((item) => (
-                  <div
-                    key={item.id}
-                    className={cn(
-                      "flex w-full",
-                      item.role === "user" ? "justify-end" : item.role === "assistant" ? "justify-start" : "justify-center"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "max-w-[85%] rounded-2xl px-3 py-2 text-sm shadow-elev1",
-                        item.role === "user" && "bg-accent text-white",
-                        item.role === "assistant" && "border border-borderSubtle bg-panelElev/70 text-text",
-                        item.role === "system" && "border border-borderSubtle bg-panel/45 text-muted"
-                      )}
-                    >
-                      <div className="whitespace-pre-wrap break-words">{item.text}</div>
-                      <div className={cn("mt-1 text-[11px]", item.role === "user" ? "text-white/80" : "text-muted")}>#{item.seq} {formatTime(item.createdAt)}</div>
-                    </div>
-                  </div>
-                ))}
-                <div ref={bottomRef} />
-              </div>
-            )}
-          </div>
+      {wsError ? <div className="text-sm text-red-700">{wsError}</div> : null}
 
-          <div className="grid gap-2">
-            <Textarea
-              rows={3}
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder={t("sessions.chat.placeholder")}
-              disabled={!canConnect}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-            />
-            <div className="flex items-center justify-end gap-3">
-              <Button variant="accent" disabled={!canConnect || !connected || message.trim().length === 0} onClick={send}>
-                {t("sessions.chat.send")}
+      <section className="rounded-[var(--radius-lg)] border border-borderSubtle/65 bg-panel/72 p-3 shadow-elev1 md:p-4" data-testid="conversation-message-stream">
+        {chatMessages.length === 0 ? (
+          <EmptyState
+            title={t("sessions.chat.empty")}
+            action={
+              <Button size="sm" variant="outline" onClick={() => connectWs()} disabled={!canConnect || connected}>
+                {t("sessions.ws.reconnect")}
               </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("sessions.details.title")}</CardTitle>
-          <CardDescription>{t("sessions.details.subtitle")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
-            <span className={cn("inline-flex items-center gap-2 rounded-full border px-2 py-0.5", connected ? "border-emerald-400/60 text-emerald-700" : "border-borderSubtle") }>
-              <span className={cn("h-2 w-2 rounded-full", connected ? "bg-emerald-500" : "bg-muted")} />
-              {connected ? t("sessions.ws.connected") : t("sessions.ws.disconnected")}
-            </span>
-            {wsError ? <span className="text-red-700">{wsError}</span> : null}
-            {pinnedExecutorId ? (
-              <span className="inline-flex items-center gap-2">
-                <span>{t("sessions.pinnedAgent")}</span>
-                <span className="font-mono">{pinnedExecutorId.slice(0, 8)}...</span>
-                <span className="rounded border border-borderSubtle px-1.5 py-0.5 text-[11px] uppercase tracking-wide">
-                  {pinnedExecutorPool ?? "unknown"}
-                </span>
-              </span>
-            ) : null}
-            <Button size="sm" variant="outline" onClick={resetPin} disabled={!canConnect || !connected}>
-              {t("sessions.resetAgent")}
-            </Button>
-          </div>
-
-          <AdvancedSection
-            id="conversation-detail-advanced"
-            title={t("advanced.title")}
-            description={t("advanced.description")}
-            labels={{ show: t("advanced.show"), hide: t("advanced.hide") }}
-          >
-            <div className="grid gap-2 text-sm">
-              <div className="grid gap-1 md:grid-cols-2">
-                <div className="text-muted">{t("sessions.details.engine")}</div>
-                <div className="font-mono">{session.engineId}</div>
-              </div>
-              <div className="grid gap-1 md:grid-cols-2">
-                <div className="text-muted">{t("sessions.details.llm")}</div>
-                <div className="font-mono">{`${session.llmProvider}:${session.llmModel}`}</div>
-              </div>
-              <div className="grid gap-1 md:grid-cols-2">
-                <div className="text-muted">{t("sessions.details.toolset")}</div>
-                <div className="font-mono">{session.toolsetId ?? "-"}</div>
-              </div>
-              <div className="grid gap-1 md:grid-cols-2">
-                <div className="text-muted">{t("sessions.details.selector")}</div>
-                <div className="font-mono">
-                  {session.executorSelector?.executorId ??
-                    session.executorSelector?.tag ??
-                    session.executorSelector?.group ??
-                    (Array.isArray(session.executorSelector?.labels) && session.executorSelector.labels.length > 0
-                      ? session.executorSelector.labels.join(",")
-                      : "-")}
+            }
+          />
+        ) : (
+          <div className="grid gap-5">
+            {chatMessages.map((item) => (
+              <div
+                key={item.id}
+                data-testid={`conversation-message-${item.role}`}
+                className={cn(
+                  "grid gap-1",
+                  item.role === "user" && "md:justify-items-end",
+                  item.role === "assistant" && "md:justify-items-start",
+                  item.role === "system" && "md:justify-items-center"
+                )}
+              >
+                <div className="text-xs font-medium uppercase tracking-wide text-muted">
+                  {item.role === "user"
+                    ? t("sessions.chat.roleUser")
+                    : item.role === "assistant"
+                      ? t("sessions.chat.roleAssistant")
+                      : t("sessions.chat.roleSystem")}
+                </div>
+                <div className="max-w-[88%] whitespace-pre-wrap break-words text-sm text-text">{item.text}</div>
+                <div className="text-[11px] text-muted">
+                  #{item.seq} {formatTime(item.createdAt)}
                 </div>
               </div>
-            </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+        )}
+      </section>
 
-            <div className="mt-3 grid gap-2">
-              <div className="text-sm font-medium text-text">Raw events</div>
-              <pre className="max-h-[340px] overflow-auto rounded-xl border border-borderSubtle bg-panel/60 p-3 text-xs text-text">
-                {JSON.stringify(events, null, 2)}
-              </pre>
-            </div>
-          </AdvancedSection>
-        </CardContent>
-      </Card>
+      <section className="rounded-[var(--radius-lg)] border border-borderSubtle/65 bg-panel/72 p-3 shadow-elev1 md:p-4">
+        <div className="grid gap-2">
+          <Textarea
+            rows={3}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder={t("sessions.chat.placeholder")}
+            disabled={!canConnect}
+            className="min-h-[88px] border-0 bg-transparent px-0 py-0 shadow-none focus:border-transparent focus:ring-0"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <div className="flex items-center justify-between gap-3 border-t border-borderSubtle/60 pt-2">
+            <div className="text-xs text-muted">{t("sessions.chat.shortcutHint")}</div>
+            <Button variant="accent" size="sm" className="rounded-full" disabled={!canConnect || !connected || message.trim().length === 0} onClick={send}>
+              {t("sessions.chat.send")}
+            </Button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

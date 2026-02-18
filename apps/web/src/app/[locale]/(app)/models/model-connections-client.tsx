@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   getDefaultConnectorIdForProvider,
+  getLlmProviderMeta,
   isOAuthRequiredProvider,
   listLlmProviders,
   normalizeConnectorId,
@@ -15,14 +16,24 @@ import {
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
 import { ProviderPicker } from "../../../../components/app/llm/provider-picker";
+import { Badge } from "../../../../components/ui/badge";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../../../components/ui/dialog";
 import { EmptyState } from "../../../../components/ui/empty-state";
 import { Input } from "../../../../components/ui/input";
 import { Label } from "../../../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../components/ui/tabs";
 import { useActiveOrgId } from "../../../../lib/hooks/use-active-org-id";
 import { apiFetchJson, isUnauthorizedError } from "../../../../lib/api";
+import { useTestLlmProviderApiKey } from "../../../../lib/hooks/use-llm-provider-key-test";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useCreateSecret, useDeleteSecret, useRotateSecret, useSecrets } from "../../../../lib/hooks/use-secrets";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
@@ -44,9 +55,44 @@ type DeviceFlowDraft = {
   token: string;
 };
 
+type ApiKeyDraft = {
+  value: string;
+  testStatus: "idle" | "testing" | "passed" | "failed";
+  testedValue: string | null;
+  error: string | null;
+};
+
 function connectorIdForProvider(providerId: LlmProviderId): string {
   const connectorId = getDefaultConnectorIdForProvider(providerId) ?? `llm.${providerId}`;
   return normalizeConnectorId(connectorId);
+}
+
+function fallbackMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+function getErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const payload = (error as { payload?: { code?: unknown } }).payload;
+  if (payload && typeof payload.code === "string") return payload.code;
+  return null;
+}
+
+function buildEmptyApiKeyDraft(): ApiKeyDraft {
+  return {
+    value: "",
+    testStatus: "idle",
+    testedValue: null,
+    error: null,
+  };
+}
+
+export function redirectToProvider(url: string) {
+  const opened = window.open(url, "_self");
+  if (opened === null) {
+    window.location.assign(url);
+  }
 }
 
 export default function ModelConnectionsPage() {
@@ -66,6 +112,7 @@ export default function ModelConnectionsPage() {
   const createSecret = useCreateSecret(scopedOrgId);
   const rotateSecret = useRotateSecret(scopedOrgId);
   const deleteSecret = useDeleteSecret(scopedOrgId);
+  const testProviderKey = useTestLlmProviderApiKey(scopedOrgId);
 
   const [primaryLlm, setPrimaryLlm] = useState<LlmConfigValue>({
     providerId: "openai",
@@ -73,10 +120,13 @@ export default function ModelConnectionsPage() {
     secretId: null,
   });
   const [primaryInitDone, setPrimaryInitDone] = useState(false);
-  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, string>>({});
+  const [apiKeyDrafts, setApiKeyDrafts] = useState<Record<string, ApiKeyDraft>>({});
   const [deviceFlows, setDeviceFlows] = useState<Record<string, DeviceFlowDraft>>({});
   const [vertexProjectId, setVertexProjectId] = useState("");
   const [vertexLocation, setVertexLocation] = useState("us-central1");
+
+  const [apiKeyDialogProviderId, setApiKeyDialogProviderId] = useState<LlmProviderId | null>(null);
+  const [oauthDialogProviderId, setOauthDialogProviderId] = useState<LlmProviderId | null>(null);
 
   const allProviderMeta = useMemo(() => listLlmProviders({ context: "session" }), []);
   const connectionProviderMeta = useMemo(() => {
@@ -110,6 +160,7 @@ export default function ModelConnectionsPage() {
     }
     return map;
   }, [secretsQuery.data?.secrets]);
+
   const overrideProviderItems = useMemo(() => {
     return allProviderMeta.map((provider) => {
       const connectorId = connectorIdForProvider(provider.id);
@@ -130,11 +181,15 @@ export default function ModelConnectionsPage() {
 
   useEffect(() => {
     if (primaryInitDone) return;
-    const defaults = settingsQuery.data?.settings?.llm?.defaults?.primary as any;
+    const defaults = settingsQuery.data?.settings?.llm?.defaults?.primary as {
+      provider?: string;
+      model?: string;
+      secretId?: string;
+    } | null;
     if (!defaults || typeof defaults !== "object") return;
     setPrimaryLlm((prev) => ({
       ...prev,
-      ...(typeof defaults.provider === "string" ? { providerId: defaults.provider } : {}),
+      ...(typeof defaults.provider === "string" ? { providerId: defaults.provider as LlmProviderId } : {}),
       ...(typeof defaults.model === "string" ? { modelId: defaults.model } : {}),
       ...(typeof defaults.secretId === "string" ? { secretId: defaults.secretId } : {}),
     }));
@@ -143,9 +198,9 @@ export default function ModelConnectionsPage() {
 
   useEffect(() => {
     const providerOverrides = settingsQuery.data?.settings?.llm?.providers ?? {};
-    const current = (providerOverrides as any)?.[overrideProviderId] ?? null;
+    const current = (providerOverrides as Record<string, { baseUrl?: string; apiKind?: string }>)[overrideProviderId] ?? null;
     setOverrideBaseUrl(typeof current?.baseUrl === "string" ? current.baseUrl : "");
-    setOverrideApiKind(typeof current?.apiKind === "string" ? current.apiKind : "");
+    setOverrideApiKind(typeof current?.apiKind === "string" ? (current.apiKind as LlmProviderApiKind) : "");
   }, [overrideProviderId, settingsQuery.data?.settings]);
 
   useEffect(() => {
@@ -158,6 +213,235 @@ export default function ModelConnectionsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const getConnectedSecret = (providerId: LlmProviderId) => {
+    const connectorId = connectorIdForProvider(providerId);
+    const all = secretsByConnector.get(connectorId) ?? [];
+    return all.find((secret) => secret.name === "default") ?? all[0] ?? null;
+  };
+
+  const getApiKeyDraft = (providerId: LlmProviderId): ApiKeyDraft => {
+    return apiKeyDrafts[providerId] ?? buildEmptyApiKeyDraft();
+  };
+
+  const updateApiKeyDraft = (providerId: LlmProviderId, updater: (current: ApiKeyDraft) => ApiKeyDraft) => {
+    setApiKeyDrafts((prev) => {
+      const current = prev[providerId] ?? buildEmptyApiKeyDraft();
+      return {
+        ...prev,
+        [providerId]: updater(current),
+      };
+    });
+  };
+
+  const apiKeyDialogProvider = apiKeyDialogProviderId ? providerMetaById[apiKeyDialogProviderId] ?? null : null;
+  const oauthDialogProvider = oauthDialogProviderId ? providerMetaById[oauthDialogProviderId] ?? null : null;
+  const oauthDeviceFlow = oauthDialogProvider ? deviceFlows[oauthDialogProvider.id] ?? null : null;
+
+  async function startDeviceFlow(providerId: LlmProviderId) {
+    if (!orgId) return;
+    try {
+      const started = await apiFetchJson<{
+        deviceCode: string;
+        userCode: string;
+        verificationUri: string;
+      }>(
+        `/v1/orgs/${orgId}/llm/oauth/${providerId}/device/start`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "default" }),
+        },
+        { orgScoped: true }
+      );
+
+      setOauthDialogProviderId(providerId);
+      setDeviceFlows((prev) => ({
+        ...prev,
+        [providerId]: {
+          deviceCode: started.deviceCode,
+          userCode: started.userCode,
+          verificationUri: started.verificationUri,
+          token: "",
+        },
+      }));
+
+      if (typeof window !== "undefined") {
+        window.open(started.verificationUri, "_blank", "noopener,noreferrer");
+      }
+      toast.success(t("models.connections.oauthOpened"));
+    } catch (error) {
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
+
+  async function startOauth(providerId: LlmProviderId, input?: { projectId?: string; location?: string }) {
+    if (!orgId) return;
+    setOauthDialogProviderId(providerId);
+
+    try {
+      const started = await apiFetchJson<{ authorizationUrl: string }>(
+        `/v1/orgs/${orgId}/llm/oauth/${providerId}/start`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...(input?.projectId ? { projectId: input.projectId } : {}),
+            ...(input?.location ? { location: input.location } : {}),
+            mode: "json",
+          }),
+        },
+        { orgScoped: true }
+      );
+
+      if (typeof started.authorizationUrl === "string" && started.authorizationUrl.length > 0) {
+        toast.message(t("models.connections.redirecting"));
+        redirectToProvider(started.authorizationUrl);
+        return;
+      }
+      toast.error(t("common.unknownError"));
+    } catch (error) {
+      if (getErrorCode(error) === "LLM_OAUTH_USE_DEVICE_FLOW") {
+        await startDeviceFlow(providerId);
+        return;
+      }
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
+
+  async function disconnectOauth(providerId: LlmProviderId) {
+    if (!orgId) return;
+    const connectedSecret = getConnectedSecret(providerId);
+    if (!connectedSecret) return;
+    try {
+      await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/${providerId}/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
+      await secretsQuery.refetch();
+      toast.success(t("common.deleted"));
+    } catch (error) {
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
+
+  async function completeDeviceFlow(providerId: LlmProviderId) {
+    if (!orgId) return;
+    const flow = deviceFlows[providerId] ?? null;
+    if (!flow) return;
+
+    try {
+      const result = await apiFetchJson<{ status: "pending" | "connected" }>(
+        `/v1/orgs/${orgId}/llm/oauth/${providerId}/device/poll`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            deviceCode: flow.deviceCode,
+            token: flow.token.trim(),
+            name: "default",
+          }),
+        },
+        { orgScoped: true }
+      );
+
+      if (result.status === "connected") {
+        await secretsQuery.refetch();
+        setDeviceFlows((prev) => {
+          const next = { ...prev };
+          delete next[providerId];
+          return next;
+        });
+        toast.success(t("common.saved"));
+      } else {
+        toast.message(t("models.connections.pending"));
+      }
+    } catch (error) {
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
+
+  async function testApiKey(providerId: LlmProviderId) {
+    const provider = getLlmProviderMeta(providerId);
+    if (!provider) return;
+
+    const draft = getApiKeyDraft(providerId);
+    const value = draft.value.trim();
+    if (!value) return;
+
+    updateApiKeyDraft(providerId, (current) => ({
+      ...current,
+      testStatus: "testing",
+      error: null,
+      testedValue: null,
+    }));
+
+    try {
+      await testProviderKey.mutateAsync({
+        providerId,
+        value,
+        model: provider.defaultModelId,
+      });
+      updateApiKeyDraft(providerId, (current) => ({
+        ...current,
+        testStatus: "passed",
+        testedValue: value,
+        error: null,
+      }));
+      toast.success(t("models.connections.testPassed"));
+    } catch (error) {
+      updateApiKeyDraft(providerId, (current) => ({
+        ...current,
+        testStatus: "failed",
+        testedValue: null,
+        error: fallbackMessage(error, t("common.unknownError")),
+      }));
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
+
+  async function saveApiKey(providerId: LlmProviderId) {
+    const connectedSecret = getConnectedSecret(providerId);
+    const draft = getApiKeyDraft(providerId);
+    const value = draft.value.trim();
+    const canSave = draft.testStatus === "passed" && draft.testedValue === value && value.length > 0;
+
+    if (!canSave) {
+      toast.error(t("models.connections.testRequired"));
+      return;
+    }
+
+    try {
+      const connectorId = connectorIdForProvider(providerId);
+      if (!connectedSecret) {
+        await createSecret.mutateAsync({
+          connectorId,
+          name: "default",
+          value,
+        });
+      } else {
+        await rotateSecret.mutateAsync({ secretId: connectedSecret.id, value });
+      }
+
+      updateApiKeyDraft(providerId, () => buildEmptyApiKeyDraft());
+      await secretsQuery.refetch();
+      toast.success(t("common.saved"));
+      setApiKeyDialogProviderId(null);
+    } catch (error) {
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
+
+  async function deleteApiKey(providerId: LlmProviderId) {
+    const connectedSecret = getConnectedSecret(providerId);
+    if (!connectedSecret) return;
+
+    try {
+      await deleteSecret.mutateAsync(connectedSecret.id);
+      await secretsQuery.refetch();
+      updateApiKeyDraft(providerId, () => buildEmptyApiKeyDraft());
+      toast.success(t("common.deleted"));
+    } catch (error) {
+      toast.error(fallbackMessage(error, t("common.unknownError")));
+    }
+  }
 
   if (!authSession.isLoading && !authSession.data?.session) {
     return (
@@ -214,274 +498,6 @@ export default function ModelConnectionsPage() {
     );
   }
 
-  const renderConnectionProviderCard = (provider: (typeof allProviderMeta)[number]) => {
-    const connectorId = connectorIdForProvider(provider.id);
-    const connectedSecret = (secretsByConnector.get(connectorId) ?? []).find((secret) => secret.name === "default")
-      ?? (secretsByConnector.get(connectorId) ?? [])[0]
-      ?? null;
-    const keyDraft = apiKeyDrafts[provider.id] ?? "";
-    const flow = deviceFlows[provider.id] ?? null;
-
-    if (provider.authMode === "oauth") {
-      return (
-        <div key={provider.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/40 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="font-medium text-text">{provider.displayName}</div>
-            <div className="text-xs text-muted">
-              {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
-            </div>
-          </div>
-
-          {provider.id === "google-vertex" ? (
-            <div className="grid gap-2">
-              <div className="grid gap-1.5">
-                <Label>{t("models.connections.vertexProjectId")}</Label>
-                <Input value={vertexProjectId} onChange={(e) => setVertexProjectId(e.target.value)} placeholder="my-gcp-project" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>{t("models.connections.vertexLocation")}</Label>
-                <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="us-central1" />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="accent"
-                  disabled={vertexProjectId.trim().length === 0 || vertexLocation.trim().length === 0}
-                  onClick={async () => {
-                    try {
-                      const result = await apiFetchJson<{ authorizationUrl: string }>(
-                        `/v1/orgs/${orgId}/llm/oauth/google-vertex/start`,
-                        {
-                          method: "POST",
-                          headers: { "content-type": "application/json" },
-                          body: JSON.stringify({
-                            projectId: vertexProjectId.trim(),
-                            location: vertexLocation.trim(),
-                            mode: "json",
-                          }),
-                        },
-                        { orgScoped: true }
-                      );
-                      if (typeof result.authorizationUrl === "string" && result.authorizationUrl.length > 0) {
-                        window.location.assign(result.authorizationUrl);
-                      }
-                    } catch (error) {
-                      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                    }
-                  }}
-                >
-                  {t("models.connections.connect")}
-                </Button>
-                {connectedSecret ? (
-                  <Button
-                    variant="outline"
-                    onClick={async () => {
-                      try {
-                        await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/google-vertex/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
-                        await secretsQuery.refetch();
-                        toast.success(t("common.deleted"));
-                      } catch (error) {
-                        toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                      }
-                    }}
-                  >
-                    {t("models.connections.disconnect")}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          ) : (
-            <div className="grid gap-2">
-              {!flow ? (
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      const started = await apiFetchJson<{
-                        deviceCode: string;
-                        userCode: string;
-                        verificationUri: string;
-                      }>(
-                        `/v1/orgs/${orgId}/llm/oauth/${provider.id}/device/start`,
-                        {
-                          method: "POST",
-                          headers: { "content-type": "application/json" },
-                          body: JSON.stringify({ name: "default" }),
-                        },
-                        { orgScoped: true }
-                      );
-                      setDeviceFlows((prev) => ({
-                        ...prev,
-                        [provider.id]: {
-                          deviceCode: started.deviceCode,
-                          userCode: started.userCode,
-                          verificationUri: started.verificationUri,
-                          token: "",
-                        },
-                      }));
-                    } catch (error) {
-                      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                    }
-                  }}
-                >
-                  {t("models.connections.startDeviceFlow")}
-                </Button>
-              ) : (
-                <div className="grid gap-2">
-                  <div className="text-xs text-muted">{t("models.connections.userCode", { code: flow.userCode })}</div>
-                  <a href={flow.verificationUri} target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2">
-                    {flow.verificationUri}
-                  </a>
-                  <Input
-                    type="password"
-                    value={flow.token}
-                    onChange={(e) =>
-                      setDeviceFlows((prev) => ({
-                        ...prev,
-                        [provider.id]: { ...flow, token: e.target.value },
-                      }))
-                    }
-                    placeholder={t("models.connections.oauthTokenPlaceholder")}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="accent"
-                      disabled={flow.token.trim().length === 0}
-                      onClick={async () => {
-                        try {
-                          const result = await apiFetchJson<{ status: "pending" | "connected" }>(
-                            `/v1/orgs/${orgId}/llm/oauth/${provider.id}/device/poll`,
-                            {
-                              method: "POST",
-                              headers: { "content-type": "application/json" },
-                              body: JSON.stringify({
-                                deviceCode: flow.deviceCode,
-                                token: flow.token.trim(),
-                                name: "default",
-                              }),
-                            },
-                            { orgScoped: true }
-                          );
-                          if (result.status === "connected") {
-                            await secretsQuery.refetch();
-                            setDeviceFlows((prev) => {
-                              const next = { ...prev };
-                              delete next[provider.id];
-                              return next;
-                            });
-                            toast.success(t("common.saved"));
-                          } else {
-                            toast.message(t("models.connections.pending"));
-                          }
-                        } catch (error) {
-                          toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                        }
-                      }}
-                    >
-                      {t("models.connections.completeConnection")}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setDeviceFlows((prev) => {
-                          const next = { ...prev };
-                          delete next[provider.id];
-                          return next;
-                        });
-                      }}
-                    >
-                      {t("common.cancel")}
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {connectedSecret ? (
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      await apiFetchJson(`/v1/orgs/${orgId}/llm/oauth/${provider.id}/${connectedSecret.id}`, { method: "DELETE" }, { orgScoped: true });
-                      await secretsQuery.refetch();
-                      toast.success(t("common.deleted"));
-                    } catch (error) {
-                      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                    }
-                  }}
-                >
-                  {t("models.connections.disconnect")}
-                </Button>
-              ) : null}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div key={provider.id} className="grid gap-3 rounded-lg border border-borderSubtle bg-panel/40 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="font-medium text-text">{provider.displayName}</div>
-          <div className="text-xs text-muted">
-            {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
-          </div>
-        </div>
-        <Input
-          type="password"
-          value={keyDraft}
-          onChange={(e) =>
-            setApiKeyDrafts((prev) => ({
-              ...prev,
-              [provider.id]: e.target.value,
-            }))
-          }
-          placeholder={t("models.connections.apiKeyPlaceholder")}
-        />
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="accent"
-            disabled={keyDraft.trim().length === 0}
-            onClick={async () => {
-              try {
-                const value = keyDraft.trim();
-                if (!connectedSecret) {
-                  await createSecret.mutateAsync({
-                    connectorId,
-                    name: "default",
-                    value,
-                  });
-                } else {
-                  await rotateSecret.mutateAsync({ secretId: connectedSecret.id, value });
-                }
-                setApiKeyDrafts((prev) => ({ ...prev, [provider.id]: "" }));
-                await secretsQuery.refetch();
-                toast.success(t("common.saved"));
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-              }
-            }}
-          >
-            {connectedSecret ? t("common.rotate") : t("models.connections.connect")}
-          </Button>
-          {connectedSecret ? (
-            <Button
-              variant="outline"
-              onClick={async () => {
-                try {
-                  await deleteSecret.mutateAsync(connectedSecret.id);
-                  await secretsQuery.refetch();
-                  toast.success(t("common.deleted"));
-                } catch (error) {
-                  toast.error(error instanceof Error ? error.message : t("common.unknownError"));
-                }
-              }}
-            >
-              {t("models.connections.disconnect")}
-            </Button>
-          ) : null}
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="grid gap-4">
       <div>
@@ -518,7 +534,7 @@ export default function ModelConnectionsPage() {
                   });
                   toast.success(t("common.saved"));
                 } catch (error) {
-                  toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                  toast.error(fallbackMessage(error, t("common.unknownError")));
                 }
               }}
             >
@@ -534,16 +550,107 @@ export default function ModelConnectionsPage() {
           <CardDescription>{t("models.connections.providersSubtitle")}</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div className="grid gap-2">
-            <div className="text-sm font-medium text-text">{t("models.connections.apiKeyGroupTitle")}</div>
-            <div className="text-xs text-muted">{t("models.connections.apiKeyGroupDescription")}</div>
-            <div className="grid gap-3 md:grid-cols-2">{apiKeyConnectionProviderMeta.map((provider) => renderConnectionProviderCard(provider))}</div>
-          </div>
-          <div className="grid gap-2">
-            <div className="text-sm font-medium text-text">{t("models.connections.oauthGroupTitle")}</div>
-            <div className="text-xs text-muted">{t("models.connections.oauthGroupDescription")}</div>
-            <div className="grid gap-3 md:grid-cols-2">{oauthConnectionProviderMeta.map((provider) => renderConnectionProviderCard(provider))}</div>
-          </div>
+          <Tabs defaultValue="api-key" className="grid gap-3">
+            <TabsList>
+              <TabsTrigger value="api-key">{t("models.connections.tabs.apiKey")}</TabsTrigger>
+              <TabsTrigger value="oauth">{t("models.connections.tabs.oauth")}</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="api-key" className="grid gap-2">
+              <div className="text-xs text-muted">{t("models.connections.apiKeyGroupDescription")}</div>
+              <div className="grid gap-2">
+                {apiKeyConnectionProviderMeta.map((provider) => {
+                  const connectedSecret = getConnectedSecret(provider.id);
+                  return (
+                    <div
+                      key={provider.id}
+                      data-testid={`provider-row-${provider.id}`}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-borderSubtle/70 bg-panel/55 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-text">{provider.displayName}</div>
+                        <Badge variant={connectedSecret ? "ok" : "neutral"}>
+                          {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="accent"
+                          onClick={() => setApiKeyDialogProviderId(provider.id)}
+                        >
+                          {connectedSecret ? t("models.connections.reconnect") : t("models.connections.connect")}
+                        </Button>
+                        {connectedSecret ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              void deleteApiKey(provider.id);
+                            }}
+                          >
+                            {t("models.connections.disconnect")}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="oauth" className="grid gap-2">
+              <div className="text-xs text-muted">{t("models.connections.oauthGroupDescription")}</div>
+              <div className="grid gap-2">
+                {oauthConnectionProviderMeta.map((provider) => {
+                  const connectedSecret = getConnectedSecret(provider.id);
+                  return (
+                    <div
+                      key={provider.id}
+                      data-testid={`provider-row-${provider.id}`}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-borderSubtle/70 bg-panel/55 p-3"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-text">{provider.displayName}</div>
+                        <Badge variant={connectedSecret ? "ok" : "neutral"}>
+                          {connectedSecret ? t("models.connections.connected") : t("models.connections.notConnected")}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="accent"
+                          onClick={() => {
+                            if (provider.id === "google-vertex") {
+                              setOauthDialogProviderId(provider.id);
+                              return;
+                            }
+                            void startOauth(provider.id);
+                          }}
+                        >
+                          {connectedSecret ? t("models.connections.reconnect") : t("models.connections.connect")}
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={() => setOauthDialogProviderId(provider.id)}>
+                          {t("models.connections.manage")}
+                        </Button>
+                        {connectedSecret ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              void disconnectOauth(provider.id);
+                            }}
+                          >
+                            {t("models.connections.disconnect")}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 
@@ -613,7 +720,7 @@ export default function ModelConnectionsPage() {
                   });
                   toast.success(t("common.saved"));
                 } catch (error) {
-                  toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                  toast.error(fallbackMessage(error, t("common.unknownError")));
                 }
               }}
             >
@@ -622,6 +729,182 @@ export default function ModelConnectionsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={Boolean(apiKeyDialogProvider)} onOpenChange={(open) => (!open ? setApiKeyDialogProviderId(null) : null)}>
+        <DialogContent>
+          {apiKeyDialogProvider ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t("models.connections.apiKeyDialogTitle", { provider: apiKeyDialogProvider.displayName })}</DialogTitle>
+                <DialogDescription>{t("models.connections.apiKeyDialogDescription")}</DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-3">
+                <Input
+                  type="password"
+                  value={getApiKeyDraft(apiKeyDialogProvider.id).value}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    updateApiKeyDraft(apiKeyDialogProvider.id, () => ({
+                      value: nextValue,
+                      testStatus: "idle",
+                      testedValue: null,
+                      error: null,
+                    }));
+                  }}
+                  placeholder={t("models.connections.apiKeyPlaceholder")}
+                />
+
+                {getApiKeyDraft(apiKeyDialogProvider.id).testStatus === "passed" ? (
+                  <div className="text-xs text-ok">{t("models.connections.testPassed")}</div>
+                ) : null}
+                {getApiKeyDraft(apiKeyDialogProvider.id).testStatus === "failed" ? (
+                  <div className="text-xs text-danger">{getApiKeyDraft(apiKeyDialogProvider.id).error ?? t("common.unknownError")}</div>
+                ) : null}
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    data-testid="api-key-test-button"
+                    variant="outline"
+                    disabled={getApiKeyDraft(apiKeyDialogProvider.id).value.trim().length === 0 || getApiKeyDraft(apiKeyDialogProvider.id).testStatus === "testing"}
+                    onClick={() => {
+                      void testApiKey(apiKeyDialogProvider.id);
+                    }}
+                  >
+                    {getApiKeyDraft(apiKeyDialogProvider.id).testStatus === "testing" ? t("common.working") : t("models.connections.testKey")}
+                  </Button>
+                  <Button
+                    data-testid="api-key-save-button"
+                    variant="accent"
+                    disabled={(() => {
+                      const draft = getApiKeyDraft(apiKeyDialogProvider.id);
+                      const value = draft.value.trim();
+                      return !(draft.testStatus === "passed" && draft.testedValue === value && value.length > 0);
+                    })()}
+                    onClick={() => {
+                      void saveApiKey(apiKeyDialogProvider.id);
+                    }}
+                  >
+                    {t("common.save")}
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(oauthDialogProvider)} onOpenChange={(open) => (!open ? setOauthDialogProviderId(null) : null)}>
+        <DialogContent>
+          {oauthDialogProvider ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>{t("models.connections.oauthDialogTitle", { provider: oauthDialogProvider.displayName })}</DialogTitle>
+                <DialogDescription>{t("models.connections.oauthDialogDescription")}</DialogDescription>
+              </DialogHeader>
+
+              {oauthDialogProvider.id === "google-vertex" ? (
+                <div className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <Label>{t("models.connections.vertexProjectId")}</Label>
+                    <Input value={vertexProjectId} onChange={(e) => setVertexProjectId(e.target.value)} placeholder="my-gcp-project" />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>{t("models.connections.vertexLocation")}</Label>
+                    <Input value={vertexLocation} onChange={(e) => setVertexLocation(e.target.value)} placeholder="us-central1" />
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      variant="accent"
+                      disabled={vertexProjectId.trim().length === 0 || vertexLocation.trim().length === 0}
+                      onClick={() => {
+                        void startOauth("google-vertex", {
+                          projectId: vertexProjectId.trim(),
+                          location: vertexLocation.trim(),
+                        });
+                      }}
+                    >
+                      {t("models.connections.startAuthorization")}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid gap-3">
+                  {oauthDeviceFlow ? (
+                    <>
+                      <div className="rounded-md border border-borderSubtle/70 bg-panel/50 p-3 text-xs text-text">
+                        {t("models.connections.userCode", { code: oauthDeviceFlow.userCode })}
+                      </div>
+                      <a
+                        href={oauthDeviceFlow.verificationUri}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs underline underline-offset-2"
+                      >
+                        {oauthDeviceFlow.verificationUri}
+                      </a>
+                      <Input
+                        type="password"
+                        value={oauthDeviceFlow.token}
+                        onChange={(e) => {
+                          const nextToken = e.target.value;
+                          setDeviceFlows((prev) => {
+                            const current = prev[oauthDialogProvider.id];
+                            if (!current) return prev;
+                            return {
+                              ...prev,
+                              [oauthDialogProvider.id]: {
+                                ...current,
+                                token: nextToken,
+                              },
+                            };
+                          });
+                        }}
+                        placeholder={t("models.connections.oauthTokenPlaceholder")}
+                      />
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(oauthDeviceFlow.userCode);
+                              toast.success(t("common.copied"));
+                            } catch {
+                              toast.error(t("errors.copyFailed"));
+                            }
+                          }}
+                        >
+                          {t("models.connections.copyCode")}
+                        </Button>
+                        <Button
+                          variant="accent"
+                          disabled={oauthDeviceFlow.token.trim().length === 0}
+                          onClick={() => {
+                            void completeDeviceFlow(oauthDialogProvider.id);
+                          }}
+                        >
+                          {t("models.connections.completeConnection")}
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        variant="accent"
+                        onClick={() => {
+                          void startOauth(oauthDialogProvider.id);
+                        }}
+                      >
+                        {t("models.connections.startAuthorization")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

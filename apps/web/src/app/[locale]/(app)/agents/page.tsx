@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CodeBlock } from "../../../../components/ui/code-block";
 import { CommandBlock } from "../../../../components/ui/command-block";
 import { Badge } from "../../../../components/ui/badge";
 import { Button } from "../../../../components/ui/button";
@@ -83,20 +82,6 @@ function buildStartCommand(artifact: AgentInstallerArtifact): string {
   return `${executable} start`;
 }
 
-function triggerInstallerDownload(artifact: AgentInstallerArtifact): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const link = document.createElement("a");
-  link.href = artifact.downloadUrl;
-  link.target = "_self";
-  link.rel = "noreferrer";
-  link.download = artifact.fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
 export default function AgentsPage() {
   const t = useTranslations();
   const router = useRouter();
@@ -128,57 +113,36 @@ export default function AgentsPage() {
   const resolvedPairingToken = !pairingToken || pairingTokenExpired ? "<pairing-token>" : pairingToken;
   const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
 
+  const installerArtifacts = installerQuery.data?.artifacts ?? [];
   const installerByPlatform = useMemo(() => {
     const map = new Map<PlatformId, AgentInstallerArtifact>();
-    for (const artifact of installerQuery.data?.artifacts ?? []) {
+    for (const artifact of installerArtifacts) {
       map.set(artifact.platformId, artifact);
     }
     return map;
-  }, [installerQuery.data?.artifacts]);
+  }, [installerArtifacts]);
 
   useEffect(() => {
     const hasSelected = installerByPlatform.has(platformId);
     if (hasSelected) {
       return;
     }
-    const first = installerQuery.data?.artifacts?.[0];
+    const first = installerArtifacts[0];
     if (first) {
       setPlatformId(first.platformId);
     }
-  }, [installerByPlatform, installerQuery.data?.artifacts, platformId]);
+  }, [installerByPlatform, installerArtifacts, platformId]);
 
   const activeArtifact = installerByPlatform.get(platformId) ?? null;
   const showInstallerCommands = Boolean(activeArtifact);
-  const showFallbackCommand = installerQuery.isError || (!installerQuery.isLoading && !showInstallerCommands);
+  const showInstallerUnavailable = !installerQuery.isLoading && !showInstallerCommands;
   const downloadCommand = activeArtifact ? buildDownloadCommand(activeArtifact) : "";
   const connectCommand = activeArtifact
     ? buildConnectCommand({ artifact: activeArtifact, pairingToken: resolvedPairingToken, apiBase })
     : "";
   const startCommand = activeArtifact ? buildStartCommand(activeArtifact) : "";
   const isZh = locale.toLowerCase().startsWith("zh");
-  const usageTitle = isZh ? "vespid-agent 使用说明" : "How to use vespid-agent";
-  const usageSteps = isZh
-    ? [
-        "1. 点击上面的平台按钮，会直接下载对应安装包。",
-        "2. 首次使用：先运行“下载并解压”命令，再运行“连接到 Vespid”命令。",
-        "3. connect 成功后会写入本地配置并保持进程运行，用于接收执行任务。",
-        "4. 后续重启同一台机器时，直接运行“后续重启命令”。",
-      ]
-    : [
-        "1. Click a platform button above to download the installer directly.",
-        "2. First-time setup: run the download command, then run the connect command.",
-        "3. A successful connect stores local config and keeps the process running for jobs.",
-        "4. For future restarts on the same machine, run the restart command.",
-      ];
   const startCommandLabel = isZh ? "后续重启命令" : "Restart command";
-
-  function handlePlatformClick(nextPlatformId: PlatformId) {
-    setPlatformId(nextPlatformId);
-    const artifact = installerByPlatform.get(nextPlatformId);
-    if (artifact) {
-      triggerInstallerDownload(artifact);
-    }
-  }
 
   const columns = useMemo(() => {
     return [
@@ -352,7 +316,11 @@ export default function AgentsPage() {
           {pairingToken ? (
             <>
               <Separator />
-              <CodeBlock value={{ token: pairingToken, expiresAt: pairingExpiresAt }} />
+              <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
+                <div className="text-xs font-medium text-text">{t("agents.pairing")}</div>
+                <div className="font-mono text-xs leading-5 text-text break-all">{pairingToken}</div>
+                {pairingExpiresAt ? <div className="text-xs text-muted">{pairingExpiresAt}</div> : null}
+              </div>
             </>
           ) : null}
 
@@ -366,13 +334,13 @@ export default function AgentsPage() {
 
             <Tabs value={platformId} onValueChange={(value) => setPlatformId(value as PlatformId)}>
               <TabsList>
-                <TabsTrigger value="darwin-arm64" onClick={() => handlePlatformClick("darwin-arm64")}>
+                <TabsTrigger value="darwin-arm64">
                   {t("agents.installer.platforms.darwinArm64")}
                 </TabsTrigger>
-                <TabsTrigger value="linux-x64" onClick={() => handlePlatformClick("linux-x64")}>
+                <TabsTrigger value="linux-x64">
                   {t("agents.installer.platforms.linuxX64")}
                 </TabsTrigger>
-                <TabsTrigger value="windows-x64" onClick={() => handlePlatformClick("windows-x64")}>
+                <TabsTrigger value="windows-x64">
                   {t("agents.installer.platforms.windowsX64")}
                 </TabsTrigger>
               </TabsList>
@@ -414,23 +382,29 @@ export default function AgentsPage() {
                   <div className="text-xs font-medium text-muted">{startCommandLabel}</div>
                   <CommandBlock command={startCommand} copyLabel={startCommandLabel} />
                 </div>
-                <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
-                  <div className="text-xs font-semibold text-text">{usageTitle}</div>
-                  {usageSteps.map((step) => (
-                    <div key={step} className="text-xs text-muted">
-                      {step}
-                    </div>
-                  ))}
-                </div>
+                {activeArtifact ? (
+                  <div className="flex justify-start">
+                    <Button asChild size="sm" variant="outline">
+                      <a href={activeArtifact.downloadUrl} target="_blank" rel="noreferrer">
+                        {t("agents.installer.downloadButton")}
+                      </a>
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
-            {showFallbackCommand ? (
+            {showInstallerUnavailable ? (
               <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
                 <div className="text-xs font-medium text-text">{t("agents.installer.fallbackTitle")}</div>
                 <div className="text-xs text-muted">{t("agents.installer.fallbackDescription")}</div>
                 {installerQuery.data?.docsUrl ? (
-                  <a href={installerQuery.data.docsUrl} target="_blank" rel="noreferrer" className="text-xs underline underline-offset-2">
+                  <a
+                    href={installerQuery.data.docsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs underline underline-offset-2"
+                  >
                     {t("agents.installer.docs")}
                   </a>
                 ) : null}
@@ -445,7 +419,6 @@ export default function AgentsPage() {
           </div>
         </CardContent>
       </Card>
-
       <Card>
         <CardHeader>
           <CardTitle>{t("common.list")}</CardTitle>

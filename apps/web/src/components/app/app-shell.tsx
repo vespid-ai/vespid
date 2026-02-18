@@ -275,11 +275,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     Date.now() - reachability.unreachableAt < 2 * 60_000;
 
   const themeLabel = mounted ? (theme ?? "system") : "system";
+  const isConversationRoute = useMemo(() => {
+    const p = pathname ?? "";
+    return /^\/[^/]+\/conversations(?:\/|$)/.test(p);
+  }, [pathname]);
   const hasStarterRoute = useMemo(() => {
     const p = pathname ?? "";
     return /^\/[^/]+\/(conversations|workflows)\/[^/]+/.test(p);
   }, [pathname]);
   const onboardingVisible = mounted && hasSession && (!activeOrgId || !(hasStarterResource || hasStarterRoute));
+  const onboardingPanelVisible = onboardingVisible && !isConversationRoute;
   const showApiUnreachable = mounted && apiUnreachable;
 
   function SettingsDropdown({ iconOnly }: { iconOnly?: boolean }) {
@@ -386,7 +391,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-dvh group" data-density={density}>
+    <div className="min-h-dvh group" data-density={density} data-shell-mode={isConversationRoute ? "conversation" : "default"}>
       <CommandPalette
         locale={locale}
         open={paletteOpen}
@@ -409,12 +414,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div
           className={cn(
             "min-h-dvh md:grid md:gap-4",
-            sidebarCollapsed ? "md:grid-cols-[84px_1fr]" : "md:grid-cols-[288px_1fr]"
+            sidebarCollapsed ? "md:grid-cols-[84px_1fr]" : isConversationRoute ? "md:grid-cols-[264px_1fr]" : "md:grid-cols-[288px_1fr]"
           )}
         >
           <aside
             className={cn(
-              "hidden md:block sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/84 shadow-elev1 backdrop-blur"
+              "hidden md:block sticky top-4 h-[calc(100dvh-2rem)] overflow-hidden rounded-[var(--radius-md)] backdrop-blur",
+              isConversationRoute
+                ? "border border-borderSubtle/45 bg-panel/64 shadow-none"
+                : "border border-borderSubtle/70 bg-panel/84 shadow-elev1"
             )}
           >
           <div className={cn("flex items-center gap-2 px-3 py-3", sidebarCollapsed ? "justify-center" : "px-4")}
@@ -440,7 +448,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Button>
           </div>
 
-          <nav className={cn("px-2", sidebarCollapsed ? "px-2" : "px-2")}
+          <nav className={cn("px-2", isConversationRoute ? "pt-1" : "", sidebarCollapsed ? "px-2" : "px-2")}
           >
             {nav.map((item) => {
               const href = item.href(locale);
@@ -453,12 +461,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                     "group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm",
                     "transition-[box-shadow,background-color,color,border-color] duration-200",
                     active
-                      ? "bg-surface2/60 text-text shadow-elev1"
-                      : "text-muted hover:bg-panel/55 hover:text-text hover:shadow-elev1",
+                      ? isConversationRoute
+                        ? "bg-panel/72 text-text"
+                        : "bg-surface2/60 text-text shadow-elev1"
+                      : isConversationRoute
+                        ? "text-muted hover:bg-panel/45 hover:text-text"
+                        : "text-muted hover:bg-panel/55 hover:text-text hover:shadow-elev1",
                     sidebarCollapsed ? "justify-center px-2" : ""
                   )}
                 >
-                  {active ? (
+                  {active && !isConversationRoute ? (
                     <span className="absolute left-0 top-1/2 h-6 w-1 -translate-y-1/2 rounded-r bg-gradient-to-b from-brand to-brand2" />
                   ) : null}
                   {item.icon}
@@ -671,7 +683,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </div>
               ) : null}
 
-              {onboardingVisible ? (
+              {onboardingPanelVisible ? (
                 <div className="border-t border-borderSubtle bg-panel/40 px-3 py-2 md:px-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
@@ -696,7 +708,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               ) : null}
             </header>
 
-            {onboardingVisible && !onboardingCollapsed ? (
+            {onboardingPanelVisible && !onboardingCollapsed ? (
               <div className="mb-3 rounded-[var(--radius-md)] border border-borderSubtle/70 bg-panel/55 px-3 py-3 shadow-elev1 md:mb-4 md:px-4">
                 <div className="grid gap-2">
                   <div className="flex flex-wrap gap-2">

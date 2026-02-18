@@ -2546,6 +2546,166 @@ describe("personal billing credits (memory store + fake Stripe)", () => {
   });
 });
 
+describe("llm provider api key test endpoint", () => {
+  const store = createPaidMemoryStore();
+  const queueProducer = createFakeQueueProducer();
+  let server: Awaited<ReturnType<typeof buildServer>>;
+
+  async function createOwnerOrg(tag: string) {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `${tag}-owner-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = bearerToken(signup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: `${tag} Org`, slug: `${tag}-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+    return { ownerToken, orgId };
+  }
+
+  beforeAll(async () => {
+    server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      queueProducer,
+    });
+  });
+
+  afterAll(async () => {
+    await server.close();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns valid=true for owner/admin when provider accepts key", async () => {
+    const { ownerToken, orgId } = await createOwnerOrg("key-test-ok");
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const tested = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/llm/providers/openai/test-key`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { value: "sk-test-valid" },
+      });
+
+      expect(tested.statusCode).toBe(200);
+      const body = tested.json() as { valid: boolean; provider: string; apiKind: string; checkedAt: string };
+      expect(body.valid).toBe(true);
+      expect(body.provider).toBe("openai");
+      expect(body.apiKind).toBe("openai-compatible");
+      expect(typeof body.checkedAt).toBe("string");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("returns LLM_KEY_INVALID when provider rejects API key", async () => {
+    const { ownerToken, orgId } = await createOwnerOrg("key-test-invalid");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ error: { message: "invalid api key" } }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        })
+      )
+    );
+
+    try {
+      const tested = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/llm/providers/openai/test-key`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { value: "sk-test-invalid" },
+      });
+
+      expect(tested.statusCode).toBe(400);
+      expect((tested.json() as { code: string }).code).toBe("LLM_KEY_INVALID");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("forbids member role from testing provider keys", async () => {
+    const { ownerToken, orgId } = await createOwnerOrg("key-test-member");
+
+    const memberEmail = `key-test-member-${Date.now()}@example.com`;
+    const invite = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { email: memberEmail, roleKey: "member" },
+    });
+    expect(invite.statusCode).toBe(201);
+    const inviteToken = (invite.json() as { invitation: { token: string } }).invitation.token;
+
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: memberEmail, password: "Password123" },
+    });
+    expect(memberSignup.statusCode).toBe(201);
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+
+    const accept = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(accept.statusCode).toBe(200);
+
+    const tested = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/llm/providers/openai/test-key`,
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+      payload: { value: "sk-test-member" },
+    });
+    expect(tested.statusCode).toBe(403);
+  });
+
+  it("returns LLM_KEY_TEST_UNAVAILABLE when provider is unavailable", async () => {
+    const { ownerToken, orgId } = await createOwnerOrg("key-test-unavailable");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ error: { message: "upstream down" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        })
+      )
+    );
+
+    try {
+      const tested = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/llm/providers/openai/test-key`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { value: "sk-test-timeout" },
+      });
+
+      expect(tested.statusCode).toBe(503);
+      expect((tested.json() as { code: string }).code).toBe("LLM_KEY_TEST_UNAVAILABLE");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("vertex oauth advanced connection", () => {
   const store = createPaidMemoryStore();
   const queueProducer = createFakeQueueProducer();
@@ -2638,6 +2798,54 @@ describe("vertex oauth advanced connection", () => {
         (s) => (s.connectorId === "llm.vertex.oauth" || s.connectorId === "llm.google-vertex.oauth") && s.name === "default"
       )
     ).toBe(true);
+  });
+});
+
+describe("llm oauth device verification url defaults", () => {
+  const store = createPaidMemoryStore();
+  const queueProducer = createFakeQueueProducer();
+  let server: Awaited<ReturnType<typeof buildServer>>;
+
+  beforeAll(async () => {
+    server = await buildServer({
+      store,
+      oauthService: fakeOAuthService(),
+      queueProducer,
+    });
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  it("uses provider official default verification page instead of example.com", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `oauth-url-owner-${Date.now()}@example.com`, password: "Password123" },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = bearerToken(signup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "OAuth URL Org", slug: `oauth-url-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const started = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/llm/oauth/github-copilot/device/start`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { name: "default" },
+    });
+    expect(started.statusCode).toBe(200);
+    const body = started.json() as { verificationUri: string };
+    expect(body.verificationUri).toBe("https://github.com/login/device");
+    expect(body.verificationUri.includes("example.com/device")).toBe(false);
   });
 });
 

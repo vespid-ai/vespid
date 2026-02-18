@@ -174,6 +174,16 @@ const AGENT_INSTALLER_ARTIFACTS: AgentInstallerArtifact[] = [
   },
 ];
 
+const DEFAULT_LLM_OAUTH_VERIFY_URLS: Partial<Record<LlmProviderId, string>> = {
+  "openai-codex": "https://chatgpt.com",
+  "google-antigravity": "https://aistudio.google.com",
+  "google-gemini-cli": "https://aistudio.google.com",
+  "github-copilot": "https://github.com/login/device",
+  "qwen-portal": "https://chat.qwen.ai",
+  "minimax-portal": "https://www.minimax.io",
+  chutes: "https://chutes.ai",
+};
+
 function readSystemAdminEmailAllowlist(): Set<string> {
   return new Set(
     (process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST ?? process.env.SYSTEM_ADMIN_BOOTSTRAP_EMAILS ?? process.env.SYSTEM_ADMIN_EMAILS ?? "")
@@ -334,6 +344,13 @@ const createSecretSchema = z.object({
 const rotateSecretSchema = z.object({
   value: z.string().min(1),
 });
+
+const llmProviderTestKeySchema = z
+  .object({
+    value: z.string().min(1),
+    model: z.string().min(1).max(200).optional(),
+  })
+  .strict();
 
 const llmApiKindValues = [
   "openai-compatible",
@@ -871,6 +888,21 @@ function invalidSkillBundle(details?: unknown): AppError {
 
 function agentInstallerUnavailable(message = "Agent installer metadata is unavailable"): AppError {
   return new AppError(503, { code: "AGENT_INSTALLER_UNAVAILABLE", message });
+}
+
+function llmOauthVerifyUrlNotConfigured(provider: LlmProviderId, envVarName: string): AppError {
+  return new AppError(503, {
+    code: "LLM_OAUTH_VERIFY_URL_NOT_CONFIGURED",
+    message: `OAuth verification URL for ${provider} is not configured. Set ${envVarName}.`,
+  });
+}
+
+function llmKeyInvalid(message = "Provider rejected the API key"): AppError {
+  return new AppError(400, { code: "LLM_KEY_INVALID", message });
+}
+
+function llmKeyTestUnavailable(message = "Provider key validation is currently unavailable"): AppError {
+  return new AppError(503, { code: "LLM_KEY_TEST_UNAVAILABLE", message });
 }
 
 function normalizeAgentInstallerRepository(value: string | null | undefined): string {
@@ -2915,6 +2947,112 @@ export async function buildServer(input?: {
     return { ok: true };
   });
 
+  server.post("/v1/orgs/:orgId/llm/providers/:provider/test-key", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; provider?: string };
+    if (!params.orgId || !params.provider) {
+      throw badRequest("Missing orgId or provider");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage secrets");
+    }
+
+    const provider = normalizeLlmProviderId(params.provider);
+    if (!provider) {
+      throw badRequest("Unsupported LLM provider");
+    }
+    const providerMeta = getLlmProviderMeta(provider);
+    if (!providerMeta) {
+      throw badRequest("Unsupported LLM provider");
+    }
+    if (providerMeta.authMode !== "api-key") {
+      throw badRequest(`${provider} does not support API key authentication.`);
+    }
+
+    const parsed = llmProviderTestKeySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid API key test payload", parsed.error.flatten());
+    }
+
+    const value = parsed.data.value.trim();
+    if (!value) {
+      throw secretValueRequired();
+    }
+    const model = parsed.data.model?.trim() || providerMeta.defaultModelId;
+    if (!model) {
+      throw badRequest(`Provider ${provider} does not define a default model for API key testing.`);
+    }
+
+    const orgSettings = normalizeOrgSettings(
+      await store.getOrganizationSettings({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+      })
+    );
+    const runtime = resolveLlmProviderRuntime({ provider, orgSettings });
+    if (runtime.apiKind === "vertex") {
+      throw badRequest("vertex API kind requires OAuth credentials.");
+    }
+
+    const messages: OpenAiChatMessage[] = [
+      { role: "system", content: "You are running an API key health check. Reply with exactly: ok" },
+      { role: "user", content: "ok" },
+    ];
+
+    const result = await (async () => {
+      if (runtime.apiKind === "anthropic-compatible") {
+        return anthropicChatCompletion({
+          apiKey: value,
+          model,
+          messages,
+          timeoutMs: 1_000,
+          maxTokens: 32,
+          ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+        });
+      }
+      if (runtime.apiKind === "google") {
+        return geminiGenerateContent({
+          apiKey: value,
+          model,
+          messages,
+          timeoutMs: 1_000,
+          maxOutputChars: 128,
+          ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+        });
+      }
+      return openAiChatCompletion({
+        apiKey: value,
+        model,
+        messages,
+        timeoutMs: 1_000,
+        maxTokens: 32,
+        ...(runtime.apiBaseUrl ? { apiBaseUrl: runtime.apiBaseUrl } : {}),
+      });
+    })();
+
+    if (!result.ok) {
+      const statusMatch = /_REQUEST_FAILED:(\d{3})$/.exec(result.error);
+      const statusCode = statusMatch ? Number(statusMatch[1]) : null;
+      const invalidStatusCodes =
+        runtime.apiKind === "google"
+          ? new Set<number>([400, 401, 403])
+          : new Set<number>([401, 403]);
+      if (statusCode !== null && invalidStatusCodes.has(statusCode)) {
+        throw llmKeyInvalid();
+      }
+      throw llmKeyTestUnavailable(`Provider key validation failed: ${result.error}`);
+    }
+
+    return {
+      valid: true as const,
+      provider,
+      apiKind: runtime.apiKind,
+      checkedAt: new Date().toISOString(),
+    };
+  });
+
   function requireOrgAdminMembershipForSecretManagement(input: {
     organizationId: string;
     userId: string;
@@ -3049,7 +3187,11 @@ export async function buildServer(input?: {
     });
 
     const verifyUrlEnv = `LLM_OAUTH_${provider.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_VERIFY_URL`;
-    const verificationUri = process.env[verifyUrlEnv] ?? "https://example.com/device";
+    const verificationUri =
+      process.env[verifyUrlEnv]?.trim() || DEFAULT_LLM_OAUTH_VERIFY_URLS[provider] || null;
+    if (!verificationUri) {
+      throw llmOauthVerifyUrlNotConfigured(provider, verifyUrlEnv);
+    }
 
     return {
       provider,

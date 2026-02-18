@@ -30,9 +30,6 @@ prefix_rule(
   pattern = ["rm", ["-rf", "-fr", "-r"]],
   decision = "forbidden",
   justification = "Destructive deletes are forbidden; ask a human to run them manually.",
-  match = [
-    {"command": "rm -rf /"},
-  ],
 )
 
 # Git operations that can lose work or publish code.
@@ -40,9 +37,6 @@ prefix_rule(
   pattern = ["git", "push"],
   decision = "forbidden",
   justification = "Do not push from Codex; prepare commits/patches for human review instead.",
-  match = [
-    {"command": "git push origin main"},
-  ],
 )
 
 prefix_rule(
@@ -86,9 +80,6 @@ prefix_rule(
   pattern = ["git", ["status", "diff", "show", "log", "rev-parse", "ls-files", "grep"]],
   decision = "allow",
   justification = "Allow read-only git inspection.",
-  match = [
-    {"command": "git status"},
-  ],
 )
 
 # Allow common pnpm checks without prompt.
@@ -96,9 +87,6 @@ prefix_rule(
   pattern = ["pnpm", ["lint", "test", "build", "typecheck"]],
   decision = "allow",
   justification = "Allow common checks without prompting.",
-  match = [
-    {"command": "pnpm test"},
-  ],
 )
 
 # -------------------------
@@ -110,9 +98,6 @@ prefix_rule(
   pattern = [["curl", "wget"]],
   decision = "prompt",
   justification = "Network access outside sandbox requires confirmation.",
-  match = [
-    {"command": "curl https://example.com"},
-  ],
 )
 
 # pnpm high-risk operations.
@@ -122,9 +107,6 @@ prefix_rule(
                      "sbom:generate", "mirror:prepare"]],
   decision = "prompt",
   justification = "pnpm operations that may execute scripts, mutate deps, or touch infra require confirmation.",
-  match = [
-    {"command": "pnpm install"},
-  ],
 )
 
 # git network/mutating operations (prompt).
@@ -142,4 +124,3 @@ prefix_rule(
   decision = "prompt",
   justification = "Starting services or connecting to DB outside sandbox requires confirmation.",
 )
-

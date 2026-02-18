@@ -86,10 +86,16 @@
     "create": {
       "title": "New chat",
       "subtitle": "Pick a model, type your message, and send to begin.",
+      "heroTitle": "What should we work on?",
+      "heroSubtitle": "Start with a message. You can refine model and settings anytime.",
       "configureAdvanced": "Advanced",
       "advancedTitle": "Advanced chat settings",
       "button": "Create",
-      "created": "Chat created."
+      "created": "Chat created.",
+      "modelChipAria": "Choose model",
+      "modelChipFallback": "Select model",
+      "oauthRequired": "This model provider requires a connected account.",
+      "memberDefaults": "Members use organization default model settings."
     },
     "list": {
       "title": "Recent chats",
@@ -124,11 +130,15 @@
     },
     "chat": {
       "title": "Chat",
-      "subtitle": "Messages are persisted as events. Press Enter to send, Shift+Enter for newline.",
+      "subtitle": "Messages are persisted as events.",
       "empty": "No events yet. Send a message to begin.",
       "message": "Message",
       "placeholder": "Ask the agent to do something...",
-      "send": "Send"
+      "send": "Send",
+      "shortcutHint": "Enter to send, Shift+Enter for newline.",
+      "roleUser": "You",
+      "roleAssistant": "Assistant",
+      "roleSystem": "System"
     },
     "details": {
       "title": "Conversation details",
@@ -572,12 +582,12 @@
     },
     "pairingSteps": {
       "step1": "1. Create a pairing token",
-      "step2": "2. Run the node agent command with the token",
+      "step2": "2. Run the connect command with the token",
       "step3": "3. Refresh this page and verify the agent is online"
     },
     "installer": {
       "title": "Connector program",
-      "subtitle": "Download the standalone agent and run one command to connect this machine.",
+      "subtitle": "Download the standalone agent for your platform, then connect this machine.",
       "platforms": {
         "darwinArm64": "macOS (Apple Silicon)",
         "linuxX64": "Linux (x64)",
@@ -588,13 +598,21 @@
       "docs": "Setup guide",
       "downloadCommand": "Download and unpack",
       "connectCommand": "Connect to Vespid",
+      "downloadButton": "Download installer",
+      "sourceConnectCommand": "Connect from source (no binary required)",
+      "sourceStartCommand": "Restart from source",
+      "binaryArgsConnect": "Binary connect arguments",
+      "binaryArgsStart": "Binary start arguments",
       "fallbackTitle": "Installer temporarily unavailable",
       "fallbackDescription": "Installer metadata is unavailable right now. Please retry shortly or open the setup guide.",
+      "fallbackUsingDefaults": "Installer metadata is unavailable. Using default release links and commands.",
       "tokenMissing": "Create a pairing token to get a copy-ready connect command.",
       "tokenExpired": "The pairing token has expired. Create a new token before connecting.",
       "copyDownload": "Copy download command",
       "copyConnect": "Copy connect command",
-      "copyFallback": "Copy fallback command"
+      "copyFallback": "Copy fallback command",
+      "copySourceConnect": "Copy source connect command",
+      "copySourceStart": "Copy source start command"
     }
   },
   "toolsets": {

@@ -159,7 +159,8 @@ describe("Agents page installer experience", () => {
 
     expect(screen.getByText(messages.agents.installer.fallbackTitle)).toBeInTheDocument();
     expect(screen.getByText(messages.agents.installer.fallbackDescription)).toBeInTheDocument();
-    expect(screen.queryByText(/pnpm --filter @vespid\/node-agent dev -- connect --pairing-token/)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.downloadCommand)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.sourceConnectCommand)).not.toBeInTheDocument();
   });
 
   it("uses placeholder token in connect command when token is expired", async () => {
@@ -179,8 +180,25 @@ describe("Agents page installer experience", () => {
     await user.click(createButtons[0]!);
 
     await waitFor(() => {
-      expect(screen.getByText(/<pairing-token>/)).toBeInTheDocument();
+      expect(screen.getAllByText(/<pairing-token>/).length).toBeGreaterThan(0);
     });
     expect(screen.getByText(messages.agents.installer.tokenExpired)).toBeInTheDocument();
+  });
+
+  it("shows only three user-facing command blocks", () => {
+    const messages = readMessages("en");
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <AgentsPage />
+      </NextIntlClientProvider>
+    );
+
+    expect(screen.getByText(messages.agents.installer.downloadCommand)).toBeInTheDocument();
+    expect(screen.getByText(messages.agents.installer.connectCommand)).toBeInTheDocument();
+    expect(screen.getByText("Restart command")).toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.sourceConnectCommand)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.sourceStartCommand)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.binaryArgsConnect)).not.toBeInTheDocument();
+    expect(screen.queryByText(messages.agents.installer.binaryArgsStart)).not.toBeInTheDocument();
   });
 });

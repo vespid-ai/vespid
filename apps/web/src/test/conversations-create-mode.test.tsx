@@ -47,10 +47,6 @@ vi.mock("../lib/hooks/use-sessions", () => ({
   useCreateSession: () => ({ isPending: false, mutateAsync: mocks.createSession }),
 }));
 
-vi.mock("../components/app/llm/llm-config-field", () => ({
-  LlmConfigField: () => <div data-testid="llm-config-field" />,
-}));
-
 function readMessages(locale: "en" | "zh-CN") {
   const base = path.join(process.cwd(), "messages", `${locale}.json`);
   return JSON.parse(fs.readFileSync(base, "utf8")) as any;
@@ -73,11 +69,10 @@ describe("Conversations create modes", () => {
       </NextIntlClientProvider>
     );
 
-    const layout = Array.from(document.querySelectorAll("div")).find((node) =>
-      node.className.includes("xl:grid-cols-[240px_minmax(0,1fr)]")
-    );
-    expect(layout).toBeTruthy();
-    expect(screen.queryByText("Default mode keeps chat creation fast. Open advanced settings only when needed.")).not.toBeInTheDocument();
+    expect(screen.getByTestId("conversation-create-layout")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-composer")).toBeInTheDocument();
+    expect(screen.getByTestId("session-model-chip")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-recent-list")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText(messages.sessions.chat.message), "Ship this sprint");
     await user.click(screen.getByRole("button", { name: messages.sessions.chat.send }));
