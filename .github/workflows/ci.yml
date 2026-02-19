@@ -105,6 +105,22 @@ jobs:
       - name: Web checks
         run: pnpm --filter @vespid/web lint && pnpm --filter @vespid/web test
 
+      - name: Install Playwright browsers
+        run: pnpm --filter @vespid/web exec playwright install --with-deps chromium
+
+      - name: Web E2E (Playwright)
+        run: pnpm --filter @vespid/web test:e2e
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-playwright-artifacts
+          path: |
+            output/playwright/web-report
+            output/playwright/web-test-results
+          if-no-files-found: ignore
+
       - name: Build
         run: pnpm build
 

@@ -224,6 +224,44 @@
           }
         }
       },
+      "wizard": {
+        "heroTitle": "3 步完成模型连接",
+        "heroSubtitle": "会话与工作流都在 BYON 执行器上运行。先选引擎，再配置连接方式，最后验证完成。",
+        "pendingItems": "待处理项",
+        "engineRailTitle": "引擎列表",
+        "recommended": "推荐",
+        "selected": "已选择",
+        "path": {
+          "subtitle": "为当前引擎选择凭据来源。",
+          "oauthDescription": "在每台执行器主机使用 CLI 登录，适合团队默认路径。",
+          "apiKeyDescription": "使用组织托管 API Key，并可选配置企业 Base URL。"
+        },
+        "steps": {
+          "selectEngine": {
+            "title": "步骤 1 · 选择引擎与路径",
+            "desc": "选择目标引擎并确认推荐连接路径。"
+          },
+          "configure": {
+            "title": "步骤 2 · 配置凭据",
+            "desc": "填写 API Key/Base URL，或按执行器侧 OAuth 指引完成登录。"
+          },
+          "verify": {
+            "title": "步骤 3 · 验证并完成",
+            "desc": "检查执行器状态，保存配置并继续下一个引擎。"
+          }
+        },
+        "verifySubtitle": "验证在执行器主机完成，而不是在浏览器内完成。",
+        "baseUrlPlaceholder": "https://your-endpoint.example.com/v1",
+        "baseUrlExecutorScoped": "仅在 API Key 模式启用时，将 Base URL 应用到执行器主机运行时。",
+        "executorOauthOnly": "OAuth 验证状态来自执行器心跳与鉴权探测结果。",
+        "oauthUsesExecutor": "当前路径使用执行器侧账号登录，控制面不保存对应密钥。",
+        "apiKeyUsesExecutor": "当前路径会在执行器运行时注入组织级 API Key。",
+        "currentBaseUrl": "当前 Base URL",
+        "saveCurrent": "保存当前路径",
+        "saveAndNext": "保存并配置下一个引擎",
+        "opencodeTemplateTitle": "OpenCode Provider 配置模板",
+        "opencodeTemplateSubtitle": "Provider JSON 存放在执行器主机，本页只保存模式选择。"
+      },
       "runtimeTitle": "提供方运行时覆盖",
       "runtimeSubtitle": "支持 OpenAI-like / 自定义端点的 base URL 与 API kind 覆盖。",
       "provider": "提供方",

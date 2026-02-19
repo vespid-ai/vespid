@@ -354,6 +354,20 @@ const agentEngineAuthDefaultsSchema = z
   })
   .strict();
 
+const agentEngineRuntimeDefaultSchema = z
+  .object({
+    baseUrl: z.string().url().max(2000).nullable().optional(),
+  })
+  .strict();
+
+const agentEngineRuntimeDefaultsSchema = z
+  .object({
+    "gateway.codex.v2": agentEngineRuntimeDefaultSchema.optional(),
+    "gateway.claude.v2": agentEngineRuntimeDefaultSchema.optional(),
+    "gateway.opencode.v2": agentEngineRuntimeDefaultSchema.optional(),
+  })
+  .strict();
+
 const channelIdSchema = z.enum([
   "whatsapp",
   "telegram",
@@ -465,6 +479,7 @@ const orgSettingsSchema = z
     agents: z
       .object({
         engineAuthDefaults: agentEngineAuthDefaultsSchema.optional(),
+        engineRuntimeDefaults: agentEngineRuntimeDefaultsSchema.optional(),
       })
       .strict()
       .optional(),
@@ -501,6 +516,16 @@ type AgentEngineAuthDefaults = {
   "gateway.opencode.v2": AgentEngineAuthDefault;
 };
 
+type AgentEngineRuntimeDefault = {
+  baseUrl: string | null;
+};
+
+type AgentEngineRuntimeDefaults = {
+  "gateway.codex.v2": AgentEngineRuntimeDefault;
+  "gateway.claude.v2": AgentEngineRuntimeDefault;
+  "gateway.opencode.v2": AgentEngineRuntimeDefault;
+};
+
 function defaultEngineAuthMode(engineId: keyof AgentEngineAuthDefaults): "oauth_executor" | "api_key" {
   return engineId === "gateway.opencode.v2" ? "api_key" : "oauth_executor";
 }
@@ -525,6 +550,26 @@ function normalizeAgentEngineAuthDefaults(value: unknown): AgentEngineAuthDefaul
   };
 }
 
+function normalizeAgentEngineRuntimeDefault(value: unknown): AgentEngineRuntimeDefault {
+  const parsed = agentEngineRuntimeDefaultSchema.safeParse(value ?? {});
+  if (!parsed.success) {
+    return { baseUrl: null };
+  }
+  return {
+    baseUrl: typeof parsed.data.baseUrl === "string" ? parsed.data.baseUrl : null,
+  };
+}
+
+function normalizeAgentEngineRuntimeDefaults(value: unknown): AgentEngineRuntimeDefaults {
+  const parsed = agentEngineRuntimeDefaultsSchema.safeParse(value ?? {});
+  const raw = parsed.success ? parsed.data : {};
+  return {
+    "gateway.codex.v2": normalizeAgentEngineRuntimeDefault(raw["gateway.codex.v2"]),
+    "gateway.claude.v2": normalizeAgentEngineRuntimeDefault(raw["gateway.claude.v2"]),
+    "gateway.opencode.v2": normalizeAgentEngineRuntimeDefault(raw["gateway.opencode.v2"]),
+  };
+}
+
 function normalizeOrgSettings(input: unknown): {
   tools: { shellRunEnabled: boolean };
   toolsets: { defaultToolsetId: string | null };
@@ -536,6 +581,7 @@ function normalizeOrgSettings(input: unknown): {
   };
   agents: {
     engineAuthDefaults: AgentEngineAuthDefaults;
+    engineRuntimeDefaults: AgentEngineRuntimeDefaults;
   };
 } {
   const root = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
@@ -599,6 +645,7 @@ function normalizeOrgSettings(input: unknown): {
     },
     agents: {
       engineAuthDefaults: normalizeAgentEngineAuthDefaults(agentsObj.engineAuthDefaults),
+      engineRuntimeDefaults: normalizeAgentEngineRuntimeDefaults(agentsObj.engineRuntimeDefaults),
     },
   };
 }
@@ -2466,6 +2513,7 @@ export async function buildServer(input?: {
     const llmDefaultsPatch = parsed.data.llm?.defaults;
     const llmProvidersPatch = parsed.data.llm?.providers;
     const engineAuthDefaultsPatch = parsed.data.agents?.engineAuthDefaults;
+    const engineRuntimeDefaultsPatch = parsed.data.agents?.engineRuntimeDefaults;
 
     const nextProviderOverrides: Partial<Record<LlmProviderId, { baseUrl: string | null; apiKind: LlmProviderApiKind | null }>> =
       llmProvidersPatch
@@ -2526,6 +2574,20 @@ export async function buildServer(input?: {
             engineAuthDefaultsPatch && "gateway.opencode.v2" in engineAuthDefaultsPatch
               ? normalizeAgentEngineAuthDefault("gateway.opencode.v2", engineAuthDefaultsPatch["gateway.opencode.v2"])
               : normalizedExisting.agents.engineAuthDefaults["gateway.opencode.v2"],
+        },
+        engineRuntimeDefaults: {
+          "gateway.codex.v2":
+            engineRuntimeDefaultsPatch && "gateway.codex.v2" in engineRuntimeDefaultsPatch
+              ? normalizeAgentEngineRuntimeDefault(engineRuntimeDefaultsPatch["gateway.codex.v2"])
+              : normalizedExisting.agents.engineRuntimeDefaults["gateway.codex.v2"],
+          "gateway.claude.v2":
+            engineRuntimeDefaultsPatch && "gateway.claude.v2" in engineRuntimeDefaultsPatch
+              ? normalizeAgentEngineRuntimeDefault(engineRuntimeDefaultsPatch["gateway.claude.v2"])
+              : normalizedExisting.agents.engineRuntimeDefaults["gateway.claude.v2"],
+          "gateway.opencode.v2":
+            engineRuntimeDefaultsPatch && "gateway.opencode.v2" in engineRuntimeDefaultsPatch
+              ? normalizeAgentEngineRuntimeDefault(engineRuntimeDefaultsPatch["gateway.opencode.v2"])
+              : normalizedExisting.agents.engineRuntimeDefaults["gateway.opencode.v2"],
         },
       },
     };
@@ -3645,6 +3707,7 @@ export async function buildServer(input?: {
       })
     );
     const engineAuthDefault = orgSettings.agents.engineAuthDefaults[engineId];
+    const engineRuntimeDefault = orgSettings.agents.engineRuntimeDefaults[engineId];
     const resolvedEngineSecretId =
       body.data.engine.auth?.secretId ??
       (engineAuthDefault.mode === "api_key" && typeof engineAuthDefault.secretId === "string" ? engineAuthDefault.secretId : null);
@@ -3652,6 +3715,7 @@ export async function buildServer(input?: {
       id: engineId,
       model: body.data.engine.model?.trim() || engineMeta.defaultModel,
       auth: { secretId: resolvedEngineSecretId },
+      runtime: { baseUrl: engineRuntimeDefault.baseUrl ?? null },
     };
 
     const bindings = await store.listAgentBindings({
@@ -3748,6 +3812,13 @@ export async function buildServer(input?: {
       prompt: { system: body.data.prompt.system ?? null, instructions: body.data.prompt.instructions },
       tools: body.data.tools,
       limits: body.data.limits ?? {},
+      runtime: {
+        engine: {
+          [engineId]: {
+            baseUrl: resolvedEngine.runtime.baseUrl,
+          },
+        },
+      },
       resetPolicySnapshot: body.data.resetPolicy ?? {},
       executorSelector: body.data.executorSelector ?? { pool: "byon" },
     });

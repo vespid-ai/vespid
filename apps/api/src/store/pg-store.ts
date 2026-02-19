@@ -2358,6 +2358,7 @@ export class PgAppStore implements AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
+    runtime?: unknown;
     resetPolicySnapshot?: unknown;
     executorSelector?: { pool: "managed" | "byon"; labels?: string[]; group?: string; tag?: string; executorId?: string } | null;
   }): Promise<AgentSessionRecord> {
@@ -2383,6 +2384,7 @@ export class PgAppStore implements AppStore {
           llmSecretId: input.llm.auth?.secretId ?? null,
           toolsAllow: input.tools.allow,
           limits: input.limits ?? {},
+          runtime: input.runtime ?? {},
           promptSystem: input.prompt.system ?? null,
           promptInstructions: input.prompt.instructions,
           resetPolicySnapshot: input.resetPolicySnapshot ?? {},

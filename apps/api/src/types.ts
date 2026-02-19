@@ -61,6 +61,14 @@ export type OrganizationSettings = {
         }
       >
     >;
+    engineRuntimeDefaults?: Partial<
+      Record<
+        AgentEngineId,
+        {
+          baseUrl?: string | null;
+        }
+      >
+    >;
   };
 };
 
@@ -924,6 +932,7 @@ export interface AppStore {
     prompt: { system?: string | null; instructions: string };
     tools: { allow: string[] };
     limits?: unknown;
+    runtime?: unknown;
     resetPolicySnapshot?: unknown;
     executorSelector?: ExecutorSelectorV1 | null;
   }): Promise<AgentSessionRecord>;

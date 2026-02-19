@@ -542,6 +542,9 @@ export type GatewaySessionOpenV2 = {
       id: "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2";
       model?: string;
       authMode: "env" | "inline_api_key" | "oauth_executor";
+      runtime?: {
+        baseUrl?: string | null;
+      };
       auth?:
         | {
             kind: "api_key";

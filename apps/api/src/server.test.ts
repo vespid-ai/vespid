@@ -2211,6 +2211,9 @@ describe("api hardening foundation", () => {
     });
     expect(getInitial.statusCode).toBe(200);
     expect((getInitial.json() as any).settings.tools.shellRunEnabled).toBe(false);
+    expect((getInitial.json() as any).settings.agents.engineRuntimeDefaults["gateway.codex.v2"].baseUrl).toBeNull();
+    expect((getInitial.json() as any).settings.agents.engineRuntimeDefaults["gateway.claude.v2"].baseUrl).toBeNull();
+    expect((getInitial.json() as any).settings.agents.engineRuntimeDefaults["gateway.opencode.v2"].baseUrl).toBeNull();
 
     const updated = await server.inject({
       method: "PUT",
@@ -2230,6 +2233,58 @@ describe("api hardening foundation", () => {
     expect(updatePrimaryDefault.statusCode).toBe(200);
     expect((updatePrimaryDefault.json() as any).settings.llm.defaults.primary.provider).toBe("openai");
     expect((updatePrimaryDefault.json() as any).settings.llm.defaults.primary.model).toBe("gpt-5.3-codex");
+
+    const updateEngineRuntime = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        agents: {
+          engineRuntimeDefaults: {
+            "gateway.codex.v2": { baseUrl: "http://127.0.0.1:8045" },
+          },
+        },
+      },
+    });
+    expect(updateEngineRuntime.statusCode).toBe(200);
+    expect((updateEngineRuntime.json() as any).settings.agents.engineRuntimeDefaults["gateway.codex.v2"].baseUrl).toBe(
+      "http://127.0.0.1:8045"
+    );
+    expect((updateEngineRuntime.json() as any).settings.agents.engineRuntimeDefaults["gateway.claude.v2"].baseUrl).toBeNull();
+
+    const mergeEngineRuntime = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        agents: {
+          engineRuntimeDefaults: {
+            "gateway.claude.v2": { baseUrl: "http://localhost:9999" },
+          },
+        },
+      },
+    });
+    expect(mergeEngineRuntime.statusCode).toBe(200);
+    expect((mergeEngineRuntime.json() as any).settings.agents.engineRuntimeDefaults["gateway.codex.v2"].baseUrl).toBe(
+      "http://127.0.0.1:8045"
+    );
+    expect((mergeEngineRuntime.json() as any).settings.agents.engineRuntimeDefaults["gateway.claude.v2"].baseUrl).toBe(
+      "http://localhost:9999"
+    );
+
+    const invalidEngineRuntime = await server.inject({
+      method: "PUT",
+      url: `/v1/orgs/${orgId}/settings`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        agents: {
+          engineRuntimeDefaults: {
+            "gateway.codex.v2": { baseUrl: "not-a-url" },
+          },
+        },
+      },
+    });
+    expect(invalidEngineRuntime.statusCode).toBe(400);
 
     const rejectLegacyDefaults = await server.inject({
       method: "PUT",
@@ -2325,10 +2380,16 @@ describe("api hardening foundation", () => {
               "gateway.codex.v2": { mode: "api_key", secretId },
               "gateway.claude.v2": { mode: "oauth_executor" },
             },
+            engineRuntimeDefaults: {
+              "gateway.codex.v2": { baseUrl: "http://127.0.0.1:8045" },
+            },
           },
         },
       });
       expect(updatedSettings.statusCode).toBe(200);
+      expect((updatedSettings.json() as any).settings.agents.engineRuntimeDefaults["gateway.codex.v2"].baseUrl).toBe(
+        "http://127.0.0.1:8045"
+      );
 
       const codexSession = await server.inject({
         method: "POST",

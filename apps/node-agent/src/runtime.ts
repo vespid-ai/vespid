@@ -143,6 +143,11 @@ const sessionOpenSchema = z.object({
       id: z.enum(AGENT_ENGINE_IDS),
       model: z.string().min(1).optional(),
       authMode: z.enum(["env", "inline_api_key", "oauth_executor"]).default("env"),
+      runtime: z
+        .object({
+          baseUrl: z.string().url().optional().nullable(),
+        })
+        .optional(),
       auth: z
         .object({
           kind: z.literal("api_key"),
@@ -302,6 +307,11 @@ const agentRunPayloadSchema = z
         connectors: z.record(z.string().min(1), z.string()).optional(),
       })
       .optional(),
+    resolvedRuntime: z
+      .object({
+        baseUrl: z.string().url().nullable().optional(),
+      })
+      .optional(),
   })
   .passthrough();
 
@@ -387,6 +397,28 @@ function defaultEngineModel(engineId: AgentEngineId): string {
   if (engineId === "gateway.codex.v2") return "gpt-5-codex";
   if (engineId === "gateway.claude.v2") return "claude-sonnet-4-20250514";
   return "claude-opus-4-6";
+}
+
+function buildEngineCredentialEnv(input: {
+  engineId: AgentEngineId;
+  apiKey?: string | null;
+  baseUrl?: string | null;
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  if (input.apiKey && input.apiKey.trim().length > 0) {
+    const key = input.apiKey.trim();
+    if (input.engineId === "gateway.claude.v2") env.ANTHROPIC_API_KEY = key;
+    else env.OPENAI_API_KEY = key;
+  }
+  if (input.baseUrl && input.baseUrl.trim().length > 0) {
+    const baseUrl = input.baseUrl.trim();
+    if (input.engineId === "gateway.claude.v2") {
+      env.ANTHROPIC_BASE_URL = baseUrl;
+    } else {
+      env.OPENAI_BASE_URL = baseUrl;
+    }
+  }
+  return env;
 }
 
 type ExecutorOauthEngineId = Extract<AgentEngineId, "gateway.codex.v2" | "gateway.claude.v2">;
@@ -605,18 +637,18 @@ async function executeEnginePrompt(input: {
   workspaceDir: string;
   timeoutMs: number;
   apiKey?: string | null;
+  baseUrl?: string | null;
   signal?: AbortSignal;
 }): Promise<
   | { ok: true; content: string; raw: { stdout: string; stderr: string } }
   | { ok: false; code: string; message: string; raw?: { stdout: string; stderr: string } }
 > {
   const command = resolveEngineCommand(input.engineId);
-  const env: NodeJS.ProcessEnv = {};
-  if (input.apiKey && input.apiKey.trim().length > 0) {
-    const key = input.apiKey.trim();
-    if (input.engineId === "gateway.claude.v2") env.ANTHROPIC_API_KEY = key;
-    else env.OPENAI_API_KEY = key;
-  }
+  const env = buildEngineCredentialEnv({
+    engineId: input.engineId,
+    apiKey: input.apiKey ?? null,
+    baseUrl: input.baseUrl ?? null,
+  });
 
   const attempts: string[][] =
     input.engineId === "gateway.codex.v2"
@@ -747,6 +779,7 @@ async function buildSessionRuntimeManager(input: {
           ctx.opened.sessionConfig.engine.authMode === "inline_api_key" && ctx.opened.sessionConfig.engine.auth?.kind === "api_key"
             ? ctx.opened.sessionConfig.engine.auth.apiKey
             : null,
+        baseUrl: ctx.opened.sessionConfig.engine.runtime?.baseUrl ?? null,
         signal: controller.signal,
       });
     } finally {
@@ -998,6 +1031,7 @@ async function executeTool(input: {
       workspaceDir: workspace.workdir,
       timeoutMs: cfg.limits?.timeoutMs ?? policy.timeoutMs ?? 60_000,
       apiKey: parsed.data.resolvedSecrets?.engine ?? null,
+      baseUrl: parsed.data.resolvedRuntime?.baseUrl ?? null,
     });
     if (!baseResult.ok) {
       return { type: "tool_result_v2", requestId: incoming.requestId, status: "failed", error: `${baseResult.code}:${baseResult.message}` };
@@ -1076,6 +1110,7 @@ async function executeTool(input: {
         workspaceDir: workspace.workdir,
         timeoutMs: cfg.limits?.timeoutMs ?? policy.timeoutMs ?? 60_000,
         apiKey: parsed.data.resolvedSecrets?.engine ?? null,
+        baseUrl: parsed.data.resolvedRuntime?.baseUrl ?? null,
       });
       if (rerun.ok) {
         finalContent = rerun.content;
@@ -1473,6 +1508,7 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
 export const __testables = {
   parseCommandString,
   probeEngineOauthStatus,
+  buildEngineCredentialEnv,
 };
 
 // Backward-compatible helper export name.

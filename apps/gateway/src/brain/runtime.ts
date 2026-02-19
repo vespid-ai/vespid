@@ -112,12 +112,70 @@ type SelectExecutorResult =
       error: "NO_EXECUTOR_AVAILABLE" | "EXECUTOR_OVER_CAPACITY" | "ORG_QUOTA_EXCEEDED" | "EXECUTOR_OAUTH_NOT_VERIFIED";
     };
 
+const SUPPORTED_ENGINE_IDS = ["gateway.codex.v2", "gateway.claude.v2", "gateway.opencode.v2"] as const;
+type SupportedEngineId = (typeof SUPPORTED_ENGINE_IDS)[number];
+
+function isSupportedEngineId(input: string): input is SupportedEngineId {
+  return input === "gateway.codex.v2" || input === "gateway.claude.v2" || input === "gateway.opencode.v2";
+}
+
 function requiresExecutorOAuth(engineId: string, hasInlineSecret: boolean): ExecutorOauthEngineId | null {
   if (hasInlineSecret) return null;
   if (engineId === "gateway.codex.v2" || engineId === "gateway.claude.v2") {
     return engineId;
   }
   return null;
+}
+
+function readEngineRuntimeBaseUrlFromOrgSettings(input: {
+  organizationSettings: unknown;
+  engineId: string;
+}): string | null {
+  if (!isSupportedEngineId(input.engineId)) {
+    return null;
+  }
+  if (!input.organizationSettings || typeof input.organizationSettings !== "object" || Array.isArray(input.organizationSettings)) {
+    return null;
+  }
+  const agents = (input.organizationSettings as any).agents;
+  if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
+    return null;
+  }
+  const runtimeDefaults = (agents as any).engineRuntimeDefaults;
+  if (!runtimeDefaults || typeof runtimeDefaults !== "object" || Array.isArray(runtimeDefaults)) {
+    return null;
+  }
+  const engineDefault = (runtimeDefaults as any)[input.engineId];
+  if (!engineDefault || typeof engineDefault !== "object" || Array.isArray(engineDefault)) {
+    return null;
+  }
+  const baseUrl = (engineDefault as any).baseUrl;
+  if (typeof baseUrl !== "string" || baseUrl.trim().length === 0) {
+    return null;
+  }
+  return baseUrl.trim();
+}
+
+function readEngineRuntimeBaseUrlFromSession(input: { sessionRuntime: unknown; engineId: string }): string | null {
+  if (!isSupportedEngineId(input.engineId)) {
+    return null;
+  }
+  if (!input.sessionRuntime || typeof input.sessionRuntime !== "object" || Array.isArray(input.sessionRuntime)) {
+    return null;
+  }
+  const runtimeRoot = input.sessionRuntime as Record<string, unknown>;
+  const engineRuntime =
+    runtimeRoot.engine && typeof runtimeRoot.engine === "object" && !Array.isArray(runtimeRoot.engine)
+      ? ((runtimeRoot.engine as Record<string, unknown>)[input.engineId] as Record<string, unknown> | undefined)
+      : undefined;
+  if (!engineRuntime || typeof engineRuntime !== "object" || Array.isArray(engineRuntime)) {
+    return null;
+  }
+  const baseUrl = engineRuntime.baseUrl;
+  if (typeof baseUrl !== "string" || baseUrl.trim().length === 0) {
+    return null;
+  }
+  return baseUrl.trim();
 }
 
 async function selectExecutorForTool(redis: Redis, input: {
@@ -686,6 +744,13 @@ export async function startGatewayBrainRuntime(input?: {
         .safeParse(parsed.data.node);
       const runEngineId = runEngineParsed.success ? runEngineParsed.data.config.engine.id : "";
       const resolvedEngineSecretValue = (resolvedEngineSecret ?? "").trim();
+      const resolvedRuntimeBaseUrl =
+        resolvedEngineSecretValue.length > 0
+          ? readEngineRuntimeBaseUrlFromOrgSettings({
+              organizationSettings: parsed.data.organizationSettings,
+              engineId: runEngineId,
+            })
+          : null;
       const oauthRequiredEngine = requiresExecutorOAuth(runEngineId, Boolean(secretRefs.engineSecretId));
 
       const tool = await invokeToolOnExecutor({
@@ -699,6 +764,9 @@ export async function startGatewayBrainRuntime(input?: {
           resolvedSecrets: {
             engine: resolvedEngineSecretValue.length > 0 ? resolvedEngineSecretValue : null,
             connectors: resolvedConnectorSecrets,
+          },
+          resolvedRuntime: {
+            baseUrl: resolvedRuntimeBaseUrl,
           },
         },
         timeoutMs: inputDispatch.timeoutMs,
@@ -807,6 +875,13 @@ export async function startGatewayBrainRuntime(input?: {
           : oauthRequiredEngine
             ? "oauth_executor"
             : "env";
+      const engineRuntimeBaseUrl =
+        engineAuthMode === "inline_api_key"
+          ? readEngineRuntimeBaseUrlFromSession({
+              sessionRuntime: (session as any).runtime,
+              engineId: sessionEngineId,
+            })
+          : null;
 
       const existingPinnedExecutorId =
         typeof (session as any).pinnedExecutorId === "string" && (session as any).pinnedExecutorId.length > 0
@@ -1011,6 +1086,7 @@ export async function startGatewayBrainRuntime(input?: {
               id: sessionEngineId as "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2",
               ...(typeof (session as any).llmModel === "string" ? { model: (session as any).llmModel } : {}),
               authMode: engineAuthMode,
+              ...(engineRuntimeBaseUrl ? { runtime: { baseUrl: engineRuntimeBaseUrl } } : {}),
               ...(engineAuthMode === "inline_api_key"
                 ? {
                     auth: {
@@ -1367,3 +1443,8 @@ export async function startGatewayBrainRuntime(input?: {
     },
   };
 }
+
+export const __testables = {
+  readEngineRuntimeBaseUrlFromOrgSettings,
+  readEngineRuntimeBaseUrlFromSession,
+};

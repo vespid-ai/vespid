@@ -14,6 +14,12 @@ export type OrgSettings = {
         { mode?: "oauth_executor" | "api_key"; secretId?: string | null }
       >
     >;
+    engineRuntimeDefaults?: Partial<
+      Record<
+        "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2",
+        { baseUrl?: string | null }
+      >
+    >;
   };
   llm?: {
     defaults?: {

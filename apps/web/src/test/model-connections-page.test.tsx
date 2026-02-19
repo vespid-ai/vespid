@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(async () => ({})),
   authStatusRefetch: vi.fn(async () => ({})),
   updateOrgSettingsMutate: vi.fn(async () => ({})),
-  createSecretMutate: vi.fn(async () => ({})),
+  createSecretMutate: vi.fn(async () => ({ secret: { id: "sec_1" } })),
   rotateSecretMutate: vi.fn(async () => ({})),
   deleteSecretMutate: vi.fn(async () => ({})),
   secrets: [] as Array<{ id: string; connectorId: string; name: string; createdAt: string; updatedAt: string; updatedByUserId: string }>,
@@ -53,6 +53,11 @@ vi.mock("../lib/hooks/use-org-settings", () => ({
             "gateway.claude.v2": { mode: "api_key", secretId: null },
             "gateway.opencode.v2": { mode: "api_key", secretId: null },
           },
+          engineRuntimeDefaults: {
+            "gateway.codex.v2": { baseUrl: null },
+            "gateway.claude.v2": { baseUrl: null },
+            "gateway.opencode.v2": { baseUrl: null },
+          },
         },
       },
     },
@@ -71,9 +76,12 @@ function readMessages() {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
 }
 
+const queryClients: QueryClient[] = [];
+
 function renderPage() {
   const messages = readMessages();
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Number.POSITIVE_INFINITY } } });
+  queryClients.push(client);
   return render(
     <NextIntlClientProvider locale="en" messages={messages}>
       <QueryClientProvider client={client}>
@@ -83,7 +91,15 @@ function renderPage() {
   );
 }
 
-describe("ModelConnectionsPage engine connections", () => {
+describe("ModelConnectionsPage wizard", () => {
+  afterEach(() => {
+    cleanup();
+    for (const client of queryClients) {
+      client.clear();
+    }
+    queryClients.length = 0;
+  });
+
   beforeEach(() => {
     mocks.push.mockReset();
     mocks.apiFetchJson.mockReset();
@@ -137,59 +153,66 @@ describe("ModelConnectionsPage engine connections", () => {
     });
   });
 
-  it("renders three supported engine cards", async () => {
+  it("renders wizard with engine rail", async () => {
     renderPage();
-    await screen.findByTestId("engine-card-gateway.codex.v2");
-    expect(screen.getByTestId("engine-card-gateway.claude.v2")).toBeInTheDocument();
-    expect(screen.getByTestId("engine-card-gateway.opencode.v2")).toBeInTheDocument();
-    expect(screen.getByTestId("connection-matrix")).toBeInTheDocument();
-    expect(screen.getByText("Connection matrix")).toBeInTheDocument();
+    await screen.findByTestId("model-connections-wizard");
+    expect(screen.getByTestId("engine-rail-item-gateway.codex.v2")).toBeInTheDocument();
+    expect(screen.getByTestId("engine-rail-item-gateway.claude.v2")).toBeInTheDocument();
+    expect(screen.getByTestId("engine-rail-item-gateway.opencode.v2")).toBeInTheDocument();
   });
 
-  it("creates connector secret for engine API key", async () => {
+  it("shows Claude API key + Base URL fields and saves both auth/runtime defaults", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    const codexCard = await screen.findByTestId("engine-card-gateway.codex.v2");
-    const input = within(codexCard).getByLabelText("API key");
-    await user.type(input, "sk-codex-test");
-    await user.click(within(codexCard).getByRole("button", { name: "Save" }));
+    await screen.findByTestId("engine-rail-item-gateway.claude.v2");
+    await user.click(screen.getByTestId("engine-rail-item-gateway.claude.v2"));
+
+    const claudeInput = await screen.findByTestId("api-key-input-gateway.claude.v2");
+    const claudeBaseUrlInput = screen.getByTestId("base-url-input-gateway.claude.v2");
+
+    await user.type(claudeInput, "sk-claude-test");
+    await user.type(claudeBaseUrlInput, "http://127.0.0.1:8045");
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       expect(mocks.createSecretMutate).toHaveBeenCalledWith({
-        connectorId: "agent.codex",
+        connectorId: "agent.claude",
         name: "default",
-        value: "sk-codex-test",
+        value: "sk-claude-test",
       });
     });
-  });
-
-  it("renders OpenCode method labels without legacy OAuth account wording", async () => {
-    renderPage();
-    const opencodeCard = await screen.findByTestId("engine-card-gateway.opencode.v2");
-    expect(within(opencodeCard).getByRole("button", { name: "Executor-managed provider profile" })).toBeInTheDocument();
-    expect(within(opencodeCard).getByRole("button", { name: "Vespid-managed API key" })).toBeInTheDocument();
-    expect(within(opencodeCard).queryByText("OAuth account")).not.toBeInTheDocument();
-  });
-
-  it("switches OpenCode to executor-managed provider profile mode", async () => {
-    const user = userEvent.setup();
-    renderPage();
-
-    const opencodeCard = await screen.findByTestId("engine-card-gateway.opencode.v2");
-    await user.click(within(opencodeCard).getByRole("button", { name: "Executor-managed provider profile" }));
 
     await waitFor(() => {
       expect(mocks.updateOrgSettingsMutate).toHaveBeenCalledWith({
         agents: {
           engineAuthDefaults: {
-            "gateway.opencode.v2": {
-              mode: "oauth_executor",
-              secretId: null,
+            "gateway.claude.v2": {
+              mode: "api_key",
+              secretId: "sec_1",
+            },
+          },
+          engineRuntimeDefaults: {
+            "gateway.claude.v2": {
+              baseUrl: "http://127.0.0.1:8045",
             },
           },
         },
       });
     });
+  });
+
+  it("renders OpenCode executor-managed path without OAuth account wording", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByTestId("engine-rail-item-gateway.opencode.v2");
+    await user.click(screen.getByTestId("engine-rail-item-gateway.opencode.v2"));
+    await user.click(screen.getByTestId("connection-path-oauth_executor"));
+
+    expect(screen.getAllByText("Executor-managed provider profile").length).toBeGreaterThan(0);
+    expect(screen.getByText("OpenCode provider profile template")).toBeInTheDocument();
+    expect(screen.queryByText("OAuth account")).not.toBeInTheDocument();
   });
 });

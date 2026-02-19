@@ -338,6 +338,44 @@
           }
         }
       },
+      "wizard": {
+        "heroTitle": "Set up model connections in 3 steps",
+        "heroSubtitle": "Chats and workflows always execute on BYON executors. Choose engine, configure auth path, then verify.",
+        "pendingItems": "Pending items",
+        "engineRailTitle": "Engines",
+        "recommended": "Recommended",
+        "selected": "Selected",
+        "path": {
+          "subtitle": "Pick the credential source for this engine.",
+          "oauthDescription": "Sign in on each executor host with CLI login. Best default for teams.",
+          "apiKeyDescription": "Use org-managed API key and optional enterprise base URL."
+        },
+        "steps": {
+          "selectEngine": {
+            "title": "Step 1 · Select engine and path",
+            "desc": "Choose the target engine and recommended connection path."
+          },
+          "configure": {
+            "title": "Step 2 · Configure credentials",
+            "desc": "Set API key/base URL or follow executor-side OAuth login."
+          },
+          "verify": {
+            "title": "Step 3 · Verify and finish",
+            "desc": "Check executor readiness, save, and move to next engine."
+          }
+        },
+        "verifySubtitle": "Validation happens on executor hosts, not in the browser.",
+        "baseUrlPlaceholder": "https://your-endpoint.example.com/v1",
+        "baseUrlExecutorScoped": "Base URL is applied on executor hosts when API key mode is active.",
+        "executorOauthOnly": "OAuth verification status is derived from executor heartbeat and auth probe.",
+        "oauthUsesExecutor": "Current path uses executor-side account login. No key is stored in control plane.",
+        "apiKeyUsesExecutor": "Current path injects org-managed API key at runtime on executor hosts.",
+        "currentBaseUrl": "Current Base URL",
+        "saveCurrent": "Save current path",
+        "saveAndNext": "Save and next engine",
+        "opencodeTemplateTitle": "OpenCode provider profile template",
+        "opencodeTemplateSubtitle": "Store provider JSON on each executor host. Control plane keeps only mode selection."
+      },
       "runtimeTitle": "Provider runtime overrides",
       "runtimeSubtitle": "Override base URL and API kind for OpenAI-like/custom endpoints.",
       "provider": "Provider",

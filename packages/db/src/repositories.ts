@@ -1932,6 +1932,7 @@ export async function createAgentSession(
     llmSecretId?: string | null;
     toolsAllow: unknown;
     limits: unknown;
+    runtime?: unknown;
     promptSystem?: string | null;
     promptInstructions: string;
     resetPolicySnapshot?: unknown;
@@ -1959,6 +1960,7 @@ export async function createAgentSession(
       llmSecretId: input.llmSecretId ?? null,
       toolsAllow: input.toolsAllow as any,
       limits: input.limits as any,
+      runtime: (input.runtime ?? {}) as any,
       promptSystem: input.promptSystem ?? null,
       promptInstructions: input.promptInstructions,
       resetPolicySnapshot: (input.resetPolicySnapshot ?? {}) as any,
