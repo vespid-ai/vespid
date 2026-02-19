@@ -96,6 +96,15 @@ type SelectedExecutor = {
   pool: "managed" | "byon";
 };
 
+type ActiveSessionTurn = {
+  organizationId: string;
+  sessionId: string;
+  requestId: string;
+  executorId: string;
+  edgeId: string;
+  canceled: boolean;
+};
+
 type SelectExecutorResult =
   | { ok: true; selected: SelectedExecutor }
   | {
@@ -343,6 +352,7 @@ export async function startGatewayBrainRuntime(input?: {
   const reserveTtlMs = Math.max(5_000, envNumber("GATEWAY_RESERVE_TTL_MS", 5 * 60 * 1000));
   const orgQuotaCacheTtlMs = Math.max(2_000, envNumber("GATEWAY_ORG_QUOTA_CACHE_TTL_MS", 15_000));
   const orgQuotaCache = new Map<string, { value: number; expiresAtMs: number }>();
+  const activeTurnsBySessionId = new Map<string, ActiveSessionTurn>();
 
   async function getOrgMaxInFlight(organizationId: string): Promise<number> {
     const now = Date.now();
@@ -1037,6 +1047,16 @@ export async function startGatewayBrainRuntime(input?: {
         return;
       }
 
+      const activeTurn: ActiveSessionTurn = {
+        organizationId: msg.organizationId,
+        sessionId: msg.sessionId,
+        requestId: msg.requestId,
+        executorId: selectedExecutor.executorId,
+        edgeId: selectedExecutor.edgeId,
+        canceled: false,
+      };
+      activeTurnsBySessionId.set(msg.sessionId, activeTurn);
+
       await xaddJson(redis, streamToEdge(selectedExecutor.edgeId), {
         type: "executor_session",
         executorId: selectedExecutor.executorId,
@@ -1066,10 +1086,39 @@ export async function startGatewayBrainRuntime(input?: {
         return;
       }
       if (turnReply.status === "failed") {
+        const currentTurn = activeTurnsBySessionId.get(msg.sessionId);
+        const canceled = Boolean(currentTurn && currentTurn.requestId === msg.requestId && currentTurn.canceled);
+        if (turnReply.code === "TURN_CANCELED" || canceled) {
+          const canceledEvent = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+            appendAgentSessionEvent(db, {
+              organizationId: msg.organizationId,
+              sessionId: msg.sessionId,
+              eventType: "system",
+              level: "info",
+              payload: { action: "session_turn_canceled", requestId: msg.requestId },
+            })
+          );
+          await broadcastToSessionEdges(msg.sessionId, {
+            type: "session_event_v2",
+            sessionId: msg.sessionId,
+            seq: canceledEvent.seq,
+            eventType: canceledEvent.eventType,
+            level: normalizeEventLevel(canceledEvent.level),
+            payload: canceledEvent.payload ?? null,
+            createdAt: canceledEvent.createdAt.toISOString(),
+          });
+          return;
+        }
         await failSession({
           code: turnReply.code ?? turnReply.error ?? REMOTE_EXEC_ERROR.NodeExecutionFailed,
           message: turnReply.error ?? "Agent turn failed on pinned node-host.",
         });
+        return;
+      }
+
+      const currentTurn = activeTurnsBySessionId.get(msg.sessionId);
+      const canceled = Boolean(currentTurn && currentTurn.requestId === msg.requestId && currentTurn.canceled);
+      if (canceled) {
         return;
       }
 
@@ -1144,6 +1193,10 @@ export async function startGatewayBrainRuntime(input?: {
         });
       }
     } finally {
+      const activeTurn = activeTurnsBySessionId.get(msg.sessionId);
+      if (activeTurn && activeTurn.requestId === msg.requestId) {
+        activeTurnsBySessionId.delete(msg.sessionId);
+      }
       if (selectedExecutor) {
         await releaseCapacity(redis, { executorId: selectedExecutor.executorId, organizationId: msg.organizationId });
       }
@@ -1198,6 +1251,48 @@ export async function startGatewayBrainRuntime(input?: {
     });
   }
 
+  async function handleSessionCancel(msg: Extract<EdgeToBrainRequest, { type: "session_cancel" }>) {
+    const activeTurn = activeTurnsBySessionId.get(msg.sessionId);
+    if (!activeTurn || activeTurn.organizationId !== msg.organizationId) {
+      return;
+    }
+    if (activeTurn.canceled) {
+      return;
+    }
+    activeTurn.canceled = true;
+    activeTurnsBySessionId.set(msg.sessionId, activeTurn);
+
+    await xaddJson(redis, streamToEdge(activeTurn.edgeId), {
+      type: "executor_session",
+      executorId: activeTurn.executorId,
+      payload: {
+        type: "session_cancel",
+        requestId: activeTurn.requestId,
+        organizationId: msg.organizationId,
+        sessionId: msg.sessionId,
+      },
+    });
+
+    const event = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+      appendAgentSessionEvent(db, {
+        organizationId: msg.organizationId,
+        sessionId: msg.sessionId,
+        eventType: "system",
+        level: "info",
+        payload: { action: "session_cancel_requested", requestId: activeTurn.requestId },
+      })
+    );
+    await broadcastToSessionEdges(msg.sessionId, {
+      type: "session_event_v2",
+      sessionId: msg.sessionId,
+      seq: event.seq,
+      eventType: event.eventType,
+      level: normalizeEventLevel(event.level),
+      payload: event.payload ?? null,
+      createdAt: event.createdAt.toISOString(),
+    });
+  }
+
   const stream = streamToBrain();
   const group = "brain";
   const consumer = `${brainId}:${process.pid}`;
@@ -1221,6 +1316,8 @@ export async function startGatewayBrainRuntime(input?: {
             await handleSessionSend(msg);
           } else if (msg.type === "session_reset") {
             await handleSessionReset(msg);
+          } else if (msg.type === "session_cancel") {
+            await handleSessionCancel(msg);
           }
         } finally {
           try {

@@ -40,6 +40,17 @@
   --panel-elev: var(--surface-2);
   --border: var(--border-subtle);
   --accent: var(--brand);
+
+  /* Syntax highlighting palette (light). */
+  --syntax-bg: 248 250 253;
+  --syntax-text: 31 41 55;
+  --syntax-comment: 100 116 139;
+  --syntax-keyword: 143 63 240;
+  --syntax-string: 20 131 92;
+  --syntax-number: 190 24 93;
+  --syntax-function: 37 99 235;
+  --syntax-property: 180 83 9;
+  --syntax-operator: 71 85 105;
 }
 
 html,
@@ -84,6 +95,17 @@ body {
   --shadow-2: 0 1px 0 rgb(0 0 0 / 0.24), 0 18px 44px rgb(0 0 0 / 0.38);
   --shadow-3: 0 2px 0 rgb(0 0 0 / 0.28), 0 26px 70px rgb(0 0 0 / 0.46);
   --shadow-inset: inset 0 1px 0 rgb(255 255 255 / 0.06);
+
+  /* Syntax highlighting palette (dark). */
+  --syntax-bg: 16 22 33;
+  --syntax-text: 226 232 240;
+  --syntax-comment: 148 163 184;
+  --syntax-keyword: 167 139 250;
+  --syntax-string: 74 222 128;
+  --syntax-number: 251 113 133;
+  --syntax-function: 125 211 252;
+  --syntax-property: 251 191 36;
+  --syntax-operator: 148 163 184;
 }
 
 /* Subtle grain without external assets. */
@@ -190,4 +212,146 @@ body {
   50% {
     opacity: 1;
   }
+}
+
+@keyframes chat-generating-dot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  40% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+
+.chat-bubble-user {
+  border-color: rgb(var(--accent) / 0.56);
+  background: rgb(var(--accent) / 0.24);
+  color: rgb(var(--text));
+  box-shadow:
+    0 0 0 1px rgb(var(--accent) / 0.1),
+    0 10px 20px rgb(var(--accent) / 0.14);
+}
+
+.chat-generating-indicator {
+  background: linear-gradient(180deg, rgb(var(--accent) / 0.16), rgb(var(--accent) / 0.08));
+  box-shadow:
+    0 0 0 1px rgb(var(--accent) / 0.16),
+    0 6px 14px rgb(var(--accent) / 0.14);
+}
+
+.chat-generating-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-generating-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(var(--accent));
+  animation: chat-generating-dot 1.15s ease-in-out infinite;
+}
+
+.chat-generating-dot:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.chat-generating-dot:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+.dark .chat-bubble-user {
+  border-color: rgb(var(--accent) / 0.62);
+  background: rgb(var(--accent) / 0.34);
+  box-shadow:
+    0 0 0 1px rgb(var(--accent) / 0.18),
+    0 12px 24px rgb(var(--accent) / 0.2);
+}
+
+.syntax-code {
+  background: linear-gradient(180deg, rgb(var(--syntax-bg) / 0.96), rgb(var(--syntax-bg) / 0.88));
+}
+
+.syntax-code__header {
+  background: linear-gradient(180deg, rgb(var(--surface-1) / 0.75), rgb(var(--surface-1) / 0.45));
+}
+
+.syntax-code__pre {
+  color: rgb(var(--syntax-text));
+}
+
+.syntax-code__content {
+  color: rgb(var(--syntax-text));
+}
+
+.syntax-code .token.comment,
+.syntax-code .token.prolog,
+.syntax-code .token.doctype,
+.syntax-code .token.cdata {
+  color: rgb(var(--syntax-comment));
+  font-style: italic;
+}
+
+.syntax-code .token.punctuation {
+  color: rgb(var(--syntax-operator));
+}
+
+.syntax-code .token.property,
+.syntax-code .token.tag,
+.syntax-code .token.constant,
+.syntax-code .token.symbol,
+.syntax-code .token.deleted {
+  color: rgb(var(--syntax-property));
+}
+
+.syntax-code .token.boolean,
+.syntax-code .token.number {
+  color: rgb(var(--syntax-number));
+}
+
+.syntax-code .token.selector,
+.syntax-code .token.attr-name,
+.syntax-code .token.string,
+.syntax-code .token.char,
+.syntax-code .token.builtin,
+.syntax-code .token.inserted {
+  color: rgb(var(--syntax-string));
+}
+
+.syntax-code .token.operator,
+.syntax-code .token.entity,
+.syntax-code .token.url,
+.syntax-code .language-css .token.string,
+.syntax-code .style .token.string {
+  color: rgb(var(--syntax-operator));
+}
+
+.syntax-code .token.atrule,
+.syntax-code .token.attr-value,
+.syntax-code .token.keyword {
+  color: rgb(var(--syntax-keyword));
+}
+
+.syntax-code .token.function,
+.syntax-code .token.class-name {
+  color: rgb(var(--syntax-function));
+}
+
+.syntax-code .token.regex,
+.syntax-code .token.important,
+.syntax-code .token.variable {
+  color: rgb(var(--syntax-property));
+}
+
+.syntax-code .token.bold {
+  font-weight: 600;
+}
+
+.syntax-code .token.italic {
+  font-style: italic;
 }

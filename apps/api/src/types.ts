@@ -806,6 +806,11 @@ export interface AppStore {
     actorUserId: string;
     executorId: string;
   }): Promise<boolean>;
+  deleteOrganizationExecutor(input: {
+    organizationId: string;
+    actorUserId: string;
+    executorId: string;
+  }): Promise<boolean>;
   createManagedExecutor(input: {
     name: string;
     tokenHash: string;
@@ -926,8 +931,19 @@ export interface AppStore {
     organizationId: string;
     actorUserId: string;
     limit: number;
+    status?: "active" | "archived" | "all";
     cursor?: { updatedAt: string; id: string } | null;
   }): Promise<{ sessions: AgentSessionRecord[]; nextCursor: { updatedAt: string; id: string } | null }>;
+  archiveAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null>;
+  restoreAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null>;
   getAgentSessionById(input: {
     organizationId: string;
     actorUserId: string;

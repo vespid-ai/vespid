@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, asc, desc, eq, gt, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
   agentBindings,
@@ -1438,6 +1438,20 @@ export async function revokeOrganizationExecutor(db: Db, input: { organizationId
   return row ?? null;
 }
 
+export async function deleteOrganizationExecutor(db: Db, input: { organizationId: string; executorId: string }) {
+  const [row] = await db
+    .delete(organizationExecutors)
+    .where(
+      and(
+        eq(organizationExecutors.organizationId, input.organizationId),
+        eq(organizationExecutors.id, input.executorId),
+        isNotNull(organizationExecutors.revokedAt)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
 export async function getManagedExecutorByTokenHash(db: Db, input: { tokenHash: string }) {
   const [row] = await db.select().from(managedExecutors).where(eq(managedExecutors.tokenHash, input.tokenHash));
   return row ?? null;
@@ -1979,20 +1993,31 @@ export async function getAgentSessionById(db: Db, input: { organizationId: strin
 
 export async function listAgentSessions(
   db: Db,
-  input: { organizationId: string; limit: number; cursor?: { updatedAt: string; id: string } | null }
+  input: {
+    organizationId: string;
+    limit: number;
+    status?: "active" | "archived" | "all";
+    cursor?: { updatedAt: string; id: string } | null;
+  }
 ) {
   const limit = Math.max(1, Math.min(200, Math.floor(input.limit)));
   const cursor = input.cursor ?? null;
+  const status = input.status ?? "active";
+
+  const statusFilter = status === "all" ? null : eq(agentSessions.status, status);
+  const baseWhere = statusFilter
+    ? and(eq(agentSessions.organizationId, input.organizationId), statusFilter)
+    : eq(agentSessions.organizationId, input.organizationId);
 
   const where = cursor
     ? and(
-        eq(agentSessions.organizationId, input.organizationId),
+        baseWhere,
         or(
           lt(agentSessions.updatedAt, new Date(cursor.updatedAt)),
           and(eq(agentSessions.updatedAt, new Date(cursor.updatedAt)), lt(agentSessions.id, cursor.id))
         )
       )
-    : eq(agentSessions.organizationId, input.organizationId);
+    : baseWhere;
 
   const rows = await db
     .select()
@@ -2009,6 +2034,30 @@ export async function listAgentSessions(
       : null;
 
   return { sessions, nextCursor };
+}
+
+export async function archiveAgentSession(
+  db: Db,
+  input: { organizationId: string; sessionId: string }
+) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ status: "archived", updatedAt: new Date(), lastActivityAt: new Date() })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
+}
+
+export async function restoreAgentSession(
+  db: Db,
+  input: { organizationId: string; sessionId: string }
+) {
+  const [row] = await db
+    .update(agentSessions)
+    .set({ status: "active", updatedAt: new Date(), lastActivityAt: new Date() })
+    .where(and(eq(agentSessions.organizationId, input.organizationId), eq(agentSessions.id, input.sessionId)))
+    .returning();
+  return row ?? null;
 }
 
 export async function setAgentSessionPinnedAgent(

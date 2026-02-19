@@ -47,13 +47,15 @@ export type AgentSessionEvent = {
   createdAt: string;
 };
 
-export function useSessions(orgId: string | null) {
+export type SessionListStatus = "active" | "archived" | "all";
+
+export function useSessions(orgId: string | null, status: SessionListStatus = "active") {
   return useQuery({
-    queryKey: ["sessions", orgId],
+    queryKey: ["sessions", orgId, status],
     enabled: Boolean(orgId),
     queryFn: async () => {
       return apiFetchJson<{ sessions: AgentSession[]; nextCursor: string | null }>(
-        `/v1/orgs/${orgId}/sessions?limit=100`,
+        `/v1/orgs/${orgId}/sessions?limit=100&status=${status}`,
         { method: "GET" },
         { orgScoped: true }
       );
@@ -117,6 +119,38 @@ export function useCreateSession(orgId: string | null) {
       return apiFetchJson<{ session: AgentSession }>(
         `/v1/orgs/${orgId}/sessions`,
         { method: "POST", body: JSON.stringify(input) },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions", orgId] });
+    },
+  });
+}
+
+export function useArchiveSession(orgId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sessionId: string) => {
+      return apiFetchJson<{ ok: true; session: AgentSession }>(
+        `/v1/orgs/${orgId}/sessions/${sessionId}`,
+        { method: "DELETE" },
+        { orgScoped: true }
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["sessions", orgId] });
+    },
+  });
+}
+
+export function useRestoreSession(orgId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sessionId: string) => {
+      return apiFetchJson<{ ok: true; session: AgentSession }>(
+        `/v1/orgs/${orgId}/sessions/${sessionId}/restore`,
+        { method: "POST" },
         { orgScoped: true }
       );
     },

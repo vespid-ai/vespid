@@ -104,6 +104,7 @@ type RefreshTokenPayload = {
 
 type AgentInstallerConfig = {
   enabled: boolean;
+  commandMode: "auto" | "npm" | "local-dev";
   npmPackage: string;
   npmDistTag: string;
   npmRegistryUrl: string;
@@ -140,6 +141,7 @@ const GATEWAY_INTERNAL_SERVICE_TOKEN =
 const DEFAULT_AGENT_INSTALLER_NPM_PACKAGE = "@vespid/node-agent";
 const DEFAULT_AGENT_INSTALLER_NPM_DIST_TAG = "latest";
 const DEFAULT_AGENT_INSTALLER_NPM_REGISTRY_URL = "https://registry.npmjs.org";
+const DEFAULT_AGENT_INSTALLER_COMMAND_MODE = "auto";
 
 const DEFAULT_LLM_OAUTH_VERIFY_URLS: Partial<Record<LlmProviderId, string>> = {
   "openai-codex": "https://chatgpt.com",
@@ -1012,6 +1014,14 @@ function parseAgentInstallerEnabled(value: string | null | undefined): boolean {
   return !["0", "false", "off", "no"].includes(raw);
 }
 
+function normalizeAgentInstallerCommandMode(value: string | null | undefined): "auto" | "npm" | "local-dev" {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (raw === "npm" || raw === "local-dev" || raw === "auto") {
+    return raw;
+  }
+  return DEFAULT_AGENT_INSTALLER_COMMAND_MODE;
+}
+
 function buildNodeAgentConnectCommand(input: { npmPackage: string; npmDistTag: string; apiBase: string }): string {
   const packageRef = `${input.npmPackage}@${input.npmDistTag}`;
   return `npx -y ${packageRef} connect --pairing-token "<pairing-token>" --api-base "${input.apiBase}"`;
@@ -1020,6 +1030,14 @@ function buildNodeAgentConnectCommand(input: { npmPackage: string; npmDistTag: s
 function buildNodeAgentStartCommand(input: { npmPackage: string; npmDistTag: string }): string {
   const packageRef = `${input.npmPackage}@${input.npmDistTag}`;
   return `npx -y ${packageRef} start`;
+}
+
+function buildLocalNodeAgentConnectCommand(input: { apiBase: string }): string {
+  return `pnpm --filter @vespid/node-agent dev -- connect --pairing-token "<pairing-token>" --api-base "${input.apiBase}"`;
+}
+
+function buildLocalNodeAgentStartCommand(): string {
+  return "pnpm --filter @vespid/node-agent dev -- start";
 }
 
 function base64UrlEncode(input: string): string {
@@ -1361,6 +1379,9 @@ export async function buildServer(input?: {
   const agentInstallerEnabled = input?.agentInstaller?.enabled ?? parseAgentInstallerEnabled(process.env.AGENT_INSTALLER_ENABLED);
   const agentInstallerConfig: AgentInstallerConfig = {
     enabled: agentInstallerEnabled,
+    commandMode: normalizeAgentInstallerCommandMode(
+      input?.agentInstaller?.commandMode ?? process.env.AGENT_INSTALLER_COMMAND_MODE
+    ),
     npmPackage: normalizeAgentInstallerNpmPackage(input?.agentInstaller?.npmPackage ?? process.env.AGENT_INSTALLER_NPM_PACKAGE),
     npmDistTag: normalizeAgentInstallerNpmDistTag(input?.agentInstaller?.npmDistTag ?? process.env.AGENT_INSTALLER_NPM_DIST_TAG),
     npmRegistryUrl: normalizeAgentInstallerNpmRegistryUrl(
@@ -1385,6 +1406,31 @@ export async function buildServer(input?: {
   const oauthStates = new Map<string, OAuthStateRecord>();
   const vertexOAuthStates = new Map<string, VertexOAuthStateRecord>();
   const llmOAuthDeviceStates = new Map<string, LlmOAuthDeviceStateRecord>();
+  let cachedInstallerNpmAvailability: { available: boolean; checkedAtMs: number } | null = null;
+
+  async function checkInstallerNpmAvailability(input: { npmPackage: string; npmRegistryUrl: string }): Promise<boolean> {
+    if (process.env.NODE_ENV === "test") {
+      return true;
+    }
+    const now = Date.now();
+    if (cachedInstallerNpmAvailability && now - cachedInstallerNpmAvailability.checkedAtMs < 30_000) {
+      return cachedInstallerNpmAvailability.available;
+    }
+    try {
+      const encodedPackage = encodeURIComponent(input.npmPackage);
+      const url = `${input.npmRegistryUrl.replace(/\/+$/, "")}/${encodedPackage}`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2_500);
+      const response = await fetch(url, { method: "GET", signal: controller.signal });
+      clearTimeout(timer);
+      const available = response.ok;
+      cachedInstallerNpmAvailability = { available, checkedAtMs: now };
+      return available;
+    } catch {
+      cachedInstallerNpmAvailability = { available: false, checkedAtMs: now };
+      return false;
+    }
+  }
 
   function setSessionCookie(reply: { setCookie: Function }, refreshToken: string): void {
     reply.setCookie(SESSION_COOKIE_NAME, refreshToken, {
@@ -2027,19 +2073,40 @@ export async function buildServer(input?: {
       ? agentInstallerConfig.npmRegistryUrl
       : DEFAULT_AGENT_INSTALLER_NPM_REGISTRY_URL;
     const docsUrl = agentInstallerEnabled ? agentInstallerConfig.docsUrl : null;
+    const commandMode = agentInstallerEnabled ? agentInstallerConfig.commandMode : "npm";
+    const isLocalDevContext = process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test";
+
+    let delivery: "npm" | "local-dev" = "npm";
+    let fallbackReason: string | null = null;
+    if (commandMode === "local-dev") {
+      delivery = "local-dev";
+      fallbackReason = "forced_local_dev";
+    } else if (commandMode === "auto" && isLocalDevContext) {
+      const npmAvailable = await checkInstallerNpmAvailability({ npmPackage, npmRegistryUrl });
+      if (!npmAvailable) {
+        delivery = "local-dev";
+        fallbackReason = "npm_package_unavailable";
+      }
+    }
+
     return {
       provider: "npm-registry" as const,
+      delivery,
+      fallbackReason,
       packageName: npmPackage,
       distTag: npmDistTag,
       registryUrl: npmRegistryUrl,
       docsUrl,
       commands: {
-        connect: buildNodeAgentConnectCommand({
-          npmPackage,
-          npmDistTag,
-          apiBase: "http://127.0.0.1:3001",
-        }),
-        start: buildNodeAgentStartCommand({ npmPackage, npmDistTag }),
+        connect:
+          delivery === "local-dev"
+            ? buildLocalNodeAgentConnectCommand({ apiBase: "http://127.0.0.1:3001" })
+            : buildNodeAgentConnectCommand({
+                npmPackage,
+                npmDistTag,
+                apiBase: "http://127.0.0.1:3001",
+              }),
+        start: delivery === "local-dev" ? buildLocalNodeAgentStartCommand() : buildNodeAgentStartCommand({ npmPackage, npmDistTag }),
       },
     };
   });
@@ -3470,6 +3537,46 @@ export async function buildServer(input?: {
   server.post("/v1/orgs/:orgId/agents/:agentId/revoke", revokeExecutorHandler);
   server.post("/v1/orgs/:orgId/executors/:executorId/revoke", revokeExecutorHandler);
 
+  async function deleteExecutorHandler(request: any) {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; executorId?: string; agentId?: string };
+    const targetId = params.executorId ?? params.agentId ?? null;
+    if (!params.orgId || !targetId) {
+      throw badRequest("Missing orgId or executorId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage executors");
+    }
+
+    const executors = await store.listOrganizationExecutors({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+    const target = executors.find((executor) => executor.id === targetId) ?? null;
+    if (!target) {
+      throw agentNotFound();
+    }
+    if (!target.revokedAt) {
+      throw conflict("Only revoked worker nodes can be deleted");
+    }
+
+    const ok = await store.deleteOrganizationExecutor({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      executorId: targetId,
+    });
+    if (!ok) {
+      throw conflict("Failed to delete revoked worker node");
+    }
+
+    return { ok: true };
+  }
+
+  server.delete("/v1/orgs/:orgId/agents/:agentId", deleteExecutorHandler);
+  server.delete("/v1/orgs/:orgId/executors/:executorId", deleteExecutorHandler);
+
   server.post("/v1/orgs/:orgId/sessions", async (request, reply) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string };
@@ -3621,7 +3728,7 @@ export async function buildServer(input?: {
           ? `${sessionKeyBase}:channel:${normalizedPart(body.data.channel, "unknown-channel")}:peer:${normalizedPart(body.data.peer ?? body.data.actor ?? auth.userId, "anonymous")}`
           : body.data.scope === "per-account-channel-peer"
             ? `${sessionKeyBase}:account:${normalizedPart(typeof body.data.context?.account === "string" ? body.data.context.account : null, "unknown-account")}:channel:${normalizedPart(body.data.channel, "unknown-channel")}:peer:${normalizedPart(body.data.peer ?? body.data.actor ?? auth.userId, "anonymous")}`
-            : sessionKeyBase;
+            : `${sessionKeyBase}:chat:${crypto.randomUUID()}`;
 
     const session = await store.createAgentSession({
       organizationId: orgContext.organizationId,
@@ -3703,6 +3810,12 @@ export async function buildServer(input?: {
     });
     if (!session) {
       throw notFound("Session not found");
+    }
+    if (session.status === "archived") {
+      throw new AppError(409, {
+        code: "SESSION_ARCHIVED",
+        message: "Session is archived",
+      });
     }
 
     const userEvent = await store.appendAgentSessionEvent({
@@ -3793,9 +3906,10 @@ export async function buildServer(input?: {
 
     const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
 
-    const query = request.query as { limit?: string; cursor?: string };
+    const query = request.query as { limit?: string; cursor?: string; status?: string };
     const limitRaw = query.limit ? Number(query.limit) : 50;
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
+    const status = query.status === "archived" || query.status === "all" || query.status === "active" ? query.status : "active";
     const cursor = typeof query.cursor === "string" && query.cursor.length > 0
       ? decodeCursor<{ updatedAt: string; id: string }>(query.cursor)
       : null;
@@ -3804,6 +3918,7 @@ export async function buildServer(input?: {
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
       limit,
+      status,
       ...(cursor ? { cursor } : {}),
     });
 
@@ -3811,6 +3926,42 @@ export async function buildServer(input?: {
       sessions: out.sessions,
       nextCursor: out.nextCursor ? encodeCursor(out.nextCursor) : null,
     };
+  });
+
+  server.delete("/v1/orgs/:orgId/sessions/:sessionId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const session = await store.archiveAgentSession({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+    });
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    return { ok: true, session };
+  });
+
+  server.post("/v1/orgs/:orgId/sessions/:sessionId/restore", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; sessionId?: string };
+    if (!params.orgId || !params.sessionId) {
+      throw badRequest("Missing orgId or sessionId");
+    }
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const session = await store.restoreAgentSession({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      sessionId: params.sessionId,
+    });
+    if (!session) {
+      throw notFound("Session not found");
+    }
+    return { ok: true, session };
   });
 
   server.get("/v1/orgs/:orgId/sessions/:sessionId", async (request) => {

@@ -49,6 +49,14 @@ export type EdgeToBrainRequest =
       originEdgeId?: string;
     }
   | {
+      type: "session_cancel";
+      requestId: string;
+      organizationId: string;
+      userId: string;
+      sessionId: string;
+      originEdgeId?: string;
+    }
+  | {
       type: "memory_sync";
       requestId: string;
       organizationId: string;

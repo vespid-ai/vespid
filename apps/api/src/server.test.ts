@@ -251,6 +251,8 @@ describe("api hardening foundation", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as {
       provider: string;
+      delivery: string;
+      fallbackReason: string | null;
       packageName: string;
       distTag: string;
       registryUrl: string;
@@ -258,6 +260,8 @@ describe("api hardening foundation", () => {
       commands: { connect: string; start: string };
     };
     expect(body.provider).toBe("npm-registry");
+    expect(body.delivery).toBe("npm");
+    expect(body.fallbackReason).toBeNull();
     expect(body.packageName).toBe("@vespid/node-agent");
     expect(body.distTag).toBe("latest");
     expect(body.registryUrl).toBe("https://registry.npmjs.org");
@@ -291,6 +295,8 @@ describe("api hardening foundation", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json() as {
       provider: string;
+      delivery: string;
+      fallbackReason: string | null;
       packageName: string;
       distTag: string;
       registryUrl: string;
@@ -298,6 +304,8 @@ describe("api hardening foundation", () => {
       commands: { connect: string; start: string };
     };
     expect(body.provider).toBe("npm-registry");
+    expect(body.delivery).toBe("npm");
+    expect(body.fallbackReason).toBeNull();
     expect(body.packageName).toBe("@vespid/node-agent");
     expect(body.distTag).toBe("v0.4.0");
     expect(body.registryUrl).toBe("https://registry.npmjs.org");
@@ -306,6 +314,35 @@ describe("api hardening foundation", () => {
       'npx -y @vespid/node-agent@v0.4.0 connect --pairing-token "<pairing-token>" --api-base "http://127.0.0.1:3001"'
     );
     expect(body.commands.start).toBe("npx -y @vespid/node-agent@v0.4.0 start");
+    await enabledServer.close();
+  });
+
+  it("returns local-dev installer commands when command mode is forced", async () => {
+    const enabledServer = await buildServer({
+      store: createPaidMemoryStore(),
+      oauthService: fakeOAuthService(),
+      queueProducer: createFakeQueueProducer(),
+      agentInstaller: {
+        enabled: true,
+        commandMode: "local-dev",
+      },
+    });
+
+    const response = await enabledServer.inject({
+      method: "GET",
+      url: "/v1/meta/agent-installer",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      delivery: string;
+      fallbackReason: string | null;
+      commands: { connect: string; start: string };
+    };
+    expect(body.delivery).toBe("local-dev");
+    expect(body.fallbackReason).toBe("forced_local_dev");
+    expect(body.commands.connect).toContain("pnpm --filter @vespid/node-agent dev -- connect");
+    expect(body.commands.start).toBe("pnpm --filter @vespid/node-agent dev -- start");
     await enabledServer.close();
   });
 
@@ -364,6 +401,63 @@ describe("api hardening foundation", () => {
     });
     expect(legacyEngine.statusCode).toBe(400);
     expect((legacyEngine.json() as { message: string }).message).toBe("Invalid session payload");
+  });
+
+  it("creates a fresh main chat session each time instead of reusing prior history", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `fresh-main-session-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const token = bearerToken(signup.json() as { session: { token: string } });
+
+    const createOrg = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: "Fresh Main Session Org", slug: `fresh-main-session-org-${Date.now()}` },
+    });
+    expect(createOrg.statusCode).toBe(201);
+    const orgId = (createOrg.json() as { organization: { id: string } }).organization.id;
+
+    const createPayload = {
+      scope: "main",
+      engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+      executorSelector: { pool: "byon" },
+      prompt: { instructions: "test" },
+      tools: { allow: [] },
+    };
+
+    const first = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/sessions`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-org-id": orgId,
+      },
+      payload: createPayload,
+    });
+    expect(first.statusCode).toBe(201);
+    const firstSession = (first.json() as { session: { id: string; sessionKey: string } }).session;
+
+    const second = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/sessions`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-org-id": orgId,
+      },
+      payload: createPayload,
+    });
+    expect(second.statusCode).toBe(201);
+    const secondSession = (second.json() as { session: { id: string; sessionKey: string } }).session;
+
+    expect(secondSession.id).not.toBe(firstSession.id);
+    expect(secondSession.sessionKey).not.toBe(firstSession.sessionKey);
   });
 
   it("requires service token for internal channel trigger endpoint", async () => {
@@ -805,6 +899,17 @@ describe("api hardening foundation", () => {
     const listBody = listAgents.json() as { executors: Array<{ id: string; status: string }> };
     expect(listBody.executors.some((executor) => executor.id === pairAgentBody.executorId)).toBe(true);
 
+    const deleteOnline = await server.inject({
+      method: "DELETE",
+      url: `/v1/orgs/${orgId}/agents/${pairAgentBody.executorId}`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(deleteOnline.statusCode).toBe(409);
+    expect((deleteOnline.json() as { message?: string }).message).toContain("Only revoked worker nodes can be deleted");
+
     const revoke = await server.inject({
       method: "POST",
       url: `/v1/orgs/${orgId}/agents/${pairAgentBody.executorId}/revoke`,
@@ -815,6 +920,29 @@ describe("api hardening foundation", () => {
     });
     expect(revoke.statusCode).toBe(200);
     expect(revoke.json()).toEqual({ ok: true });
+
+    const deleteRevoked = await server.inject({
+      method: "DELETE",
+      url: `/v1/orgs/${orgId}/agents/${pairAgentBody.executorId}`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(deleteRevoked.statusCode).toBe(200);
+    expect(deleteRevoked.json()).toEqual({ ok: true });
+
+    const listAfterDelete = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/agents`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listAfterDelete.statusCode).toBe(200);
+    const listAfterDeleteBody = listAfterDelete.json() as { executors: Array<{ id: string; status: string }> };
+    expect(listAfterDeleteBody.executors.some((executor) => executor.id === pairAgentBody.executorId)).toBe(false);
 
     const pairingReuse = await server.inject({
       method: "POST",
@@ -2239,6 +2367,142 @@ describe("api hardening foundation", () => {
         process.env.SECRETS_KEK_ID = priorKekId;
       }
     }
+  });
+
+  it("archives/restores sessions and supports status filters", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `session-archive-owner-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Session Archive Org", slug: `session-archive-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const createSession = async (title: string) => {
+      const res = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/sessions`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          title,
+          engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+          prompt: { instructions: "hello" },
+          tools: { allow: [] },
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      return (res.json() as { session: { id: string } }).session.id;
+    };
+
+    const sessionA = await createSession("A");
+    const sessionB = await createSession("B");
+
+    const archived = await server.inject({
+      method: "DELETE",
+      url: `/v1/orgs/${orgId}/sessions/${sessionA}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect((archived.json() as any).session.status).toBe("archived");
+
+    const activeList = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/sessions?status=active`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(activeList.statusCode).toBe(200);
+    expect((activeList.json() as any).sessions.map((s: any) => s.id)).toContain(sessionB);
+    expect((activeList.json() as any).sessions.map((s: any) => s.id)).not.toContain(sessionA);
+
+    const archivedList = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/sessions?status=archived`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(archivedList.statusCode).toBe(200);
+    expect((archivedList.json() as any).sessions.map((s: any) => s.id)).toContain(sessionA);
+    expect((archivedList.json() as any).sessions.map((s: any) => s.id)).not.toContain(sessionB);
+
+    const allList = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/sessions?status=all`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(allList.statusCode).toBe(200);
+    expect((allList.json() as any).sessions.map((s: any) => s.id)).toContain(sessionA);
+    expect((allList.json() as any).sessions.map((s: any) => s.id)).toContain(sessionB);
+
+    const restored = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/sessions/${sessionA}/restore`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect((restored.json() as any).session.status).toBe("active");
+
+    const activeListAfterRestore = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/sessions?status=active`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(activeListAfterRestore.statusCode).toBe(200);
+    expect((activeListAfterRestore.json() as any).sessions.map((s: any) => s.id)).toContain(sessionA);
+  });
+
+  it("rejects posting a message to archived sessions", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: `session-archive-send-${Date.now()}@example.com`, password: "Password123" },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Archived Send Org", slug: `archived-send-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const createSession = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/sessions`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        title: "archived",
+        engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+        prompt: { instructions: "hello" },
+        tools: { allow: [] },
+      },
+    });
+    expect(createSession.statusCode).toBe(201);
+    const sessionId = (createSession.json() as { session: { id: string } }).session.id;
+
+    const archive = await server.inject({
+      method: "DELETE",
+      url: `/v1/orgs/${orgId}/sessions/${sessionId}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(archive.statusCode).toBe(200);
+
+    const send = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/sessions/${sessionId}/messages`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { message: "hello" },
+    });
+    expect(send.statusCode).toBe(409);
+    expect((send.json() as { code: string }).code).toBe("SESSION_ARCHIVED");
   });
 
   it("returns per-engine executor OAuth auth status", async () => {

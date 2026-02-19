@@ -20,10 +20,15 @@ import {
   useAgents,
   useAgentInstaller,
   useCreatePairingToken,
+  useDeleteAgent,
   useRevokeAgent,
   useUpdateAgentTags,
 } from "../../../../lib/hooks/use-agents";
 import { getApiBase, isUnauthorizedError } from "../../../../lib/api";
+
+const DEFAULT_NODE_AGENT_CONNECT_TEMPLATE =
+  'npx -y @vespid/node-agent@latest connect --pairing-token "<pairing-token>" --api-base "<api-base>"';
+const DEFAULT_NODE_AGENT_START_COMMAND = "npx -y @vespid/node-agent@latest start";
 
 function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" {
   const normalized = status.toLowerCase();
@@ -65,6 +70,7 @@ export default function AgentsPage() {
   const installerQuery = useAgentInstaller();
   const pairing = useCreatePairingToken(scopedOrgId);
   const revoke = useRevokeAgent(scopedOrgId);
+  const deleteAgent = useDeleteAgent(scopedOrgId);
   const updateTags = useUpdateAgentTags(scopedOrgId);
 
   const agents = agentsQuery.data?.agents ?? [];
@@ -83,14 +89,17 @@ export default function AgentsPage() {
   const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
 
   const installerCommands = installerQuery.data?.commands ?? null;
-  const showInstallerCommands = Boolean(installerCommands);
-  const showInstallerUnavailable = !installerQuery.isLoading && !showInstallerCommands;
-  const connectCommand = installerCommands
-    ? buildConnectCommand({ template: installerCommands.connect, pairingToken: resolvedPairingToken, apiBase })
-    : "";
-  const startCommand = installerCommands?.start ?? "";
+  const showInstallerUnavailable = !installerQuery.isLoading && !installerCommands;
+  const connectCommand = buildConnectCommand({
+    template: installerCommands?.connect ?? DEFAULT_NODE_AGENT_CONNECT_TEMPLATE,
+    pairingToken: resolvedPairingToken,
+    apiBase,
+  });
+  const startCommand = installerCommands?.start ?? DEFAULT_NODE_AGENT_START_COMMAND;
   const isZh = locale.toLowerCase().startsWith("zh");
   const startCommandLabel = isZh ? "后续重启命令" : "Restart command";
+  const installerDeliveryText =
+    installerQuery.data?.delivery === "local-dev" ? t("agents.installer.deliveryLocalDev") : t("agents.installer.deliveryNpm");
 
   const columns = useMemo(() => {
     return [
@@ -131,6 +140,7 @@ export default function AgentsPage() {
         cell: ({ row }: any) => {
           const agent = row.original;
           const draft = tagsDraftByAgentId[agent.id] ?? (agent.tags ?? []).join(",");
+          const isRevoked = typeof agent.revokedAt === "string" || String(agent.status).toLowerCase() === "revoked";
           return (
             <div className="flex min-w-[340px] flex-wrap items-center gap-2">
               <Input
@@ -160,23 +170,38 @@ export default function AgentsPage() {
               >
                 {t("common.save")}
               </Button>
-              <ConfirmButton
-                title="Revoke worker node"
-                description="This will prevent the worker node from executing future jobs."
-                confirmText={t("agents.revoke")}
-                onConfirm={async () => {
-                  await revoke.mutateAsync(agent.id);
-                  toast.success(t("agents.agentRevoked"));
-                }}
-              >
-                {t("agents.revoke")}
-              </ConfirmButton>
+              {!isRevoked ? (
+                <ConfirmButton
+                  title="Revoke worker node"
+                  description="This will prevent the worker node from executing future jobs."
+                  confirmText={t("agents.revoke")}
+                  onConfirm={async () => {
+                    await revoke.mutateAsync(agent.id);
+                    toast.success(t("agents.agentRevoked"));
+                  }}
+                >
+                  {t("agents.revoke")}
+                </ConfirmButton>
+              ) : null}
+              {isRevoked ? (
+                <ConfirmButton
+                  title="Delete revoked worker node"
+                  description="This permanently removes the revoked worker node from this organization."
+                  confirmText={t("common.delete")}
+                  onConfirm={async () => {
+                    await deleteAgent.mutateAsync(agent.id);
+                    toast.success(t("agents.agentDeleted"));
+                  }}
+                >
+                  {t("common.delete")}
+                </ConfirmButton>
+              ) : null}
             </div>
           );
         },
       },
     ] as const;
-  }, [canOperate, revoke, scopedOrgId, t, tagsDraftByAgentId, updateTags]);
+  }, [canOperate, deleteAgent, revoke, scopedOrgId, t, tagsDraftByAgentId, updateTags]);
 
   async function refresh() {
     if (!canOperate) {
@@ -284,7 +309,7 @@ export default function AgentsPage() {
               <div className="text-xs text-muted">{t("common.loading")}</div>
             ) : null}
 
-            {showInstallerCommands ? (
+            {!installerQuery.isLoading ? (
               <div className="grid gap-3">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
                   <span>{`${installerQuery.data?.packageName ?? "@vespid/node-agent"}@${installerQuery.data?.distTag ?? "latest"}`}</span>
@@ -302,6 +327,10 @@ export default function AgentsPage() {
                   <div className="text-xs font-medium text-muted">{startCommandLabel}</div>
                   <CommandBlock command={startCommand} copyLabel={startCommandLabel} />
                 </div>
+                <div className="rounded-md border border-borderSubtle/70 bg-panel/45 p-2 text-xs text-muted">{installerDeliveryText}</div>
+                {installerQuery.data?.fallbackReason ? (
+                  <div className="text-xs text-muted">{`fallback: ${installerQuery.data.fallbackReason}`}</div>
+                ) : null}
               </div>
             ) : null}
 
@@ -309,6 +338,7 @@ export default function AgentsPage() {
               <div className="grid gap-2 rounded-xl border border-borderSubtle bg-panel/35 p-3">
                 <div className="text-xs font-medium text-text">{t("agents.installer.fallbackTitle")}</div>
                 <div className="text-xs text-muted">{t("agents.installer.fallbackDescription")}</div>
+                <div className="text-xs text-muted">{t("agents.installer.fallbackUsingDefaults")}</div>
                 {installerQuery.data?.docsUrl ? (
                   <a
                     href={installerQuery.data.docsUrl}

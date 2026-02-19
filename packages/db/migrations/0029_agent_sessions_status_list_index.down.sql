@@ -1,0 +1,1 @@
+drop index if exists agent_sessions_org_status_updated_idx;

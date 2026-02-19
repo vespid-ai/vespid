@@ -395,6 +395,12 @@ export const agentSessions = pgTable("agent_sessions", {
   lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   agentSessionsOrgUpdatedIdx: index("agent_sessions_org_updated_idx").on(table.organizationId, table.updatedAt, table.id),
+  agentSessionsOrgStatusUpdatedIdx: index("agent_sessions_org_status_updated_idx").on(
+    table.organizationId,
+    table.status,
+    table.updatedAt,
+    table.id
+  ),
   agentSessionsOrgPinnedExecutorPoolUpdatedIdx: index("agent_sessions_org_pinned_executor_pool_updated_idx").on(
     table.organizationId,
     table.pinnedExecutorPool,

@@ -9,6 +9,8 @@ import ConversationDetailPage from "../app/[locale]/(app)/conversations/[convers
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
   replace: vi.fn(),
+  archiveSession: vi.fn(async (_sessionId: string) => ({ ok: true })),
+  restoreSession: vi.fn(async (_sessionId: string) => ({ ok: true })),
   createPairingToken: vi.fn(async () => ({
     token: "org_1.pairing-token",
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
@@ -81,6 +83,8 @@ vi.mock("../lib/hooks/use-agents", () => ({
   useAgentInstaller: () => ({
     data: {
       provider: "npm-registry",
+      delivery: "npm",
+      fallbackReason: null,
       packageName: "@vespid/node-agent",
       distTag: "latest",
       registryUrl: "https://registry.npmjs.org",
@@ -117,6 +121,8 @@ vi.mock("../lib/hooks/use-sessions", () => ({
     data: mocks.eventsData,
     refetch: vi.fn(),
   }),
+  useArchiveSession: () => ({ isPending: false, mutateAsync: mocks.archiveSession }),
+  useRestoreSession: () => ({ isPending: false, mutateAsync: mocks.restoreSession }),
 }));
 
 function readMessages(locale: "en" | "zh-CN") {
@@ -158,6 +164,8 @@ describe("Conversation detail layout", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket as any);
+    mocks.archiveSession.mockClear();
+    mocks.restoreSession.mockClear();
     mocks.createPairingToken.mockClear();
     mocks.eventsData.events = [
       {
@@ -231,6 +239,115 @@ describe("Conversation detail layout", () => {
     });
   });
 
+  it("sends session_cancel when stop is clicked during generation", async () => {
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(messages.sessions.ws.connected)).toBeInTheDocument();
+    });
+
+    const input = screen.getByPlaceholderText(messages.sessions.chat.placeholder);
+    await user.type(input, "Generate a long answer");
+    await user.click(screen.getByRole("button", { name: messages.sessions.chat.send }));
+    await user.click(screen.getByRole("button", { name: messages.sessions.chat.stop }));
+
+    await waitFor(() => {
+      const sent = FakeWebSocket.instances[0]?.send.mock.calls.map((call) => JSON.parse(call[0]));
+      expect(sent?.some((payload: any) => payload.type === "session_cancel" && payload.sessionId === "session_1")).toBe(true);
+    });
+  });
+
+  it("renders fenced code through syntax block", async () => {
+    const messages = readMessages("en");
+    mocks.eventsData.events = [
+      {
+        id: "event_code",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 8,
+        eventType: "agent_message",
+        level: "info",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: {
+          message: "```python\nprint('hello')\n```",
+        },
+        createdAt: "2026-02-17T10:10:05.000Z",
+      },
+    ];
+
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    expect(await screen.findByText("PYTHON")).toBeInTheDocument();
+    expect(container.querySelector(".syntax-code")).toBeTruthy();
+  });
+
+  it("deduplicates adjacent assistant messages with identical content", async () => {
+    const messages = readMessages("en");
+    mocks.eventsData.events = [
+      {
+        id: "event_user",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 20,
+        eventType: "user_message",
+        level: "info",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { message: "Write me a bio." },
+        createdAt: "2026-02-17T10:20:00.000Z",
+      },
+      {
+        id: "event_delta",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 21,
+        eventType: "agent_message",
+        level: "info",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { message: "Here is your concise bio draft." },
+        createdAt: "2026-02-17T10:20:02.000Z",
+      },
+      {
+        id: "event_final",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 22,
+        eventType: "agent_final",
+        level: "info",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { message: "Here is your concise bio draft." },
+        createdAt: "2026-02-17T10:20:03.000Z",
+      },
+    ];
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    const rendered = await screen.findAllByText("Here is your concise bio draft.");
+    expect(rendered).toHaveLength(1);
+  });
+
   it("shows executor onboarding guide when session has no-agent errors", async () => {
     const messages = readMessages("en");
     mocks.eventsData.events = [
@@ -296,5 +413,19 @@ describe("Conversation detail layout", () => {
       expect(screen.queryByTestId("conversation-detail-executor-onboarding-guide")).not.toBeInTheDocument();
     });
     expect(mocks.createPairingToken).not.toHaveBeenCalled();
+  });
+
+  it("archives conversation from detail header", async () => {
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    const deleteButton = await screen.findByRole("button", { name: messages.sessions.actions.delete });
+    await user.click(deleteButton);
+    await waitFor(() => expect(mocks.archiveSession).toHaveBeenCalledWith("session_1"));
   });
 });

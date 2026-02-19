@@ -42,6 +42,7 @@ import {
   listOrganizationExecutors as dbListOrganizationExecutors,
   setOrganizationExecutorLabels as dbSetOrganizationExecutorLabels,
   revokeOrganizationExecutor as dbRevokeOrganizationExecutor,
+  deleteOrganizationExecutor as dbDeleteOrganizationExecutor,
   revokeManagedExecutor as dbRevokeManagedExecutor,
   createAgentToolset as dbCreateAgentToolset,
   listAgentToolsetsByOrg as dbListAgentToolsetsByOrg,
@@ -56,6 +57,8 @@ import {
   createAgentSession as dbCreateAgentSession,
   getAgentSessionById as dbGetAgentSessionById,
   listAgentSessions as dbListAgentSessions,
+  archiveAgentSession as dbArchiveAgentSession,
+  restoreAgentSession as dbRestoreAgentSession,
   setAgentSessionPinnedAgent as dbSetAgentSessionPinnedAgent,
   setAgentSessionRoute as dbSetAgentSessionRoute,
   appendAgentSessionEvent as dbAppendAgentSessionEvent,
@@ -2041,6 +2044,14 @@ export class PgAppStore implements AppStore {
     return Boolean(row);
   }
 
+  async deleteOrganizationExecutor(input: { organizationId: string; actorUserId: string; executorId: string }): Promise<boolean> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbDeleteOrganizationExecutor(db, { organizationId: input.organizationId, executorId: input.executorId })
+    );
+    return Boolean(row);
+  }
+
   async createManagedExecutor(input: {
     name: string;
     tokenHash: string;
@@ -2384,6 +2395,7 @@ export class PgAppStore implements AppStore {
     organizationId: string;
     actorUserId: string;
     limit: number;
+    status?: "active" | "archived" | "all";
     cursor?: { updatedAt: string; id: string } | null;
   }): Promise<{ sessions: AgentSessionRecord[]; nextCursor: { updatedAt: string; id: string } | null }> {
     const out = await this.withOrgContext(
@@ -2392,6 +2404,7 @@ export class PgAppStore implements AppStore {
         dbListAgentSessions(db, {
           organizationId: input.organizationId,
           limit: input.limit,
+          ...(input.status ? { status: input.status } : {}),
           ...(input.cursor ? { cursor: input.cursor } : {}),
         })
     );
@@ -2399,6 +2412,38 @@ export class PgAppStore implements AppStore {
       sessions: out.sessions.map((r) => this.toAgentSessionRecord(r)),
       nextCursor: out.nextCursor,
     };
+  }
+
+  async archiveAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbArchiveAgentSession(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+        })
+    );
+    return row ? this.toAgentSessionRecord(row) : null;
+  }
+
+  async restoreAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbRestoreAgentSession(db, {
+          organizationId: input.organizationId,
+          sessionId: input.sessionId,
+        })
+    );
+    return row ? this.toAgentSessionRecord(row) : null;
   }
 
   async getAgentSessionById(input: { organizationId: string; actorUserId: string; sessionId: string }): Promise<AgentSessionRecord | null> {

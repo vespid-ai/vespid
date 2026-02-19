@@ -13,6 +13,7 @@ import type {
   GatewayMemorySyncV2,
   MemoryProvider,
   GatewaySessionOpenV2,
+  GatewaySessionCancelV2,
   GatewaySessionTurnV2,
   GatewayToolResultV2,
   ToolPolicyV1,
@@ -175,6 +176,13 @@ const sessionTurnSchema = z.object({
   eventSeq: z.number().int().min(0),
   message: z.string().min(1),
   attachments: z.array(z.unknown()).optional(),
+});
+
+const sessionCancelSchema = z.object({
+  type: z.literal("session_cancel"),
+  requestId: z.string().min(1),
+  organizationId: z.string().uuid(),
+  sessionId: z.string().uuid(),
 });
 
 const memorySyncSchema = z.object({
@@ -355,6 +363,12 @@ type SessionContext = {
   memory: ReturnType<typeof createMemoryManager>;
   history: Array<{ role: "system" | "user" | "assistant"; content: string }>;
   workspaceDir: string;
+  activeTurn:
+    | {
+        requestId: string;
+        controller: AbortController;
+      }
+    | null;
 };
 
 function normalizePathPart(value: string): string {
@@ -496,7 +510,11 @@ async function runCliCommand(input: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs: number;
-}): Promise<{ exitCode: number; stdout: string; stderr: string; notFound: boolean; timedOut: boolean }> {
+  signal?: AbortSignal;
+}): Promise<{ exitCode: number; stdout: string; stderr: string; notFound: boolean; timedOut: boolean; aborted: boolean }> {
+  if (input.signal?.aborted) {
+    return { exitCode: 130, stdout: "", stderr: "aborted", notFound: false, timedOut: false, aborted: true };
+  }
   return await new Promise((resolve, reject) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
@@ -507,11 +525,31 @@ async function runCliCommand(input: {
     let stderr = "";
     let settled = false;
     let timedOut = false;
+    let aborted = false;
+    let abortTimer: NodeJS.Timeout | null = null;
     const timer = setTimeout(() => {
       if (settled) return;
       timedOut = true;
       child.kill("SIGKILL");
     }, Math.max(1000, input.timeoutMs));
+
+    const onAbort = () => {
+      if (settled) return;
+      aborted = true;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+      abortTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, 300);
+    };
+    input.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
@@ -523,8 +561,19 @@ async function runCliCommand(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (abortTimer) {
+        clearTimeout(abortTimer);
+      }
+      input.signal?.removeEventListener("abort", onAbort);
       if (error.code === "ENOENT") {
-        resolve({ exitCode: 127, stdout, stderr: `${input.command}: command not found`, notFound: true, timedOut: false });
+        resolve({
+          exitCode: 127,
+          stdout,
+          stderr: `${input.command}: command not found`,
+          notFound: true,
+          timedOut: false,
+          aborted: false,
+        });
         return;
       }
       reject(error);
@@ -533,7 +582,18 @@ async function runCliCommand(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ exitCode: code ?? (timedOut ? 124 : 0), stdout, stderr, notFound: false, timedOut });
+      if (abortTimer) {
+        clearTimeout(abortTimer);
+      }
+      input.signal?.removeEventListener("abort", onAbort);
+      resolve({
+        exitCode: code ?? (timedOut ? 124 : aborted ? 130 : 0),
+        stdout,
+        stderr,
+        notFound: false,
+        timedOut,
+        aborted,
+      });
     });
   });
 }
@@ -545,6 +605,7 @@ async function executeEnginePrompt(input: {
   workspaceDir: string;
   timeoutMs: number;
   apiKey?: string | null;
+  signal?: AbortSignal;
 }): Promise<
   | { ok: true; content: string; raw: { stdout: string; stderr: string } }
   | { ok: false; code: string; message: string; raw?: { stdout: string; stderr: string } }
@@ -579,9 +640,17 @@ async function executeEnginePrompt(input: {
       cwd: input.workspaceDir,
       env,
       timeoutMs: input.timeoutMs,
+      ...(input.signal ? { signal: input.signal } : {}),
     });
     lastStdout = result.stdout;
     lastStderr = result.stderr;
+    if (result.aborted) {
+      return {
+        ok: false,
+        code: "TURN_CANCELED",
+        message: "Turn canceled",
+      };
+    }
     if (result.notFound) {
       return {
         ok: false,
@@ -611,6 +680,7 @@ async function buildSessionRuntimeManager(input: {
     | { ok: true; content: string; payload?: unknown }
     | { ok: false; code: string; message: string }
   >;
+  cancelTurn: (cancel: z.infer<typeof sessionCancelSchema>) => Promise<{ ok: true; canceled: boolean }>;
   syncMemory: (sync: z.infer<typeof memorySyncSchema>) => Promise<{ ok: true; details: unknown } | { ok: false; error: string }>;
   queryMemory: (query: z.infer<typeof memoryQuerySchema>) => Promise<{ ok: true; results: unknown[] } | { ok: false; error: string }>;
 }> {
@@ -636,6 +706,7 @@ async function buildSessionRuntimeManager(input: {
         { role: "system" as const, content: open.sessionConfig.prompt.instructions },
       ],
       workspaceDir,
+      activeTurn: null,
     });
     return { ok: true } as const;
   }
@@ -644,6 +715,9 @@ async function buildSessionRuntimeManager(input: {
     const ctx = sessions.get(turn.sessionId) ?? null;
     if (!ctx) {
       return { ok: false as const, code: "SESSION_NOT_OPEN", message: "Session has not been opened on this executor." };
+    }
+    if (ctx.activeTurn) {
+      return { ok: false as const, code: "TURN_IN_PROGRESS", message: "A turn is already running for this session." };
     }
 
     const maxTurns = Math.max(1, Math.floor(ctx.opened.sessionConfig.limits.maxTurns));
@@ -657,23 +731,47 @@ async function buildSessionRuntimeManager(input: {
         : "";
     ctx.history.push({ role: "user", content: `${turn.message}${attachmentText}` });
 
-    const result = await executeEnginePrompt({
-      engineId: ctx.opened.sessionConfig.engine.id,
-      model: ctx.opened.sessionConfig.engine.model ?? defaultEngineModel(ctx.opened.sessionConfig.engine.id),
-      prompt: renderPromptFromMessages(ctx.history),
-      workspaceDir: ctx.workspaceDir,
-      timeoutMs: ctx.opened.sessionConfig.limits.timeoutMs,
-      apiKey:
-        ctx.opened.sessionConfig.engine.authMode === "inline_api_key" && ctx.opened.sessionConfig.engine.auth?.kind === "api_key"
-          ? ctx.opened.sessionConfig.engine.auth.apiKey
-          : null,
-    });
+    const controller = new AbortController();
+    ctx.activeTurn = { requestId: turn.requestId, controller };
+    let result:
+      | { ok: true; content: string; raw: { stdout: string; stderr: string } }
+      | { ok: false; code: string; message: string; raw?: { stdout: string; stderr: string } };
+    try {
+      result = await executeEnginePrompt({
+        engineId: ctx.opened.sessionConfig.engine.id,
+        model: ctx.opened.sessionConfig.engine.model ?? defaultEngineModel(ctx.opened.sessionConfig.engine.id),
+        prompt: renderPromptFromMessages(ctx.history),
+        workspaceDir: ctx.workspaceDir,
+        timeoutMs: ctx.opened.sessionConfig.limits.timeoutMs,
+        apiKey:
+          ctx.opened.sessionConfig.engine.authMode === "inline_api_key" && ctx.opened.sessionConfig.engine.auth?.kind === "api_key"
+            ? ctx.opened.sessionConfig.engine.auth.apiKey
+            : null,
+        signal: controller.signal,
+      });
+    } finally {
+      if (ctx.activeTurn?.requestId === turn.requestId) {
+        ctx.activeTurn = null;
+      }
+    }
     if (!result.ok) {
       return { ok: false as const, code: result.code, message: result.message };
     }
 
     ctx.history.push({ role: "assistant", content: result.content });
     return { ok: true as const, content: result.content, payload: { raw: result.raw } };
+  }
+
+  async function cancelTurn(cancel: z.infer<typeof sessionCancelSchema>) {
+    const ctx = sessions.get(cancel.sessionId) ?? null;
+    if (!ctx || !ctx.activeTurn) {
+      return { ok: true as const, canceled: false };
+    }
+    if (ctx.activeTurn.requestId !== cancel.requestId) {
+      return { ok: true as const, canceled: false };
+    }
+    ctx.activeTurn.controller.abort();
+    return { ok: true as const, canceled: true };
   }
 
   async function syncMemory(sync: z.infer<typeof memorySyncSchema>) {
@@ -716,6 +814,7 @@ async function buildSessionRuntimeManager(input: {
   return {
     openSession,
     runTurn,
+    cancelTurn,
     syncMemory,
     queryMemory,
   };
@@ -1276,6 +1375,13 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
             content: turn.content,
             ...(turn.payload !== undefined ? { payload: turn.payload } : {}),
           });
+          return;
+        }
+
+        const parsedCancel = sessionCancelSchema.safeParse(parsedJson);
+        if (parsedCancel.success) {
+          const incoming = parsedCancel.data as GatewaySessionCancelV2;
+          await sessionRuntime.cancelTurn(incoming as any);
           return;
         }
 

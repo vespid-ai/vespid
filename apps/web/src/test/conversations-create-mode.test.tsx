@@ -15,7 +15,11 @@ const mocks = vi.hoisted(() => {
       token: "org_1.pairing-token",
       expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
     })),
+    archiveSession: vi.fn(async (_sessionId: string) => ({ ok: true })),
+    restoreSession: vi.fn(async (_sessionId: string) => ({ ok: true })),
+    refetchEngineAuthStatus: vi.fn(async () => ({ data: undefined })),
     onlineExecutorCount: 1,
+    sessionsData: [] as any[],
   };
 });
 
@@ -51,6 +55,8 @@ vi.mock("../lib/hooks/use-agents", () => ({
   useAgentInstaller: () => ({
     data: {
       provider: "npm-registry",
+      delivery: "npm",
+      fallbackReason: null,
       packageName: "@vespid/node-agent",
       distTag: "latest",
       registryUrl: "https://registry.npmjs.org",
@@ -109,14 +115,16 @@ vi.mock("../lib/hooks/use-engine-auth-status", () => ({
         },
       },
     },
-    refetch: vi.fn(),
+    refetch: mocks.refetchEngineAuthStatus,
     isFetching: false,
   }),
 }));
 
 vi.mock("../lib/hooks/use-sessions", () => ({
-  useSessions: () => ({ data: { sessions: [] }, isLoading: false, isError: false, refetch: vi.fn() }),
+  useSessions: () => ({ data: { sessions: mocks.sessionsData }, isLoading: false, isError: false, refetch: vi.fn() }),
   useCreateSession: () => ({ isPending: false, mutateAsync: mocks.createSession }),
+  useArchiveSession: () => ({ isPending: false, mutateAsync: mocks.archiveSession }),
+  useRestoreSession: () => ({ isPending: false, mutateAsync: mocks.restoreSession }),
 }));
 
 function readMessages(locale: "en" | "zh-CN") {
@@ -130,7 +138,12 @@ describe("Conversations create modes", () => {
     mocks.createSession.mockClear();
     mocks.updateOrgSettings.mockClear();
     mocks.createPairingToken.mockClear();
+    mocks.archiveSession.mockClear();
+    mocks.restoreSession.mockClear();
+    mocks.refetchEngineAuthStatus.mockReset();
+    mocks.refetchEngineAuthStatus.mockResolvedValue({ data: undefined });
     mocks.onlineExecutorCount = 1;
+    mocks.sessionsData = [];
   });
 
   it("submits quick mode payload with minimal defaults", async () => {
@@ -196,7 +209,7 @@ describe("Conversations create modes", () => {
     expect(payload.prompt.instructions).toBe("Use policy-safe responses.");
   });
 
-  it("shows executor onboarding and blocks create when no executor is online", async () => {
+  it("shows executor onboarding and still allows creating a chat when no executor is online", async () => {
     const user = userEvent.setup();
     const messages = readMessages("en");
     mocks.onlineExecutorCount = 0;
@@ -211,6 +224,48 @@ describe("Conversations create modes", () => {
     await waitFor(() => expect(mocks.createPairingToken).toHaveBeenCalledTimes(1));
 
     await user.type(screen.getByLabelText(messages.sessions.chat.message), "Try to start");
-    expect(screen.getByRole("button", { name: messages.sessions.chat.send })).toBeDisabled();
+    const send = screen.getByRole("button", { name: messages.sessions.chat.send });
+    expect(send).toBeEnabled();
+    await user.click(send);
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1));
+    expect(mocks.refetchEngineAuthStatus).not.toHaveBeenCalled();
+  });
+
+  it("supports list archive and restore actions", async () => {
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+    mocks.sessionsData = [
+      {
+        id: "session_active",
+        title: "Active chat",
+        status: "active",
+        llmProvider: "codex",
+        llmModel: "gpt-5-codex",
+        lastActivityAt: new Date().toISOString(),
+      },
+      {
+        id: "session_archived",
+        title: "Archived chat",
+        status: "archived",
+        llmProvider: "codex",
+        llmModel: "gpt-5-codex",
+        lastActivityAt: new Date().toISOString(),
+      },
+    ];
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationsPage />
+      </NextIntlClientProvider>
+    );
+
+    const deleteButtons = screen.getAllByRole("button", { name: messages.sessions.actions.delete });
+    await user.click(deleteButtons[0]!);
+    await waitFor(() => expect(mocks.archiveSession).toHaveBeenCalledWith("session_active"));
+
+    await user.click(screen.getByRole("button", { name: messages.sessions.list.filterArchived }));
+    const restoreButtons = screen.getAllByRole("button", { name: messages.sessions.actions.restore });
+    await user.click(restoreButtons[0]!);
+    await waitFor(() => expect(mocks.restoreSession).toHaveBeenCalledWith("session_archived"));
   });
 });

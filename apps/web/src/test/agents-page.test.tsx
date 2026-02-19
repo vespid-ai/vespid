@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   installerMode: "ready" as "ready" | "error" | "loading",
   installerData: {
     provider: "npm-registry" as const,
+    delivery: "npm" as const,
+    fallbackReason: null as string | null,
     packageName: "@vespid/node-agent",
     distTag: "latest",
     registryUrl: "https://registry.npmjs.org",
@@ -24,6 +26,8 @@ const mocks = vi.hoisted(() => ({
       start: "npx -y @vespid/node-agent@latest start",
     },
   },
+  agentsData: [] as any[],
+  deleteAgent: vi.fn(async () => ({})),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -50,7 +54,7 @@ vi.mock("../lib/hooks/use-session", () => ({
 
 vi.mock("../lib/hooks/use-agents", () => ({
   useAgents: () => ({
-    data: { agents: [] },
+    data: { agents: mocks.agentsData },
     isLoading: false,
     isError: false,
     isFetching: false,
@@ -74,6 +78,10 @@ vi.mock("../lib/hooks/use-agents", () => ({
     isPending: false,
     mutateAsync: vi.fn(async () => ({})),
   }),
+  useDeleteAgent: () => ({
+    isPending: false,
+    mutateAsync: mocks.deleteAgent,
+  }),
   useUpdateAgentTags: () => ({
     isPending: false,
     mutateAsync: vi.fn(async () => ({})),
@@ -89,6 +97,8 @@ describe("Agents page installer experience", () => {
   beforeEach(() => {
     mocks.push.mockReset();
     mocks.installerMode = "ready";
+    mocks.agentsData = [];
+    mocks.deleteAgent.mockReset();
     mocks.pairingPayload = {
       token: "test-pairing-token",
       expiresAt: "2099-01-01T00:00:00.000Z",
@@ -135,7 +145,9 @@ describe("Agents page installer experience", () => {
 
     expect(screen.getByText(messages.agents.installer.fallbackTitle)).toBeInTheDocument();
     expect(screen.getByText(messages.agents.installer.fallbackDescription)).toBeInTheDocument();
-    expect(screen.queryByText(messages.agents.installer.connectCommand)).not.toBeInTheDocument();
+    expect(screen.getByText(messages.agents.installer.fallbackUsingDefaults)).toBeInTheDocument();
+    expect(screen.getByText(messages.agents.installer.connectCommand)).toBeInTheDocument();
+    expect(screen.getByText(messages.agents.installer.startCommand)).toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.sourceConnectCommand)).not.toBeInTheDocument();
   });
 
@@ -176,5 +188,39 @@ describe("Agents page installer experience", () => {
     expect(screen.queryByText(messages.agents.installer.sourceStartCommand)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.binaryArgsConnect)).not.toBeInTheDocument();
     expect(screen.queryByText(messages.agents.installer.binaryArgsStart)).not.toBeInTheDocument();
+  });
+
+  it("shows delete action for revoked worker nodes", async () => {
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+    mocks.agentsData = [
+      {
+        id: "executor-1",
+        name: "Revoked Node",
+        status: "revoked",
+        revokedAt: "2026-02-19T01:00:00.000Z",
+        lastSeenAt: "2026-02-19T01:00:00.000Z",
+        createdAt: "2026-02-18T01:00:00.000Z",
+        tags: [],
+        reportedTags: [],
+      },
+    ];
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <AgentsPage />
+      </NextIntlClientProvider>
+    );
+
+    expect(screen.queryByRole("button", { name: messages.agents.revoke })).not.toBeInTheDocument();
+    const deleteButtons = screen.getAllByRole("button", { name: messages.common.delete });
+    await user.click(deleteButtons[0]!);
+    await screen.findByText("Delete revoked worker node");
+    const confirmDeleteButtons = screen.getAllByRole("button", { name: messages.common.delete });
+    await user.click(confirmDeleteButtons[confirmDeleteButtons.length - 1]!);
+
+    await waitFor(() => {
+      expect(mocks.deleteAgent).toHaveBeenCalledWith("executor-1");
+    });
   });
 });

@@ -1492,6 +1492,22 @@ export class MemoryAppStore implements AppStore {
     return true;
   }
 
+  async deleteOrganizationExecutor(input: {
+    organizationId: string;
+    actorUserId: string;
+    executorId: string;
+  }): Promise<boolean> {
+    const existing = this.organizationExecutors.get(input.executorId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return false;
+    }
+    if (!existing.revokedAt) {
+      return false;
+    }
+    this.organizationExecutors.delete(input.executorId);
+    return true;
+  }
+
   async createManagedExecutor(input: {
     name: string;
     tokenHash: string;
@@ -1881,12 +1897,17 @@ export class MemoryAppStore implements AppStore {
     organizationId: string;
     actorUserId: string;
     limit: number;
+    status?: "active" | "archived" | "all";
     cursor?: { updatedAt: string; id: string } | null;
   }): Promise<{ sessions: AgentSessionRecord[]; nextCursor: { updatedAt: string; id: string } | null }> {
     const limit = Math.max(1, Math.min(200, Math.floor(input.limit)));
     const cursor = input.cursor ?? null;
+    const status = input.status ?? "active";
 
     let sessions = [...this.agentSessions.values()].filter((s) => s.organizationId === input.organizationId);
+    if (status !== "all") {
+      sessions = sessions.filter((s) => s.status === status);
+    }
     sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
 
     if (cursor) {
@@ -1897,6 +1918,46 @@ export class MemoryAppStore implements AppStore {
     const hasMore = sessions.length > limit;
     const nextCursor = hasMore && page.length > 0 ? { updatedAt: page[page.length - 1]!.updatedAt, id: page[page.length - 1]!.id } : null;
     return { sessions: page, nextCursor };
+  }
+
+  async archiveAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null> {
+    const session = this.agentSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return null;
+    }
+    const now = nowIso();
+    const patched: AgentSessionRecord = {
+      ...session,
+      status: "archived",
+      updatedAt: now,
+      lastActivityAt: now,
+    };
+    this.agentSessions.set(session.id, patched);
+    return patched;
+  }
+
+  async restoreAgentSession(input: {
+    organizationId: string;
+    actorUserId: string;
+    sessionId: string;
+  }): Promise<AgentSessionRecord | null> {
+    const session = this.agentSessions.get(input.sessionId) ?? null;
+    if (!session || session.organizationId !== input.organizationId) {
+      return null;
+    }
+    const now = nowIso();
+    const patched: AgentSessionRecord = {
+      ...session,
+      status: "active",
+      updatedAt: now,
+      lastActivityAt: now,
+    };
+    this.agentSessions.set(session.id, patched);
+    return patched;
   }
 
   async getAgentSessionById(input: {

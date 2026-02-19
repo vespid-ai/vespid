@@ -953,6 +953,37 @@ export async function buildGatewayEdgeServer(input?: {
         return;
       }
 
+      if (type === "session_cancel") {
+        const parsed = z
+          .object({
+            type: z.literal("session_cancel"),
+            sessionId: z.string().uuid(),
+          })
+          .safeParse(message);
+        if (!parsed.success) {
+          safeWsSend(ws, { type: "session_error", code: "BAD_REQUEST", message: "Invalid session_cancel payload" });
+          return;
+        }
+
+        const session = await withTenantContext(pool, { organizationId: context.organizationId }, async (db) =>
+          getAgentSessionById(db, { organizationId: context.organizationId, sessionId: parsed.data.sessionId })
+        );
+        if (!session) {
+          safeWsSend(ws, { type: "session_error", sessionId: parsed.data.sessionId, code: "SESSION_NOT_FOUND", message: "Session not found" });
+          return;
+        }
+
+        await xaddJson(redis, streamToBrain(), {
+          type: "session_cancel",
+          requestId: `${parsed.data.sessionId}:cancel:${Date.now()}`,
+          organizationId: context.organizationId,
+          userId: context.userId,
+          sessionId: parsed.data.sessionId,
+          originEdgeId: edgeId,
+        } satisfies EdgeToBrainRequest);
+        return;
+      }
+
       if (type === "session_leave") {
         const parsed = z.object({ type: z.literal("session_leave"), sessionId: z.string().uuid() }).safeParse(message);
         if (!parsed.success) {

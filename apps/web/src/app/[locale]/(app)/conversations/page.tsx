@@ -16,7 +16,7 @@ import { useSession as useAuthSession } from "../../../../lib/hooks/use-session"
 import { useMe } from "../../../../lib/hooks/use-me";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
 import { useToolsets } from "../../../../lib/hooks/use-toolsets";
-import { useCreateSession, useSessions } from "../../../../lib/hooks/use-sessions";
+import { useArchiveSession, useCreateSession, useRestoreSession, useSessions, type SessionListStatus } from "../../../../lib/hooks/use-sessions";
 import { useAgentInstaller, useCreatePairingToken } from "../../../../lib/hooks/use-agents";
 import { useEngineAuthStatus } from "../../../../lib/hooks/use-engine-auth-status";
 import { type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
@@ -30,6 +30,10 @@ import { CommandBlock } from "../../../../components/ui/command-block";
 
 const DEFAULT_CHAT_TITLE = "";
 const DEFAULT_INSTRUCTIONS = "Help me accomplish my task safely and efficiently.";
+const DEFAULT_NODE_AGENT_CONNECT_TEMPLATE =
+  'npx -y @vespid/node-agent@latest connect --pairing-token "<pairing-token>" --api-base "<api-base>"';
+const DEFAULT_NODE_AGENT_START_COMMAND = "npx -y @vespid/node-agent@latest start";
+type EngineAuthStatusSnapshot = ReturnType<typeof useEngineAuthStatus>["data"];
 
 function formatSessionTime(value: string | null | undefined): string {
   if (!value) {
@@ -66,6 +70,18 @@ function buildConnectCommand(input: { template: string; pairingToken: string; ap
     .replaceAll("<api-base>", normalizeNodeAgentApiBase(input.apiBase));
 }
 
+function countUniqueOnlineExecutors(status: EngineAuthStatusSnapshot): number {
+  const engines = status?.engines;
+  if (!engines) return 0;
+  const ids = new Set<string>();
+  for (const key of Object.keys(engines) as Array<keyof typeof engines>) {
+    for (const executor of engines[key].executors ?? []) {
+      if (executor.executorId) ids.add(executor.executorId);
+    }
+  }
+  return ids.size;
+}
+
 export default function ConversationsPage() {
   const t = useTranslations();
   const router = useRouter();
@@ -76,9 +92,12 @@ export default function ConversationsPage() {
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
   const meQuery = useMe(Boolean(authSession.data?.session));
-  const sessionsQuery = useSessions(scopedOrgId);
+  const [sessionListStatus, setSessionListStatus] = useState<SessionListStatus>("active");
+  const sessionsQuery = useSessions(scopedOrgId, sessionListStatus);
   const toolsetsQuery = useToolsets(scopedOrgId);
   const createSession = useCreateSession(scopedOrgId);
+  const archiveSession = useArchiveSession(scopedOrgId);
+  const restoreSession = useRestoreSession(scopedOrgId);
   const installerQuery = useAgentInstaller();
   const createPairingTokenMutation = useCreatePairingToken(scopedOrgId);
   const engineAuthStatusQuery = useEngineAuthStatus(scopedOrgId, { refetchIntervalMs: 10_000 });
@@ -143,27 +162,17 @@ export default function ConversationsPage() {
   const hasUsablePairingToken = resolvedPairingToken !== "<pairing-token>";
 
   const installerCommands = installerQuery.data?.commands ?? null;
-  const connectCommand = installerCommands
-    ? buildConnectCommand({ template: installerCommands.connect, pairingToken: resolvedPairingToken, apiBase: getApiBase() })
-    : "";
-  const startCommand = installerCommands?.start ?? "";
+  const connectCommand = buildConnectCommand({
+    template: installerCommands?.connect ?? DEFAULT_NODE_AGENT_CONNECT_TEMPLATE,
+    pairingToken: resolvedPairingToken,
+    apiBase: getApiBase(),
+  });
+  const startCommand = installerCommands?.start ?? DEFAULT_NODE_AGENT_START_COMMAND;
 
-  const onlineExecutorCount = useMemo(() => {
-    const engines = engineAuthStatusQuery.data?.engines;
-    if (!engines) return 0;
-    const ids = new Set<string>();
-    for (const key of Object.keys(engines) as Array<keyof typeof engines>) {
-      for (const executor of engines[key].executors ?? []) {
-        if (executor.executorId) {
-          ids.add(executor.executorId);
-        }
-      }
-    }
-    return ids.size;
-  }, [engineAuthStatusQuery.data?.engines]);
+  const onlineExecutorCount = useMemo(() => countUniqueOnlineExecutors(engineAuthStatusQuery.data), [engineAuthStatusQuery.data]);
 
   const needsExecutorOnboarding = canOperate && engineAuthStatusQuery.isSuccess && onlineExecutorCount === 0;
-  const canStartConversation = canOperate && !createSession.isPending && message.trim().length > 0 && !needsExecutorOnboarding;
+  const canStartConversation = canOperate && !createSession.isPending && message.trim().length > 0;
 
   useEffect(() => {
     if (llmInitRef.current) return;
@@ -244,10 +253,6 @@ export default function ConversationsPage() {
 
   async function startConversation() {
     if (!scopedOrgId) {
-      return;
-    }
-    if (needsExecutorOnboarding) {
-      toast.error(canManageExecutors ? t("sessions.executorGuide.noExecutorErrorOwner") : t("sessions.executorGuide.noExecutorErrorMember"));
       return;
     }
     const firstMessage = message.trim();
@@ -473,27 +478,33 @@ export default function ConversationsPage() {
                       )}
                     </div>
 
-                    {installerCommands ? (
-                      <div className="grid gap-3">
-                        <div className="grid gap-1">
-                          <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.connectCommand")}</div>
-                          <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
-                        </div>
-                        <div className="grid gap-1">
-                          <div className="text-xs font-medium text-muted">{t("agents.installer.startCommand")}</div>
-                          <CommandBlock command={startCommand} copyLabel={t("agents.installer.copyStart")} />
-                        </div>
-                        {!hasUsablePairingToken ? (
-                          <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">
-                            {pairingTokenExpired ? t("agents.installer.tokenExpired") : t("agents.installer.tokenMissing")}
-                          </div>
-                        ) : null}
+                    <div className="grid gap-3">
+                      <div className="grid gap-1">
+                        <div className="text-xs font-medium text-muted">{t("sessions.executorGuide.connectCommand")}</div>
+                        <CommandBlock command={connectCommand} copyLabel={t("agents.installer.copyConnect")} />
                       </div>
-                    ) : (
-                      <div className="rounded-md border border-borderSubtle/70 bg-panel/45 p-3 text-xs text-muted">
-                        {t("sessions.executorGuide.installerUnavailable")}
+                      <div className="grid gap-1">
+                        <div className="text-xs font-medium text-muted">{t("agents.installer.startCommand")}</div>
+                        <CommandBlock command={startCommand} copyLabel={t("agents.installer.copyStart")} />
                       </div>
-                    )}
+                      {!hasUsablePairingToken ? (
+                        <div className="rounded-md border border-warn/35 bg-warn/10 p-2 text-xs text-warn">
+                          {pairingTokenExpired ? t("agents.installer.tokenExpired") : t("agents.installer.tokenMissing")}
+                        </div>
+                      ) : null}
+                      {installerQuery.data?.delivery ? (
+                        <div className="rounded-md border border-borderSubtle/70 bg-panel/45 p-2 text-xs text-muted">
+                          {installerQuery.data.delivery === "local-dev"
+                            ? t("agents.installer.deliveryLocalDev")
+                            : t("agents.installer.deliveryNpm")}
+                        </div>
+                      ) : null}
+                      {!installerCommands ? (
+                        <div className="rounded-md border border-borderSubtle/70 bg-panel/45 p-3 text-xs text-muted">
+                          {t("sessions.executorGuide.installerUnavailable")}
+                        </div>
+                      ) : null}
+                    </div>
 
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -534,6 +545,29 @@ export default function ConversationsPage() {
               <div className="text-sm font-medium text-text">{t("sessions.list.title")}</div>
               <div className="text-xs text-muted">{t("sessions.list.subtitle")}</div>
             </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant={sessionListStatus === "active" ? "outline" : "ghost"}
+                onClick={() => setSessionListStatus("active")}
+              >
+                {t("sessions.list.filterActive")}
+              </Button>
+              <Button
+                size="sm"
+                variant={sessionListStatus === "archived" ? "outline" : "ghost"}
+                onClick={() => setSessionListStatus("archived")}
+              >
+                {t("sessions.list.filterArchived")}
+              </Button>
+              <Button
+                size="sm"
+                variant={sessionListStatus === "all" ? "outline" : "ghost"}
+                onClick={() => setSessionListStatus("all")}
+              >
+                {t("sessions.list.filterAll")}
+              </Button>
+            </div>
             {sessionsQuery.isLoading ? (
               <div className="rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/55 p-3 text-sm text-muted">
                 {t("common.loading")}
@@ -545,18 +579,57 @@ export default function ConversationsPage() {
             ) : (
               <div className="grid gap-2">
                 {sortedSessions.map((session) => (
-                  <button
+                  <div
                     key={session.id}
-                    type="button"
-                    className="w-full rounded-[var(--radius-sm)] border border-borderSubtle/55 bg-panel/45 px-3 py-2 text-left transition-[background-color,border-color] hover:border-borderStrong/70 hover:bg-panel/70"
-                    onClick={() => router.push(`/${locale}/conversations/${session.id}`)}
+                    className="flex items-start justify-between gap-2 rounded-[var(--radius-sm)] border border-borderSubtle/55 bg-panel/45 px-3 py-2"
                   >
-                    <div className="truncate text-sm font-medium text-text">{session.title?.trim() || t("sessions.untitled")}</div>
-                    <div className="mt-0.5 text-[11px] text-muted">
-                      {session.llmProvider}:{session.llmModel}
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left transition-[background-color,border-color] hover:opacity-90"
+                      onClick={() => router.push(`/${locale}/conversations/${session.id}`)}
+                    >
+                      <div className="truncate text-sm font-medium text-text">{session.title?.trim() || t("sessions.untitled")}</div>
+                      <div className="mt-0.5 text-[11px] text-muted">
+                        {session.llmProvider}:{session.llmModel}
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted">{formatSessionTime(session.lastActivityAt)}</div>
+                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {session.status === "archived" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={restoreSession.isPending}
+                          onClick={async () => {
+                            try {
+                              await restoreSession.mutateAsync(session.id);
+                              toast.success(t("sessions.actions.restored"));
+                            } catch (error) {
+                              toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                            }
+                          }}
+                        >
+                          {t("sessions.actions.restore")}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={archiveSession.isPending}
+                          onClick={async () => {
+                            try {
+                              await archiveSession.mutateAsync(session.id);
+                              toast.success(t("sessions.actions.deleted"));
+                            } catch (error) {
+                              toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+                            }
+                          }}
+                        >
+                          {t("sessions.actions.delete")}
+                        </Button>
+                      )}
                     </div>
-                    <div className="mt-1 text-[11px] text-muted">{formatSessionTime(session.lastActivityAt)}</div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
