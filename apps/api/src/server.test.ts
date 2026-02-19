@@ -1691,6 +1691,244 @@ describe("api hardening foundation", () => {
     queueProducer.setFailure(null);
   });
 
+  it("supports webhook trigger subscriptions and trigger toggle", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `webhook-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Webhook Org",
+        slug: `webhook-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const token = `token-${Date.now()}`;
+    const createWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Webhook Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.webhook", config: { token } },
+          nodes: [{ id: "node1", type: "agent.execute" }],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publishWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishWorkflow.statusCode).toBe(200);
+
+    const listTriggers = await server.inject({
+      method: "GET",
+      url: `/v1/orgs/${orgId}/triggers`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(listTriggers.statusCode).toBe(200);
+    const subscriptions = (listTriggers.json() as { subscriptions: Array<{ id: string; triggerType: string; enabled: boolean }> })
+      .subscriptions;
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]?.triggerType).toBe("webhook");
+    expect(subscriptions[0]?.enabled).toBe(true);
+
+    const enqueueCountBefore = queueProducer.enqueued.length;
+    const firstTrigger = await server.inject({
+      method: "POST",
+      url: `/v1/triggers/webhook/${token}`,
+      headers: {
+        "x-idempotency-key": "same-event-1",
+      },
+      payload: { issue: "ABC-1" },
+    });
+    expect(firstTrigger.statusCode).toBe(202);
+    expect(queueProducer.enqueued.length).toBe(enqueueCountBefore + 1);
+
+    const duplicateTrigger = await server.inject({
+      method: "POST",
+      url: `/v1/triggers/webhook/${token}`,
+      headers: {
+        "x-idempotency-key": "same-event-1",
+      },
+      payload: { issue: "ABC-1" },
+    });
+    expect(duplicateTrigger.statusCode).toBe(202);
+    expect((duplicateTrigger.json() as { duplicate?: boolean }).duplicate).toBe(true);
+    expect(queueProducer.enqueued.length).toBe(enqueueCountBefore + 1);
+
+    const subscriptionId = subscriptions[0]!.id;
+    const disableTrigger = await server.inject({
+      method: "PATCH",
+      url: `/v1/orgs/${orgId}/triggers/${subscriptionId}`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        enabled: false,
+      },
+    });
+    expect(disableTrigger.statusCode).toBe(200);
+    expect((disableTrigger.json() as { subscription: { enabled: boolean } }).subscription.enabled).toBe(false);
+
+    const afterDisable = await server.inject({
+      method: "POST",
+      url: `/v1/triggers/webhook/${token}`,
+      payload: { issue: "ABC-2" },
+    });
+    expect(afterDisable.statusCode).toBe(404);
+  });
+
+  it("approves pending workflow approval requests and resumes blocked runs", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `approval-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+    const ownerUserId = (ownerSignup.json() as { user: { id: string } }).user.id;
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Approval Org",
+        slug: `approval-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const wfRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Approval Workflow",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [{ id: "node-1", type: "agent.execute" }],
+        },
+      },
+    });
+    expect(wfRes.statusCode).toBe(201);
+    const workflowId = (wfRes.json() as { workflow: { id: string } }).workflow.id;
+
+    const publishRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishRes.statusCode).toBe(200);
+
+    const run = await store.createWorkflowRun({
+      organizationId: orgId,
+      workflowId,
+      triggerType: "manual",
+      requestedByUserId: ownerUserId,
+      input: { issue: "A-1" },
+    });
+
+    const approvalId = crypto.randomUUID();
+    const workflowRunsMap = (store as unknown as { workflowRuns: Map<string, any> }).workflowRuns;
+    const blockedRun = workflowRunsMap.get(run.id)!;
+    blockedRun.status = "running";
+    blockedRun.attemptCount = 1;
+    blockedRun.blockedRequestId = approvalId;
+    blockedRun.blockedNodeId = "node-1";
+    blockedRun.blockedNodeType = "agent.execute";
+    blockedRun.blockedKind = "approval";
+    blockedRun.blockedAt = new Date().toISOString();
+    blockedRun.blockedTimeoutAt = new Date(Date.now() + 60_000).toISOString();
+    workflowRunsMap.set(run.id, blockedRun);
+
+    const approvalsMap = (store as unknown as { workflowApprovalRequests: Map<string, any> }).workflowApprovalRequests;
+    approvalsMap.set(approvalId, {
+      id: approvalId,
+      organizationId: orgId,
+      workflowId,
+      runId: run.id,
+      nodeId: "node-1",
+      nodeType: "agent.execute",
+      requestKind: "policy",
+      status: "pending",
+      reason: "shell_run_requires_approval",
+      context: {},
+      requestedByUserId: ownerUserId,
+      decidedByUserId: null,
+      decisionNote: null,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      decidedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const beforeEnqueue = queueProducer.enqueued.length;
+    const approveRes = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/approvals/${approvalId}/approve`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        note: "approved for incident response",
+      },
+    });
+    expect(approveRes.statusCode).toBe(200);
+    const approveBody = approveRes.json() as { approval: { status: string }; resumed: boolean };
+    expect(approveBody.approval.status).toBe("approved");
+    expect(approveBody.resumed).toBe(true);
+    expect(queueProducer.enqueued.length).toBe(beforeEnqueue + 1);
+    expect(queueProducer.enqueued[queueProducer.enqueued.length - 1]).toEqual(
+      expect.objectContaining({
+        runId: run.id,
+        organizationId: orgId,
+        workflowId,
+      })
+    );
+  });
+
   it("lists workflow runs and run events with tenant isolation", async () => {
     const ownerSignup = await server.inject({
       method: "POST",

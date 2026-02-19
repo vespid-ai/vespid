@@ -22,7 +22,8 @@ import {
   DropdownMenuTrigger,
 } from "../../../../components/ui/dropdown-menu";
 import { ModelPickerField } from "../../../../components/app/model-picker/model-picker-field";
-import { LlmConfigField, type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { type LlmConfigValue } from "../../../../components/app/llm/llm-config-field";
+import { LlmCompactConfigField } from "../../../../components/app/llm/llm-compact-config-field";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
 import { QuickCreatePanel } from "../../../../components/app/quick-create-panel";
@@ -810,10 +811,14 @@ export default function WorkflowsPage() {
 
             <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
               <div className="text-sm font-medium text-text">{t("workflows.defaultAgentModel")}</div>
-              <LlmConfigField orgId={scopedOrgId} mode="primary" value={defaultAgentLlm} onChange={setDefaultAgentLlm} />
-              {isOAuthRequiredProvider(defaultAgentLlm.providerId) && !defaultAgentLlm.secretId ? (
-                <div className="text-xs text-warn">Selected provider requires a connected account.</div>
-              ) : null}
+              <LlmCompactConfigField
+                orgId={scopedOrgId}
+                mode="primary"
+                value={defaultAgentLlm}
+                onChange={setDefaultAgentLlm}
+                advancedSectionId="workflow-default-llm-advanced"
+                testId="workflow-default-llm-compact"
+              />
             </div>
 
             <div className="grid gap-2 rounded-lg border border-borderSubtle bg-panel/70 p-3">
@@ -952,18 +957,17 @@ export default function WorkflowsPage() {
                             {t("workflows.usingDefaultModel", { provider: defaultAgentLlm.providerId, model: defaultAgentLlm.modelId })}
                           </div>
                         ) : (
-                          <LlmConfigField
+                          <LlmCompactConfigField
                             orgId={scopedOrgId}
                             mode="workflowAgentRun"
                             value={node.llmOverride}
                             onChange={(next) =>
                               setAgentNodes((prev) => prev.map((n) => (n.id === node.id ? { ...n, llmOverride: next } : n)))
                             }
+                            advancedSectionId={`workflow-node-llm-advanced-${node.id}`}
+                            testId={`workflow-node-llm-compact-${node.id}`}
                           />
                         )}
-                        {!node.llmUseDefault && isOAuthRequiredProvider(node.llmOverride.providerId) && !node.llmOverride.secretId ? (
-                          <div className="text-xs text-warn">Selected provider requires a connected account.</div>
-                        ) : null}
                       </div>
 
                       <AdvancedSection
@@ -1408,6 +1412,9 @@ export default function WorkflowsPage() {
                                         <Label htmlFor={`teammate-model-${node.id}-${tmIdx}`}>{t("workflows.model")}</Label>
                                         <ModelPickerField
                                           value={tm.model}
+                                          allowClear
+                                          emptyLabel={t("llm.compact.inheritModel")}
+                                          testId={`workflow-teammate-model-${node.id}-${tmIdx}`}
                                           onChange={(next) =>
                                             setAgentNodes((prev) =>
                                               prev.map((n) =>

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
+import { deriveTriggerSubscriptionsFromDsl } from "../workflow-triggers.js";
 import type {
   AppStore,
   AgentToolsetRecord,
@@ -38,6 +39,8 @@ import type {
   AgentMemoryChunkRecord,
   AgentMemoryDocumentRecord,
   AgentMemorySyncJobRecord,
+  WorkflowTriggerSubscriptionRecord,
+  WorkflowApprovalRequestRecord,
 } from "../types.js";
 
 function nowIso(): string {
@@ -59,6 +62,9 @@ export class MemoryAppStore implements AppStore {
   private sessions = new Map<string, SessionRecord>();
   private workflows = new Map<string, WorkflowRecord>();
   private workflowRuns = new Map<string, WorkflowRunRecord>();
+  private workflowTriggerSubscriptions = new Map<string, WorkflowTriggerSubscriptionRecord>();
+  private workflowWebhookSubscriptionByTokenHash = new Map<string, string>();
+  private workflowApprovalRequests = new Map<string, WorkflowApprovalRequestRecord>();
   private workflowRunEvents = new Map<string, WorkflowRunEventRecord>();
   private connectorSecrets = new Map<string, (ConnectorSecretRecord & {
     kekId: string;
@@ -808,19 +814,243 @@ export class MemoryAppStore implements AppStore {
     return updated;
   }
 
+  async syncWorkflowTriggerSubscriptions(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    workflowRevision: number;
+    dsl: unknown;
+  }): Promise<WorkflowTriggerSubscriptionRecord[]> {
+    for (const [id, subscription] of this.workflowTriggerSubscriptions.entries()) {
+      if (subscription.organizationId === input.organizationId && subscription.workflowId === input.workflowId) {
+        this.workflowTriggerSubscriptions.delete(id);
+      }
+    }
+    for (const [tokenHash, subscriptionId] of this.workflowWebhookSubscriptionByTokenHash.entries()) {
+      const subscription = this.workflowTriggerSubscriptions.get(subscriptionId);
+      if (!subscription) {
+        this.workflowWebhookSubscriptionByTokenHash.delete(tokenHash);
+      }
+    }
+
+    const now = nowIso();
+    const specs = deriveTriggerSubscriptionsFromDsl(input.dsl);
+    const records = specs.map((spec) => {
+      const record: WorkflowTriggerSubscriptionRecord = {
+        id: crypto.randomUUID(),
+        organizationId: input.organizationId,
+        workflowId: input.workflowId,
+        requestedByUserId: input.actorUserId,
+        workflowRevision: input.workflowRevision,
+        triggerType: spec.triggerType,
+        enabled: spec.enabled ?? true,
+        cronExpr: spec.triggerType === "cron" ? spec.cronExpr : null,
+        heartbeatIntervalSec: spec.triggerType === "heartbeat" ? spec.heartbeatIntervalSec : null,
+        heartbeatJitterSec: spec.triggerType === "heartbeat" ? spec.heartbeatJitterSec : null,
+        heartbeatMaxSkewSec: spec.triggerType === "heartbeat" ? spec.heartbeatMaxSkewSec : null,
+        nextFireAt: null,
+        lastTriggeredAt: null,
+        lastTriggerKey: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.workflowTriggerSubscriptions.set(record.id, record);
+      if (spec.triggerType === "webhook") {
+        this.workflowWebhookSubscriptionByTokenHash.set(spec.webhookTokenHash, record.id);
+      }
+      return record;
+    });
+    return records;
+  }
+
+  async listWorkflowTriggerSubscriptions(input: {
+    organizationId: string;
+    actorUserId: string;
+    workflowId?: string;
+    limit?: number;
+  }): Promise<WorkflowTriggerSubscriptionRecord[]> {
+    const limit = Math.min(500, Math.max(1, input.limit ?? 200));
+    const rows = [...this.workflowTriggerSubscriptions.values()]
+      .filter((item) => item.organizationId === input.organizationId)
+      .filter((item) => (input.workflowId ? item.workflowId === input.workflowId : true))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit);
+    return rows;
+  }
+
+  async patchWorkflowTriggerSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+    subscriptionId: string;
+    enabled: boolean;
+  }): Promise<WorkflowTriggerSubscriptionRecord | null> {
+    const existing = this.workflowTriggerSubscriptions.get(input.subscriptionId);
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return null;
+    }
+    const updated: WorkflowTriggerSubscriptionRecord = {
+      ...existing,
+      enabled: input.enabled,
+      updatedAt: nowIso(),
+    };
+    this.workflowTriggerSubscriptions.set(updated.id, updated);
+    return updated;
+  }
+
+  async getWorkflowTriggerSubscriptionByWebhookTokenHash(input: {
+    webhookTokenHash: string;
+  }): Promise<WorkflowTriggerSubscriptionRecord | null> {
+    const subscriptionId = this.workflowWebhookSubscriptionByTokenHash.get(input.webhookTokenHash);
+    if (!subscriptionId) {
+      return null;
+    }
+    return this.workflowTriggerSubscriptions.get(subscriptionId) ?? null;
+  }
+
+  async listWorkflowApprovalRequests(input: {
+    organizationId: string;
+    actorUserId: string;
+    status?: "pending" | "approved" | "rejected" | "expired";
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ approvals: WorkflowApprovalRequestRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const limit = Math.min(500, Math.max(1, input.limit));
+    const cursorCreatedAt = input.cursor ? new Date(input.cursor.createdAt).getTime() : null;
+    const cursorId = input.cursor?.id ?? null;
+    const approvals = [...this.workflowApprovalRequests.values()]
+      .filter((item) => item.organizationId === input.organizationId)
+      .filter((item) => (input.status ? item.status === input.status : true))
+      .filter((item) => {
+        if (!cursorCreatedAt || !cursorId) {
+          return true;
+        }
+        const createdAt = new Date(item.createdAt).getTime();
+        return createdAt < cursorCreatedAt || (createdAt === cursorCreatedAt && item.id < cursorId);
+      })
+      .sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, limit);
+    const last = approvals.length > 0 ? approvals[approvals.length - 1] : null;
+    const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+    return { approvals, nextCursor };
+  }
+
+  async getWorkflowApprovalRequestById(input: {
+    organizationId: string;
+    actorUserId: string;
+    approvalRequestId: string;
+  }): Promise<WorkflowApprovalRequestRecord | null> {
+    const row = this.workflowApprovalRequests.get(input.approvalRequestId);
+    if (!row || row.organizationId !== input.organizationId) {
+      return null;
+    }
+    return row;
+  }
+
+  async decideWorkflowApprovalRequest(input: {
+    organizationId: string;
+    actorUserId: string;
+    approvalRequestId: string;
+    status: "approved" | "rejected" | "expired";
+    decisionNote?: string | null;
+  }): Promise<WorkflowApprovalRequestRecord | null> {
+    const existing = this.workflowApprovalRequests.get(input.approvalRequestId);
+    if (!existing || existing.organizationId !== input.organizationId || existing.status !== "pending") {
+      return null;
+    }
+    const updated: WorkflowApprovalRequestRecord = {
+      ...existing,
+      status: input.status,
+      decidedByUserId: input.actorUserId,
+      decisionNote: input.decisionNote ?? null,
+      decidedAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.workflowApprovalRequests.set(updated.id, updated);
+    return updated;
+  }
+
+  async getWorkflowRunByBlockedRequestId(input: {
+    organizationId: string;
+    actorUserId: string;
+    blockedRequestId: string;
+  }): Promise<WorkflowRunRecord | null> {
+    for (const run of this.workflowRuns.values()) {
+      if (
+        run.organizationId === input.organizationId &&
+        run.status === "running" &&
+        (run as any).blockedRequestId === input.blockedRequestId
+      ) {
+        return run;
+      }
+    }
+    return null;
+  }
+
+  async clearWorkflowRunBlock(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    expectedRequestId: string;
+  }): Promise<WorkflowRunRecord | null> {
+    const run = await this.getWorkflowRunById({
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      runId: input.runId,
+      actorUserId: input.actorUserId,
+    });
+    if (!run || (run as any).blockedRequestId !== input.expectedRequestId) {
+      return null;
+    }
+    const updated: WorkflowRunRecord = {
+      ...run,
+      blockedRequestId: null,
+      blockedNodeId: null,
+      blockedNodeType: null,
+      blockedKind: null,
+      blockedAt: null,
+      blockedTimeoutAt: null,
+    } as WorkflowRunRecord;
+    this.workflowRuns.set(updated.id, updated);
+    return updated;
+  }
+
   async createWorkflowRun(input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual" | "channel";
+    triggerType: "manual" | "channel" | "cron" | "webhook" | "heartbeat";
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
+    triggerKey?: string;
+    triggeredAt?: string;
+    triggerSource?: string;
   }): Promise<WorkflowRunRecord> {
+    if (input.triggerKey) {
+      const duplicate = [...this.workflowRuns.values()].some(
+        (run) =>
+          run.organizationId === input.organizationId &&
+          run.workflowId === input.workflowId &&
+          run.triggerKey === input.triggerKey
+      );
+      if (duplicate) {
+        throw new Error("WORKFLOW_TRIGGER_KEY_EXISTS");
+      }
+    }
     const run: WorkflowRunRecord = {
       id: crypto.randomUUID(),
       organizationId: input.organizationId,
       workflowId: input.workflowId,
       triggerType: input.triggerType,
+      triggerKey: input.triggerKey ?? null,
+      triggeredAt: input.triggeredAt ?? null,
+      triggerSource: input.triggerSource ?? null,
       status: "queued",
       attemptCount: 0,
       maxAttempts: input.maxAttempts ?? 3,

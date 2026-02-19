@@ -133,6 +133,9 @@ export type WorkflowRunRecord = {
   organizationId: string;
   workflowId: string;
   triggerType: WorkflowRunTriggerType;
+  triggerKey: string | null;
+  triggeredAt: string | null;
+  triggerSource: string | null;
   status: "queued" | "running" | "succeeded" | "failed";
   attemptCount: number;
   maxAttempts: number;
@@ -146,7 +149,46 @@ export type WorkflowRunRecord = {
   finishedAt: string | null;
 };
 
-export type WorkflowRunTriggerType = "manual" | "channel";
+export type WorkflowRunTriggerType = "manual" | "channel" | "cron" | "webhook" | "heartbeat";
+
+export type WorkflowTriggerSubscriptionRecord = {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  requestedByUserId: string;
+  workflowRevision: number;
+  triggerType: "cron" | "webhook" | "heartbeat";
+  enabled: boolean;
+  cronExpr: string | null;
+  heartbeatIntervalSec: number | null;
+  heartbeatJitterSec: number | null;
+  heartbeatMaxSkewSec: number | null;
+  nextFireAt: string | null;
+  lastTriggeredAt: string | null;
+  lastTriggerKey: string | null;
+  updatedAt: string;
+  createdAt: string;
+};
+
+export type WorkflowApprovalRequestRecord = {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  runId: string;
+  nodeId: string;
+  nodeType: string;
+  requestKind: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  reason: string | null;
+  context: unknown;
+  requestedByUserId: string;
+  decidedByUserId: string | null;
+  decisionNote: string | null;
+  expiresAt: string;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type WorkflowRunEventRecord = {
   id: string;
@@ -646,7 +688,63 @@ export interface AppStore {
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
+    triggerKey?: string;
+    triggeredAt?: string;
+    triggerSource?: string;
   }): Promise<WorkflowRunRecord>;
+  syncWorkflowTriggerSubscriptions(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    workflowRevision: number;
+    dsl: unknown;
+  }): Promise<WorkflowTriggerSubscriptionRecord[]>;
+  listWorkflowTriggerSubscriptions(input: {
+    organizationId: string;
+    actorUserId: string;
+    workflowId?: string;
+    limit?: number;
+  }): Promise<WorkflowTriggerSubscriptionRecord[]>;
+  patchWorkflowTriggerSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+    subscriptionId: string;
+    enabled: boolean;
+  }): Promise<WorkflowTriggerSubscriptionRecord | null>;
+  getWorkflowTriggerSubscriptionByWebhookTokenHash(input: {
+    webhookTokenHash: string;
+  }): Promise<WorkflowTriggerSubscriptionRecord | null>;
+  listWorkflowApprovalRequests(input: {
+    organizationId: string;
+    actorUserId: string;
+    status?: "pending" | "approved" | "rejected" | "expired";
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ approvals: WorkflowApprovalRequestRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
+  getWorkflowApprovalRequestById(input: {
+    organizationId: string;
+    actorUserId: string;
+    approvalRequestId: string;
+  }): Promise<WorkflowApprovalRequestRecord | null>;
+  decideWorkflowApprovalRequest(input: {
+    organizationId: string;
+    actorUserId: string;
+    approvalRequestId: string;
+    status: "approved" | "rejected" | "expired";
+    decisionNote?: string | null;
+  }): Promise<WorkflowApprovalRequestRecord | null>;
+  getWorkflowRunByBlockedRequestId(input: {
+    organizationId: string;
+    actorUserId: string;
+    blockedRequestId: string;
+  }): Promise<WorkflowRunRecord | null>;
+  clearWorkflowRunBlock(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    expectedRequestId: string;
+  }): Promise<WorkflowRunRecord | null>;
   listWorkflowRuns(input: {
     organizationId: string;
     workflowId: string;

@@ -6,6 +6,14 @@ export const workflowTriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("trigger.webhook"), config: z.object({ token: z.string().min(1) }) }),
   z.object({ type: z.literal("trigger.cron"), config: z.object({ cron: z.string().min(1) }) }),
   z.object({
+    type: z.literal("trigger.heartbeat"),
+    config: z.object({
+      intervalSec: z.number().int().min(5).max(86_400),
+      jitterSec: z.number().int().min(0).max(3_600).default(0),
+      maxSkewSec: z.number().int().min(0).max(3_600).default(0),
+    }),
+  }),
+  z.object({
     type: z.literal("trigger.channel"),
     config: z.object({
       channelId: z.string().min(1).max(64),

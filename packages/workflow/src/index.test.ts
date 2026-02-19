@@ -19,6 +19,23 @@ describe("workflow dsl", () => {
     expect(parsed.version).toBe("v2");
   });
 
+  it("accepts heartbeat trigger for v2 workflow", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: {
+        type: "trigger.heartbeat",
+        config: {
+          intervalSec: 60,
+          jitterSec: 5,
+          maxSkewSec: 30,
+        },
+      },
+      nodes: [{ id: "n1", type: "agent.execute" }],
+    });
+
+    expect(parsed.trigger.type).toBe("trigger.heartbeat");
+  });
+
   it("accepts an agent.run node", () => {
     const parsed = workflowDslSchema.parse({
       version: "v2",

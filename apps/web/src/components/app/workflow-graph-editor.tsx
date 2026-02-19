@@ -24,7 +24,6 @@ import {
   type WorkflowDsl as WorkflowDslV2,
   type WorkflowDslV3,
 } from "@vespid/workflow";
-import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
@@ -36,7 +35,8 @@ import { useOrgSettings } from "../../lib/hooks/use-org-settings";
 import { useSecrets } from "../../lib/hooks/use-secrets";
 import { useUpdateWorkflowDraft, useWorkflow } from "../../lib/hooks/use-workflows";
 import { AdvancedSection } from "./advanced-section";
-import { LlmConfigField, type LlmConfigValue } from "./llm/llm-config-field";
+import { type LlmConfigValue } from "./llm/llm-config-field";
+import { LlmCompactConfigField } from "./llm/llm-compact-config-field";
 import { ModelPickerField } from "./model-picker/model-picker-field";
 import { SecretSelectField } from "./secrets/secret-select-field";
 
@@ -842,7 +842,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
       <div className="grid gap-3">
         <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
           <div className="text-sm font-medium text-text">LLM</div>
-          <LlmConfigField
+          <LlmCompactConfigField
             orgId={orgId}
             mode="workflowAgentRun"
             value={llmValue}
@@ -863,10 +863,9 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 };
               });
             }}
+            advancedSectionId={`workflow-graph-node-llm-${node.id}`}
+            testId={`workflow-graph-node-llm-compact-${node.id}`}
           />
-          {isOAuthRequiredProvider(llmValue.providerId) && !llmValue.secretId ? (
-            <div className="text-xs text-warn">Selected provider requires a connected account.</div>
-          ) : null}
         </div>
 
         <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
@@ -1319,6 +1318,9 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                         <Label>Model override (optional)</Label>
                         <ModelPickerField
                           value={tmModel}
+                          allowClear
+                          emptyLabel="(inherit)"
+                          testId={`workflow-graph-teammate-model-${node.id}-${idx}`}
                           onChange={(next) => {
                             updateNode(node.id, (cur) => {
                               const curCfg = asObject(cur.config) ?? {};
@@ -1334,7 +1336,6 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                               return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: list } } };
                             });
                           }}
-                          placeholder="(inherit)"
                         />
                       </div>
 
@@ -2312,7 +2313,14 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
 
                   <div className="grid gap-2">
                     <div className="text-xs text-muted">Agent.run default model (apply to nodes)</div>
-                    <LlmConfigField orgId={orgId} mode="workflowAgentRun" value={bulkAgentLlm} onChange={setBulkAgentLlm} />
+                    <LlmCompactConfigField
+                      orgId={orgId}
+                      mode="workflowAgentRun"
+                      value={bulkAgentLlm}
+                      onChange={setBulkAgentLlm}
+                      advancedSectionId="workflow-graph-bulk-agent-llm-advanced"
+                      testId="workflow-graph-bulk-agent-llm-compact"
+                    />
                     <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -2396,7 +2404,13 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
 
                   <div className="grid gap-2 pt-2">
                     <div className="text-xs text-muted">Teammate model overrides (model-only)</div>
-                    <ModelPickerField value={bulkTeammateModel} onChange={setBulkTeammateModel} />
+                    <ModelPickerField
+                      value={bulkTeammateModel}
+                      onChange={setBulkTeammateModel}
+                      allowClear
+                      emptyLabel="(inherit)"
+                      testId="workflow-graph-bulk-teammate-model"
+                    />
                     <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"

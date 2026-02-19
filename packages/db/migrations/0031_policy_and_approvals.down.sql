@@ -1,0 +1,5 @@
+drop policy if exists workflow_approval_requests_tenant_isolation on workflow_approval_requests;
+drop policy if exists organization_policy_rules_tenant_isolation on organization_policy_rules;
+
+drop table if exists workflow_approval_requests;
+drop table if exists organization_policy_rules;

@@ -8,6 +8,9 @@ import {
   getOrganizationById,
   getWorkflowById,
   getWorkflowRunById,
+  listOrganizationPolicyRules,
+  createWorkflowApprovalRequest,
+  hasApprovedWorkflowApprovalForRunNode,
   markWorkflowRunBlocked,
   markWorkflowRunFailed,
   markWorkflowRunQueuedForRetry,
@@ -126,6 +129,153 @@ function parseStepsFromRunOutput(output: unknown): WorkflowExecutionStep[] {
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+type PolicyDecision = {
+  decision: "allow" | "deny" | "require_approval";
+  reason: string;
+  ruleId?: string;
+};
+
+type NodePolicyContext = {
+  nodeType: string;
+  taskType?: string;
+  networkMode?: "enabled" | "none";
+  actionId?: string;
+};
+
+type OrgPolicyRule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  effect: "allow" | "deny" | "require_approval";
+  scope: unknown;
+};
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function isLikelyWriteConnectorAction(actionId: string | undefined): boolean {
+  if (!actionId) {
+    return false;
+  }
+  return /(^|[._-])(create|update|delete|remove|write|send|post|put|patch|sync|upsert|publish|invite|grant|revoke)($|[._-])/i.test(
+    actionId
+  );
+}
+
+function buildNodePolicyContext(node: any): NodePolicyContext {
+  if (!node || typeof node !== "object") {
+    return { nodeType: "unknown" };
+  }
+  if (node.type === "agent.execute") {
+    const taskType = typeof node.config?.task?.type === "string" ? node.config.task.type : undefined;
+    const networkMode = node.config?.sandbox?.network === "enabled" ? "enabled" : "none";
+    return {
+      nodeType: "agent.execute",
+      taskType,
+      networkMode,
+    };
+  }
+  if (node.type === "connector.action") {
+    const actionId = typeof node.config?.actionId === "string" ? node.config.actionId : undefined;
+    return {
+      nodeType: "connector.action",
+      actionId,
+    };
+  }
+  return { nodeType: String(node.type ?? "unknown") };
+}
+
+function ruleMatchesContext(rule: OrgPolicyRule, context: NodePolicyContext): boolean {
+  if (!rule.enabled) {
+    return false;
+  }
+  const scope = asObject(rule.scope);
+  if (!scope) {
+    return true;
+  }
+
+  const nodeType = typeof scope.nodeType === "string" ? scope.nodeType : null;
+  if (nodeType && nodeType !== context.nodeType) {
+    return false;
+  }
+
+  const nodeTypes = readStringArray(scope.nodeTypes);
+  if (nodeTypes.length > 0 && !nodeTypes.includes(context.nodeType)) {
+    return false;
+  }
+
+  const taskType = typeof scope.taskType === "string" ? scope.taskType : null;
+  if (taskType && taskType !== context.taskType) {
+    return false;
+  }
+
+  const networkMode = typeof scope.networkMode === "string" ? scope.networkMode : null;
+  if (networkMode && networkMode !== context.networkMode) {
+    return false;
+  }
+
+  const actionIdPrefixes = readStringArray(scope.actionIdPrefixes);
+  if (actionIdPrefixes.length > 0) {
+    if (!context.actionId) {
+      return false;
+    }
+    const matched = actionIdPrefixes.some((prefix) => context.actionId?.startsWith(prefix));
+    if (!matched) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function evaluateNodePolicy(input: {
+  context: NodePolicyContext;
+  rules: OrgPolicyRule[];
+}): PolicyDecision {
+  for (const rule of input.rules) {
+    if (!ruleMatchesContext(rule, input.context)) {
+      continue;
+    }
+    return {
+      decision: rule.effect,
+      reason: `organization_policy_rule:${rule.name}`,
+      ruleId: rule.id,
+    };
+  }
+
+  if (input.context.nodeType === "agent.execute") {
+    if (input.context.networkMode === "enabled") {
+      return {
+        decision: "deny",
+        reason: "network_enabled_execute_denied_by_default",
+      };
+    }
+    if (input.context.taskType === "shell") {
+      return {
+        decision: "require_approval",
+        reason: "shell_run_requires_approval",
+      };
+    }
+  }
+
+  if (input.context.nodeType === "connector.action" && isLikelyWriteConnectorAction(input.context.actionId)) {
+    return {
+      decision: "require_approval",
+      reason: "connector_write_action_requires_approval",
+    };
+  }
+
+  return {
+    decision: "allow",
+    reason: "default_allow",
+  };
 }
 
 function parseRuntimeFromRunOutput(output: unknown): unknown {
@@ -343,6 +493,20 @@ export async function processWorkflowRunJob(
     getOrganizationById(tenantDb, { organizationId: job.data.organizationId })
   );
   const organizationSettings = organization?.settings ?? {};
+  const organizationPolicyRules = await withTenantContext(pool, actor, async (tenantDb) =>
+    listOrganizationPolicyRules(tenantDb, {
+      organizationId: job.data.organizationId,
+      enabledOnly: true,
+    })
+  );
+  const policyRules: OrgPolicyRule[] = organizationPolicyRules.map((rule) => ({
+    id: rule.id,
+    name: rule.name,
+    enabled: rule.enabled,
+    priority: rule.priority,
+    effect: rule.effect as "allow" | "deny" | "require_approval",
+    scope: rule.scope,
+  }));
 
   const maxAttempts = typeof run.maxAttempts === "number" && Number.isFinite(run.maxAttempts) ? run.maxAttempts : getWorkflowRetryAttempts();
   const isStartingAttempt = run.status === "queued";
@@ -488,6 +652,108 @@ export async function processWorkflowRunJob(
         nodeId: node.id,
         nodeType: node.type,
       });
+
+      const policyContext = buildNodePolicyContext(node);
+      const policyDecision = evaluateNodePolicy({
+        context: policyContext,
+        rules: policyRules,
+      });
+
+      if (policyDecision.decision === "require_approval") {
+        const hasApproval = await withTenantContext(pool, actor, async (tenantDb) =>
+          hasApprovedWorkflowApprovalForRunNode(tenantDb, {
+            organizationId: job.data.organizationId,
+            runId: job.data.runId,
+            nodeId: node.id,
+            now: new Date(),
+          })
+        );
+
+        if (!hasApproval) {
+          const ttlSec = Math.max(60, envNumber("WORKFLOW_APPROVAL_TTL_SEC", 24 * 60 * 60));
+          const expiresAt = new Date(Date.now() + ttlSec * 1000);
+          const approval = await withTenantContext(pool, actor, async (tenantDb) =>
+            createWorkflowApprovalRequest(tenantDb, {
+              organizationId: job.data.organizationId,
+              workflowId: job.data.workflowId,
+              runId: job.data.runId,
+              nodeId: node.id,
+              nodeType: node.type,
+              requestKind: "policy",
+              reason: policyDecision.reason,
+              context: {
+                decision: policyDecision,
+                nodeType: node.type,
+                nodeId: node.id,
+                policyContext,
+              },
+              requestedByUserId: job.data.requestedByUserId,
+              expiresAt,
+            })
+          );
+
+          if (!approval) {
+            throw new Error("APPROVAL_REQUEST_CREATE_FAILED");
+          }
+
+          await appendEvent({
+            eventType: "approval_requested",
+            level: "warn",
+            nodeId: node.id,
+            nodeType: node.type,
+            message: policyDecision.reason,
+            payload: {
+              approvalRequestId: approval.id,
+              expiresAt: expiresAt.toISOString(),
+              decision: policyDecision,
+            },
+          });
+
+          await withTenantContext(pool, actor, async (tenantDb) =>
+            markWorkflowRunBlocked(tenantDb, {
+              organizationId: job.data.organizationId,
+              workflowId: job.data.workflowId,
+              runId: job.data.runId,
+              cursorNodeIndex: checkpointCursorNodeIndex,
+              blockedRequestId: approval.id,
+              blockedNodeId: node.id,
+              blockedNodeType: node.type,
+              blockedKind: "approval",
+              blockedTimeoutAt: expiresAt,
+              output: buildProgressOutput(steps, runtime),
+            })
+          );
+
+          jsonLog("info", {
+            event: "workflow_node_approval_requested",
+            orgId: job.data.organizationId,
+            workflowId: job.data.workflowId,
+            runId: job.data.runId,
+            nodeId: node.id,
+            nodeType: node.type,
+            approvalRequestId: approval.id,
+            attemptCount,
+          });
+
+          return { blocked: true as const };
+        }
+      }
+
+      if (policyDecision.decision === "deny") {
+        const message = `POLICY_DENIED:${policyDecision.reason}`;
+        await appendEvent({
+          eventType: "policy_denied",
+          level: "error",
+          nodeId: node.id,
+          nodeType: node.type,
+          message,
+          payload: {
+            decision: policyDecision,
+            policyContext,
+          },
+        });
+        throw new Error(message);
+      }
 
       const executor = executorRegistry.get(node.type);
       if (!executor) {
@@ -1030,8 +1296,9 @@ export async function processWorkflowRunJob(
   } catch (error) {
     const message = errorMessage(error);
     const isFinalAttempt = attemptCount >= maxAttempts;
+    const isPolicyDenied = message.startsWith("POLICY_DENIED:");
 
-    if (!isFinalAttempt) {
+    if (!isFinalAttempt && !isPolicyDenied) {
       await withTenantContext(pool, actor, async (tenantDb) =>
         markWorkflowRunQueuedForRetry(tenantDb, {
           organizationId: job.data.organizationId,

@@ -271,6 +271,39 @@ const createWorkflowRunSchema = z.object({
   input: z.unknown().optional(),
 });
 
+const webhookTriggerParamsSchema = z
+  .object({
+    token: z.string().min(8).max(1024),
+  })
+  .strict();
+
+const listWorkflowTriggersQuerySchema = z
+  .object({
+    workflowId: z.string().uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  })
+  .strict();
+
+const patchWorkflowTriggerSchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+
+const listApprovalsQuerySchema = z
+  .object({
+    status: z.enum(["pending", "approved", "rejected", "expired"]).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+    cursor: z.string().min(1).optional(),
+  })
+  .strict();
+
+const decideApprovalSchema = z
+  .object({
+    note: z.string().max(2000).optional(),
+  })
+  .strict();
+
 const internalChannelTriggerRunSchema = z
   .object({
     organizationId: z.string().uuid(),
@@ -881,6 +914,10 @@ function orgSlugConflict(message = "Organization slug already exists"): AppError
 
 function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
   return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
+}
+
+function triggerNotFound(message = "Trigger not found"): AppError {
+  return new AppError(404, { code: "TRIGGER_NOT_FOUND", message });
 }
 
 function channelDeliveryUnavailable(message = "Channel delivery gateway is unavailable"): AppError {
@@ -2241,6 +2278,7 @@ export async function buildServer(input?: {
       triggerType: "channel",
       requestedByUserId: parsed.data.requestedByUserId,
       input: parsed.data.payload,
+      triggerSource: "channel.internal",
     });
 
     try {
@@ -2278,6 +2316,99 @@ export async function buildServer(input?: {
 
     return reply.status(201).send({ run });
   });
+
+  server.post("/v1/triggers/webhook/:token", async (request, reply) => {
+    const params = webhookTriggerParamsSchema.safeParse(request.params ?? {});
+    if (!params.success) {
+      throw triggerNotFound();
+    }
+
+    const webhookTokenHash = sha256Hex(params.data.token);
+    const subscription = await store.getWorkflowTriggerSubscriptionByWebhookTokenHash({ webhookTokenHash });
+    if (!subscription || !subscription.enabled) {
+      throw triggerNotFound();
+    }
+
+    const workflow = await store.getWorkflowById({
+      organizationId: subscription.organizationId,
+      workflowId: subscription.workflowId,
+      actorUserId: subscription.requestedByUserId,
+    });
+    if (!workflow || workflow.status !== "published") {
+      throw triggerNotFound();
+    }
+
+    const idempotencyHeader = request.headers["x-idempotency-key"] ?? request.headers["x-trigger-id"];
+    const idempotencyKey =
+      typeof idempotencyHeader === "string"
+        ? idempotencyHeader
+        : Array.isArray(idempotencyHeader)
+          ? idempotencyHeader[0]
+          : undefined;
+    const triggerKeyPart = (idempotencyKey ?? crypto.randomUUID()).slice(0, 200);
+    const triggeredAt = new Date().toISOString();
+
+    const runInput =
+      request.body && typeof request.body === "object" && !Array.isArray(request.body)
+        ? {
+            ...(request.body as Record<string, unknown>),
+            __trigger: {
+              type: "webhook",
+              subscriptionId: subscription.id,
+              receivedAt: triggeredAt,
+            },
+          }
+        : {
+            payload: request.body ?? null,
+            __trigger: {
+              type: "webhook",
+              subscriptionId: subscription.id,
+              receivedAt: triggeredAt,
+            },
+          };
+
+    let run;
+    try {
+      run = await store.createWorkflowRun({
+        organizationId: subscription.organizationId,
+        workflowId: subscription.workflowId,
+        triggerType: "webhook",
+        requestedByUserId: subscription.requestedByUserId,
+        input: runInput,
+        triggerKey: `webhook:${subscription.id}:${triggerKeyPart}`,
+        triggeredAt,
+        triggerSource: "webhook.token",
+      });
+    } catch (error) {
+      if (isPgUniqueViolation(error) || (error instanceof Error && error.message === "WORKFLOW_TRIGGER_KEY_EXISTS")) {
+        return reply.status(202).send({ accepted: true, duplicate: true });
+      }
+      throw error;
+    }
+
+    try {
+      await queueProducer.enqueueWorkflowRun({
+        payload: {
+          runId: run.id,
+          organizationId: run.organizationId,
+          workflowId: run.workflowId,
+          requestedByUserId: run.requestedByUserId,
+        },
+        maxAttempts: run.maxAttempts,
+      });
+    } catch {
+      await store.deleteQueuedWorkflowRun({
+        organizationId: run.organizationId,
+        workflowId: run.workflowId,
+        runId: run.id,
+        actorUserId: run.requestedByUserId,
+      });
+      throw queueUnavailable();
+    }
+
+    return reply.status(202).send({ accepted: true, runId: run.id });
+  });
+
   server.get("/v1/auth/oauth/:provider/callback", async (request, reply) => {
     const provider = extractProvider((request.params as { provider?: string }).provider);
     const parsed = oauthQuerySchema.safeParse(request.query);
@@ -5895,6 +6026,21 @@ export async function buildServer(input?: {
       throw notFound("Workflow not found");
     }
 
+    try {
+      await store.syncWorkflowTriggerSubscriptions({
+        organizationId: orgContext.organizationId,
+        workflowId: workflow.id,
+        actorUserId: auth.userId,
+        workflowRevision: workflow.revision,
+        dsl: workflow.dsl,
+      });
+    } catch (error) {
+      if (isPgUniqueViolation(error)) {
+        throw conflict("Workflow trigger conflicts with an existing subscription");
+      }
+      throw error;
+    }
+
     return { workflow };
   });
 
@@ -5966,6 +6112,7 @@ export async function buildServer(input?: {
       triggerType: "manual",
       requestedByUserId: auth.userId,
       input: parsed.data.input,
+      triggerSource: "api.manual",
     });
 
     try {
@@ -6119,6 +6266,317 @@ export async function buildServer(input?: {
       events: result.events,
       nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
     };
+  });
+
+  server.get("/v1/orgs/:orgId/triggers", async (request) => {
+    const auth = requireAuth(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid org path", params.error.flatten());
+    }
+    const query = listWorkflowTriggersQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("Invalid trigger query", query.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.data.orgId });
+    const subscriptions = await store.listWorkflowTriggerSubscriptions({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      ...(query.data.workflowId ? { workflowId: query.data.workflowId } : {}),
+      ...(query.data.limit ? { limit: query.data.limit } : {}),
+    });
+    return { subscriptions };
+  });
+
+  server.patch("/v1/orgs/:orgId/triggers/:subscriptionId", async (request) => {
+    const auth = requireAuth(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+        subscriptionId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid trigger path", params.error.flatten());
+    }
+    const parsed = patchWorkflowTriggerSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid trigger patch payload", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.data.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to manage triggers");
+    }
+
+    const subscription = await store.patchWorkflowTriggerSubscription({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      subscriptionId: params.data.subscriptionId,
+      enabled: parsed.data.enabled,
+    });
+    if (!subscription) {
+      throw notFound("Trigger subscription not found");
+    }
+    return { subscription };
+  });
+
+  server.get("/v1/orgs/:orgId/approvals", async (request) => {
+    const auth = requireAuth(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid approval path", params.error.flatten());
+    }
+    const query = listApprovalsQuerySchema.safeParse(request.query ?? {});
+    if (!query.success) {
+      throw badRequest("Invalid approval query", query.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.data.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to view approvals");
+    }
+
+    const cursorPayload = query.data.cursor
+      ? decodeCursor<{ createdAt: string; id: string }>(query.data.cursor)
+      : null;
+
+    const result = await store.listWorkflowApprovalRequests({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      ...(query.data.status ? { status: query.data.status } : {}),
+      limit: query.data.limit ?? 100,
+      cursor: cursorPayload,
+    });
+
+    return {
+      approvals: result.approvals,
+      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
+    };
+  });
+
+  server.post("/v1/orgs/:orgId/approvals/:approvalId/approve", async (request) => {
+    const auth = requireAuth(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+        approvalId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid approval path", params.error.flatten());
+    }
+    const parsed = decideApprovalSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid approval payload", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.data.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to approve requests");
+    }
+
+    const existing = await store.getWorkflowApprovalRequestById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      approvalRequestId: params.data.approvalId,
+    });
+    if (!existing) {
+      throw notFound("Approval request not found");
+    }
+    if (existing.status !== "pending") {
+      throw conflict("Approval request is already finalized");
+    }
+    if (new Date(existing.expiresAt).getTime() <= Date.now()) {
+      await store.decideWorkflowApprovalRequest({
+        organizationId: orgContext.organizationId,
+        actorUserId: auth.userId,
+        approvalRequestId: existing.id,
+        status: "expired",
+        decisionNote: "expired before manual approval",
+      });
+      throw conflict("Approval request has expired");
+    }
+
+    const approval = await store.decideWorkflowApprovalRequest({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      approvalRequestId: existing.id,
+      status: "approved",
+      ...(parsed.data.note ? { decisionNote: parsed.data.note } : {}),
+    });
+    if (!approval) {
+      throw conflict("Approval request is already finalized");
+    }
+
+    const run = await store.getWorkflowRunByBlockedRequestId({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      blockedRequestId: approval.id,
+    });
+
+    let resumed = false;
+    if (run) {
+      const cleared = await store.clearWorkflowRunBlock({
+        organizationId: orgContext.organizationId,
+        workflowId: run.workflowId,
+        runId: run.id,
+        actorUserId: auth.userId,
+        expectedRequestId: approval.id,
+      });
+      if (cleared) {
+        await store.appendWorkflowRunEvent({
+          organizationId: orgContext.organizationId,
+          workflowId: run.workflowId,
+          runId: run.id,
+          actorUserId: auth.userId,
+          attemptCount: Math.max(1, run.attemptCount),
+          eventType: "approval_approved",
+          nodeId: approval.nodeId,
+          nodeType: approval.nodeType,
+          level: "info",
+          message: approval.decisionNote ?? "approval granted",
+          payload: {
+            approvalRequestId: approval.id,
+            decidedByUserId: approval.decidedByUserId,
+          },
+        });
+        try {
+          await queueProducer.enqueueWorkflowRun({
+            payload: {
+              runId: run.id,
+              organizationId: run.organizationId,
+              workflowId: run.workflowId,
+              requestedByUserId: run.requestedByUserId,
+            },
+            maxAttempts: run.maxAttempts,
+          });
+          resumed = true;
+        } catch (error) {
+          await store.markWorkflowRunFailed({
+            organizationId: run.organizationId,
+            workflowId: run.workflowId,
+            runId: run.id,
+            actorUserId: auth.userId,
+            error: "QUEUE_UNAVAILABLE_AFTER_APPROVAL",
+          });
+          await store.appendWorkflowRunEvent({
+            organizationId: run.organizationId,
+            workflowId: run.workflowId,
+            runId: run.id,
+            actorUserId: auth.userId,
+            attemptCount: Math.max(1, run.attemptCount),
+            eventType: "approval_resume_failed",
+            nodeId: approval.nodeId,
+            nodeType: approval.nodeType,
+            level: "error",
+            message: "QUEUE_UNAVAILABLE_AFTER_APPROVAL",
+            payload: {
+              approvalRequestId: approval.id,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+          throw queueUnavailable("Workflow queue is unavailable after approval");
+        }
+      }
+    }
+
+    return { approval, resumed };
+  });
+
+  server.post("/v1/orgs/:orgId/approvals/:approvalId/reject", async (request) => {
+    const auth = requireAuth(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+        approvalId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid approval path", params.error.flatten());
+    }
+    const parsed = decideApprovalSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid approval payload", parsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.data.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to reject requests");
+    }
+
+    const existing = await store.getWorkflowApprovalRequestById({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      approvalRequestId: params.data.approvalId,
+    });
+    if (!existing) {
+      throw notFound("Approval request not found");
+    }
+    if (existing.status !== "pending") {
+      throw conflict("Approval request is already finalized");
+    }
+
+    const approval = await store.decideWorkflowApprovalRequest({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      approvalRequestId: existing.id,
+      status: "rejected",
+      ...(parsed.data.note ? { decisionNote: parsed.data.note } : {}),
+    });
+    if (!approval) {
+      throw conflict("Approval request is already finalized");
+    }
+
+    const run = await store.getWorkflowRunByBlockedRequestId({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+      blockedRequestId: approval.id,
+    });
+
+    if (run) {
+      await store.clearWorkflowRunBlock({
+        organizationId: orgContext.organizationId,
+        workflowId: run.workflowId,
+        runId: run.id,
+        actorUserId: auth.userId,
+        expectedRequestId: approval.id,
+      });
+      await store.markWorkflowRunFailed({
+        organizationId: run.organizationId,
+        workflowId: run.workflowId,
+        runId: run.id,
+        actorUserId: auth.userId,
+        error: "APPROVAL_REJECTED",
+      });
+      await store.appendWorkflowRunEvent({
+        organizationId: run.organizationId,
+        workflowId: run.workflowId,
+        runId: run.id,
+        actorUserId: auth.userId,
+        attemptCount: Math.max(1, run.attemptCount),
+        eventType: "approval_rejected",
+        nodeId: approval.nodeId,
+        nodeType: approval.nodeType,
+        level: "warn",
+        message: approval.decisionNote ?? "approval rejected",
+        payload: {
+          approvalRequestId: approval.id,
+          decidedByUserId: approval.decidedByUserId,
+        },
+      });
+    }
+
+    return { approval };
   });
 
   server.get("/v1/admin/platform/settings", async (request) => {

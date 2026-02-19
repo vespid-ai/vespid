@@ -37,8 +37,8 @@ vi.mock("../lib/hooks/use-workflows", () => ({
   useWorkflows: () => ({ data: { workflows: [] }, isLoading: false, isError: false, refetch: vi.fn() }),
 }));
 
-vi.mock("../components/app/llm/llm-config-field", () => ({
-  LlmConfigField: () => <div data-testid="llm-config-field" />,
+vi.mock("../components/app/llm/llm-compact-config-field", () => ({
+  LlmCompactConfigField: (props: { testId?: string }) => <div data-testid={props.testId ?? "llm-compact-config-field"} />,
 }));
 
 vi.mock("../lib/recents", () => ({
@@ -67,6 +67,7 @@ describe("Workflows quick create", () => {
 
     expect(screen.getByLabelText(messages.workflows.fields.workflowName)).toBeInTheDocument();
     expect(screen.getByLabelText(messages.workflows.quickInstructions)).toBeInTheDocument();
+    expect(screen.getByTestId("workflow-default-llm-compact")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: messages.workflows.customizeAdvanced })).toBeInTheDocument();
     expect(screen.queryByText(messages.workflows.addAgentNode)).not.toBeInTheDocument();
     expect(screen.queryByText("Create and define your workflow first. Advanced access is available from More actions.")).not.toBeInTheDocument();

@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   getWorkflowById: vi.fn(),
   getConnectorSecretById: vi.fn(),
   getOrganizationById: vi.fn(),
+  listOrganizationPolicyRules: vi.fn(),
+  createWorkflowApprovalRequest: vi.fn(),
+  hasApprovedWorkflowApprovalForRunNode: vi.fn(),
   appendWorkflowRunEvent: vi.fn(),
   markWorkflowRunRunning: vi.fn(),
   markWorkflowRunBlocked: vi.fn(),
@@ -23,6 +26,9 @@ vi.mock("@vespid/db", () => ({
   getWorkflowById: mocks.getWorkflowById,
   getConnectorSecretById: mocks.getConnectorSecretById,
   getOrganizationById: mocks.getOrganizationById,
+  listOrganizationPolicyRules: mocks.listOrganizationPolicyRules,
+  createWorkflowApprovalRequest: mocks.createWorkflowApprovalRequest,
+  hasApprovedWorkflowApprovalForRunNode: mocks.hasApprovedWorkflowApprovalForRunNode,
   appendWorkflowRunEvent: mocks.appendWorkflowRunEvent,
   markWorkflowRunRunning: mocks.markWorkflowRunRunning,
   markWorkflowRunBlocked: mocks.markWorkflowRunBlocked,
@@ -70,6 +76,9 @@ describe("workflow worker", () => {
     gatewayMocks.dispatchViaGatewayAsync.mockResolvedValue({ ok: true, requestId: "req-1", dispatched: true });
     mocks.withTenantContext.mockImplementation(async (_pool: unknown, _ctx: unknown, fn: Function) => fn({}));
     mocks.getOrganizationById.mockResolvedValue({ id: "org-1", settings: {} });
+    mocks.listOrganizationPolicyRules.mockResolvedValue([]);
+    mocks.createWorkflowApprovalRequest.mockResolvedValue({ id: "approval-1" });
+    mocks.hasApprovedWorkflowApprovalForRunNode.mockResolvedValue(false);
     mocks.getWorkflowRunById.mockResolvedValue({
       id: "run-1",
       organizationId: "org-1",
@@ -163,6 +172,72 @@ describe("workflow worker", () => {
       expect.anything(),
       expect.objectContaining({ eventType: "node_dispatched" })
     );
+  });
+
+  it("creates approval request and blocks run before shell execution", async () => {
+    const executeSpy = vi.fn(async () => ({ status: "succeeded", output: { ok: true } }));
+    const executor: WorkflowNodeExecutor = {
+      nodeType: "agent.execute",
+      execute: executeSpy,
+    };
+    const executorRegistry = new Map<string, WorkflowNodeExecutor>([[executor.nodeType, executor]]);
+
+    mocks.getWorkflowById.mockResolvedValue({
+      id: "wf-1",
+      organizationId: "org-1",
+      status: "published",
+      dsl: {
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [{ id: "n1", type: "agent.execute", config: { task: { type: "shell", script: "echo hello" } } }],
+      },
+    });
+
+    await processWorkflowRunJob(pool, jobBase, { executorRegistry });
+
+    expect(mocks.createWorkflowApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.markWorkflowRunBlocked).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        blockedKind: "approval",
+        blockedNodeId: "n1",
+      })
+    );
+    expect(mocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: "approval_requested" })
+    );
+    expect(executeSpy).not.toHaveBeenCalled();
+    expect(gatewayMocks.dispatchViaGatewayAsync).not.toHaveBeenCalled();
+  });
+
+  it("denies network-enabled agent.execute by default policy", async () => {
+    const executeSpy = vi.fn(async () => ({ status: "succeeded", output: { ok: true } }));
+    const executor: WorkflowNodeExecutor = {
+      nodeType: "agent.execute",
+      execute: executeSpy,
+    };
+    const executorRegistry = new Map<string, WorkflowNodeExecutor>([[executor.nodeType, executor]]);
+
+    mocks.getWorkflowById.mockResolvedValue({
+      id: "wf-1",
+      organizationId: "org-1",
+      status: "published",
+      dsl: {
+        version: "v2",
+        trigger: { type: "trigger.manual" },
+        nodes: [{ id: "n1", type: "agent.execute", config: { sandbox: { network: "enabled" } } }],
+      },
+    });
+
+    await processWorkflowRunJob(pool, jobBase, { executorRegistry });
+
+    expect(mocks.appendWorkflowRunEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: "policy_denied" })
+    );
+    expect(mocks.markWorkflowRunFailed).toHaveBeenCalledTimes(1);
+    expect(executeSpy).not.toHaveBeenCalled();
   });
 
   it("executes a v3 condition graph and only runs the selected branch", async () => {

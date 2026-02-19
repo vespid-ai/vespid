@@ -85,11 +85,20 @@ import {
   getWorkflowById as dbGetWorkflowById,
   updateWorkflowDraft as dbUpdateWorkflowDraft,
   publishWorkflow as dbPublishWorkflow,
+  replaceWorkflowTriggerSubscriptions as dbReplaceWorkflowTriggerSubscriptions,
+  listWorkflowTriggerSubscriptions as dbListWorkflowTriggerSubscriptions,
+  updateWorkflowTriggerSubscriptionEnabled as dbUpdateWorkflowTriggerSubscriptionEnabled,
+  getWorkflowTriggerSubscriptionByWebhookTokenHash as dbGetWorkflowTriggerSubscriptionByWebhookTokenHash,
   createWorkflowRun as dbCreateWorkflowRun,
   deleteQueuedWorkflowRun as dbDeleteQueuedWorkflowRun,
   listWorkflowRuns as dbListWorkflowRuns,
   getWorkflowRunById as dbGetWorkflowRunById,
   appendWorkflowRunEvent as dbAppendWorkflowRunEvent,
+  listWorkflowApprovalRequests as dbListWorkflowApprovalRequests,
+  getWorkflowApprovalRequestById as dbGetWorkflowApprovalRequestById,
+  decideWorkflowApprovalRequest as dbDecideWorkflowApprovalRequest,
+  getWorkflowRunByBlockedRequestId as dbGetWorkflowRunByBlockedRequestId,
+  clearWorkflowRunBlock as dbClearWorkflowRunBlock,
   listWorkflowRunEvents as dbListWorkflowRunEvents,
   markWorkflowRunRunning as dbMarkWorkflowRunRunning,
   markWorkflowRunQueuedForRetry as dbMarkWorkflowRunQueuedForRetry,
@@ -124,6 +133,7 @@ import {
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
+import { deriveTriggerSubscriptionsFromDsl } from "../workflow-triggers.js";
 import type {
   AgentBindingRecord,
   AgentMemoryChunkRecord,
@@ -150,14 +160,20 @@ import type {
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
   UserOrgSummaryRecord,
+  WorkflowApprovalRequestRecord,
+  WorkflowRunRecord,
+  WorkflowTriggerSubscriptionRecord,
 } from "../types.js";
 
 function toIso(value: Date): string {
   return value.toISOString();
 }
 
-function toWorkflowRunTriggerType(value: unknown): "manual" | "channel" {
-  return value === "channel" ? "channel" : "manual";
+function toWorkflowRunTriggerType(value: unknown): "manual" | "channel" | "cron" | "webhook" | "heartbeat" {
+  if (value === "channel" || value === "cron" || value === "webhook" || value === "heartbeat") {
+    return value;
+  }
+  return "manual";
 }
 
 export class PgAppStore implements AppStore {
@@ -231,6 +247,72 @@ export class PgAppStore implements AppStore {
       role: row.role,
       messageText: row.messageText,
       createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toWorkflowRunRecord(row: any): WorkflowRunRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      triggerType: toWorkflowRunTriggerType(row.triggerType),
+      triggerKey: row.triggerKey ?? null,
+      triggeredAt: row.triggeredAt ? toIso(row.triggeredAt) : null,
+      triggerSource: row.triggerSource ?? null,
+      status: row.status as "queued" | "running" | "succeeded" | "failed",
+      attemptCount: row.attemptCount,
+      maxAttempts: row.maxAttempts,
+      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
+      requestedByUserId: row.requestedByUserId,
+      input: row.input,
+      output: row.output,
+      error: row.error,
+      createdAt: toIso(row.createdAt),
+      startedAt: row.startedAt ? toIso(row.startedAt) : null,
+      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+    };
+  }
+
+  private toWorkflowTriggerSubscriptionRecord(row: any): WorkflowTriggerSubscriptionRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      requestedByUserId: row.requestedByUserId,
+      workflowRevision: row.workflowRevision,
+      triggerType: row.triggerType as "cron" | "webhook" | "heartbeat",
+      enabled: Boolean(row.enabled),
+      cronExpr: row.cronExpr ?? null,
+      heartbeatIntervalSec: row.heartbeatIntervalSec ?? null,
+      heartbeatJitterSec: row.heartbeatJitterSec ?? null,
+      heartbeatMaxSkewSec: row.heartbeatMaxSkewSec ?? null,
+      nextFireAt: row.nextFireAt ? toIso(row.nextFireAt) : null,
+      lastTriggeredAt: row.lastTriggeredAt ? toIso(row.lastTriggeredAt) : null,
+      lastTriggerKey: row.lastTriggerKey ?? null,
+      updatedAt: toIso(row.updatedAt),
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toWorkflowApprovalRequestRecord(row: any): WorkflowApprovalRequestRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      runId: row.runId,
+      nodeId: row.nodeId,
+      nodeType: row.nodeType,
+      requestKind: row.requestKind,
+      status: row.status as "pending" | "approved" | "rejected" | "expired",
+      reason: row.reason ?? null,
+      context: row.context ?? {},
+      requestedByUserId: row.requestedByUserId,
+      decidedByUserId: row.decidedByUserId ?? null,
+      decisionNote: row.decisionNote ?? null,
+      expiresAt: toIso(row.expiresAt),
+      decidedAt: row.decidedAt ? toIso(row.decidedAt) : null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
     };
   }
 
@@ -1263,35 +1345,205 @@ export class PgAppStore implements AppStore {
     };
   }
 
+  async syncWorkflowTriggerSubscriptions(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    workflowRevision: number;
+    dsl: unknown;
+  }) {
+    const subscriptions = deriveTriggerSubscriptionsFromDsl(input.dsl);
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbReplaceWorkflowTriggerSubscriptions(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          requestedByUserId: input.actorUserId,
+          workflowRevision: input.workflowRevision,
+          subscriptions,
+        })
+    );
+    return rows.map((row) => this.toWorkflowTriggerSubscriptionRecord(row));
+  }
+
+  async listWorkflowTriggerSubscriptions(input: {
+    organizationId: string;
+    actorUserId: string;
+    workflowId?: string;
+    limit?: number;
+  }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowTriggerSubscriptions(db, {
+          organizationId: input.organizationId,
+          ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+          ...(input.limit ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((row) => this.toWorkflowTriggerSubscriptionRecord(row));
+  }
+
+  async patchWorkflowTriggerSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+    subscriptionId: string;
+    enabled: boolean;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpdateWorkflowTriggerSubscriptionEnabled(db, {
+          organizationId: input.organizationId,
+          subscriptionId: input.subscriptionId,
+          enabled: input.enabled,
+        })
+    );
+    return row ? this.toWorkflowTriggerSubscriptionRecord(row) : null;
+  }
+
+  async getWorkflowTriggerSubscriptionByWebhookTokenHash(input: { webhookTokenHash: string }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("set local row_security = off");
+      const db = createDb(client);
+      const row = await dbGetWorkflowTriggerSubscriptionByWebhookTokenHash(db, {
+        webhookTokenHash: input.webhookTokenHash,
+      });
+      await client.query("COMMIT");
+      return row ? this.toWorkflowTriggerSubscriptionRecord(row) : null;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listWorkflowApprovalRequests(input: {
+    organizationId: string;
+    actorUserId: string;
+    status?: "pending" | "approved" | "rejected" | "expired";
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }) {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+    const result = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowApprovalRequests(db, {
+          organizationId: input.organizationId,
+          ...(input.status ? { status: input.status } : {}),
+          limit: input.limit,
+          cursor,
+        })
+    );
+    return {
+      approvals: result.rows.map((row) => this.toWorkflowApprovalRequestRecord(row)),
+      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
+    };
+  }
+
+  async getWorkflowApprovalRequestById(input: {
+    organizationId: string;
+    actorUserId: string;
+    approvalRequestId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbGetWorkflowApprovalRequestById(db, {
+          organizationId: input.organizationId,
+          approvalRequestId: input.approvalRequestId,
+        })
+    );
+    return row ? this.toWorkflowApprovalRequestRecord(row) : null;
+  }
+
+  async decideWorkflowApprovalRequest(input: {
+    organizationId: string;
+    actorUserId: string;
+    approvalRequestId: string;
+    status: "approved" | "rejected" | "expired";
+    decisionNote?: string | null;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbDecideWorkflowApprovalRequest(db, {
+          organizationId: input.organizationId,
+          approvalRequestId: input.approvalRequestId,
+          status: input.status,
+          decidedByUserId: input.actorUserId,
+          decisionNote: input.decisionNote ?? null,
+        })
+    );
+    return row ? this.toWorkflowApprovalRequestRecord(row) : null;
+  }
+
+  async getWorkflowRunByBlockedRequestId(input: {
+    organizationId: string;
+    actorUserId: string;
+    blockedRequestId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbGetWorkflowRunByBlockedRequestId(db, {
+          organizationId: input.organizationId,
+          blockedRequestId: input.blockedRequestId,
+        })
+    );
+    return row ? this.toWorkflowRunRecord(row) : null;
+  }
+
+  async clearWorkflowRunBlock(input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    actorUserId: string;
+    expectedRequestId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbClearWorkflowRunBlock(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          runId: input.runId,
+          expectedRequestId: input.expectedRequestId,
+        })
+    );
+    return row ? this.toWorkflowRunRecord(row) : null;
+  }
+
   async createWorkflowRun(input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual" | "channel";
+    triggerType: "manual" | "channel" | "cron" | "webhook" | "heartbeat";
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
+    triggerKey?: string;
+    triggeredAt?: string;
+    triggerSource?: string;
   }) {
     const row = await this.withOrgContext(
       { userId: input.requestedByUserId, organizationId: input.organizationId },
-      async (db) => dbCreateWorkflowRun(db, input)
+      async (db) =>
+        dbCreateWorkflowRun(db, {
+          ...input,
+          ...(input.triggeredAt ? { triggeredAt: new Date(input.triggeredAt) } : {}),
+        })
     );
-    return {
-      id: row.id,
-      organizationId: row.organizationId,
-      workflowId: row.workflowId,
-      triggerType: toWorkflowRunTriggerType(row.triggerType),
-      status: row.status as "queued" | "running" | "succeeded" | "failed",
-      attemptCount: row.attemptCount,
-      maxAttempts: row.maxAttempts,
-      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-      requestedByUserId: row.requestedByUserId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-      createdAt: toIso(row.createdAt),
-      startedAt: row.startedAt ? toIso(row.startedAt) : null,
-      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-    };
+    return this.toWorkflowRunRecord(row);
   }
 
   async listWorkflowRuns(input: {
@@ -1320,23 +1572,7 @@ export class PgAppStore implements AppStore {
     );
 
     return {
-      runs: result.rows.map((row) => ({
-        id: row.id,
-        organizationId: row.organizationId,
-        workflowId: row.workflowId,
-        triggerType: toWorkflowRunTriggerType(row.triggerType),
-        status: row.status as "queued" | "running" | "succeeded" | "failed",
-        attemptCount: row.attemptCount,
-        maxAttempts: row.maxAttempts,
-        nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-        requestedByUserId: row.requestedByUserId,
-        input: row.input,
-        output: row.output,
-        error: row.error,
-        createdAt: toIso(row.createdAt),
-        startedAt: row.startedAt ? toIso(row.startedAt) : null,
-        finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-      })),
+      runs: result.rows.map((row) => this.toWorkflowRunRecord(row)),
       nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
     };
   }
@@ -1349,23 +1585,7 @@ export class PgAppStore implements AppStore {
     if (!row) {
       return null;
     }
-    return {
-      id: row.id,
-      organizationId: row.organizationId,
-      workflowId: row.workflowId,
-      triggerType: toWorkflowRunTriggerType(row.triggerType),
-      status: row.status as "queued" | "running" | "succeeded" | "failed",
-      attemptCount: row.attemptCount,
-      maxAttempts: row.maxAttempts,
-      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-      requestedByUserId: row.requestedByUserId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-      createdAt: toIso(row.createdAt),
-      startedAt: row.startedAt ? toIso(row.startedAt) : null,
-      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-    };
+    return this.toWorkflowRunRecord(row);
   }
 
   async appendWorkflowRunEvent(input: {
@@ -1496,23 +1716,7 @@ export class PgAppStore implements AppStore {
     if (!row) {
       return null;
     }
-    return {
-      id: row.id,
-      organizationId: row.organizationId,
-      workflowId: row.workflowId,
-      triggerType: toWorkflowRunTriggerType(row.triggerType),
-      status: row.status as "queued" | "running" | "succeeded" | "failed",
-      attemptCount: row.attemptCount,
-      maxAttempts: row.maxAttempts,
-      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-      requestedByUserId: row.requestedByUserId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-      createdAt: toIso(row.createdAt),
-      startedAt: row.startedAt ? toIso(row.startedAt) : null,
-      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-    };
+    return this.toWorkflowRunRecord(row);
   }
 
   async markWorkflowRunQueuedForRetry(input: {
@@ -1536,23 +1740,7 @@ export class PgAppStore implements AppStore {
     if (!row) {
       return null;
     }
-    return {
-      id: row.id,
-      organizationId: row.organizationId,
-      workflowId: row.workflowId,
-      triggerType: toWorkflowRunTriggerType(row.triggerType),
-      status: row.status as "queued" | "running" | "succeeded" | "failed",
-      attemptCount: row.attemptCount,
-      maxAttempts: row.maxAttempts,
-      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-      requestedByUserId: row.requestedByUserId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-      createdAt: toIso(row.createdAt),
-      startedAt: row.startedAt ? toIso(row.startedAt) : null,
-      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-    };
+    return this.toWorkflowRunRecord(row);
   }
 
   async markWorkflowRunSucceeded(input: {
@@ -1569,23 +1757,7 @@ export class PgAppStore implements AppStore {
     if (!row) {
       return null;
     }
-    return {
-      id: row.id,
-      organizationId: row.organizationId,
-      workflowId: row.workflowId,
-      triggerType: toWorkflowRunTriggerType(row.triggerType),
-      status: row.status as "queued" | "running" | "succeeded" | "failed",
-      attemptCount: row.attemptCount,
-      maxAttempts: row.maxAttempts,
-      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-      requestedByUserId: row.requestedByUserId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-      createdAt: toIso(row.createdAt),
-      startedAt: row.startedAt ? toIso(row.startedAt) : null,
-      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-    };
+    return this.toWorkflowRunRecord(row);
   }
 
   async markWorkflowRunFailed(input: {
@@ -1602,23 +1774,7 @@ export class PgAppStore implements AppStore {
     if (!row) {
       return null;
     }
-    return {
-      id: row.id,
-      organizationId: row.organizationId,
-      workflowId: row.workflowId,
-      triggerType: toWorkflowRunTriggerType(row.triggerType),
-      status: row.status as "queued" | "running" | "succeeded" | "failed",
-      attemptCount: row.attemptCount,
-      maxAttempts: row.maxAttempts,
-      nextAttemptAt: row.nextAttemptAt ? toIso(row.nextAttemptAt) : null,
-      requestedByUserId: row.requestedByUserId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-      createdAt: toIso(row.createdAt),
-      startedAt: row.startedAt ? toIso(row.startedAt) : null,
-      finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
-    };
+    return this.toWorkflowRunRecord(row);
   }
 
   async listConnectorSecrets(input: { organizationId: string; actorUserId: string; connectorId?: string | null }) {

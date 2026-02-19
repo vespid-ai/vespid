@@ -1425,5 +1425,14 @@
   "emptyState": {
     "nextStep": "Next step",
     "noData": "Nothing here yet"
+  },
+  "llm": {
+    "compact": {
+      "advanced": "Advanced model connection settings",
+      "advancedDescription": "Change provider and model connection in advanced settings. The quick path only changes model.",
+      "clearModel": "Clear",
+      "inheritModel": "(inherit)",
+      "oauthRequired": "Selected provider requires a connected account."
+    }
   }
 }

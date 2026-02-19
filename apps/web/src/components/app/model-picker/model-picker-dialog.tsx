@@ -3,7 +3,7 @@
 import { Command } from "cmdk";
 import { Check, Settings2 } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { Input } from "../../ui/input";
@@ -84,12 +84,14 @@ export function ModelPickerDialog({
   value,
   onChange,
   providerFilter,
+  allowedProviders,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   value: string;
   onChange: (next: string) => void;
   providerFilter?: LlmProviderId;
+  allowedProviders?: LlmProviderId[];
 }) {
   const t = useTranslations();
   const [tab, setTab] = useState<"pick" | "manage">("pick");
@@ -101,16 +103,36 @@ export function ModelPickerDialog({
     setDisabledMap(readDisabledMap());
   }, [open]);
 
+  const allowSet = useMemo(() => {
+    if (!allowedProviders || allowedProviders.length === 0) {
+      return null;
+    }
+    return new Set(allowedProviders);
+  }, [allowedProviders]);
+
+  const isProviderAllowed = useCallback(
+    (providerId: LlmProviderId) => {
+      if (providerFilter) {
+        return providerId === providerFilter;
+      }
+      if (allowSet) {
+        return allowSet.has(providerId);
+      }
+      return true;
+    },
+    [providerFilter, allowSet]
+  );
+
   const baseItems = useMemo<PickerItem[]>(() => {
     return curatedModels
-      .filter((m) => (providerFilter ? m.providerId === providerFilter : true))
+      .filter((m) => isProviderAllowed(m.providerId))
       .map((m) => ({
         providerId: m.providerId,
         modelId: m.modelId,
         name: m.name,
         recommended: Boolean(m.tags?.includes("recommended")),
       }));
-  }, [providerFilter]);
+  }, [isProviderAllowed]);
 
   const recentItems = useMemo<PickerItem[]>(() => {
     const recent = readRecents();
@@ -128,7 +150,11 @@ export function ModelPickerDialog({
         continue;
       }
       const inferred = normalizeProviderGroup(inferProviderFromModelId(modelId));
-      if (providerFilter && inferred !== providerFilter) {
+      if (inferred === "other") {
+        if (providerFilter || allowSet) {
+          continue;
+        }
+      } else if (!isProviderAllowed(inferred)) {
         continue;
       }
       out.push({
@@ -141,7 +167,7 @@ export function ModelPickerDialog({
     }
     return out;
     // baseItems already accounts for providerFilter
-  }, [baseItems, providerFilter]);
+  }, [baseItems, isProviderAllowed]);
 
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -141,6 +141,9 @@ export const workflowRuns = pgTable("workflow_runs", {
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
   triggerType: text("trigger_type").notNull(),
+  triggerKey: text("trigger_key"),
+  triggeredAt: timestamp("triggered_at", { withTimezone: true }),
+  triggerSource: text("trigger_source"),
   status: text("status").notNull().default("queued"),
   attemptCount: integer("attempt_count").notNull().default(0),
   maxAttempts: integer("max_attempts").notNull().default(3),
@@ -163,10 +166,54 @@ export const workflowRuns = pgTable("workflow_runs", {
   workflowRunsOrgIdIdx: index("workflow_runs_org_id_idx").on(table.organizationId),
   workflowRunsWorkflowIdIdx: index("workflow_runs_workflow_id_idx").on(table.workflowId),
   workflowRunsStatusIdx: index("workflow_runs_status_idx").on(table.status),
+  workflowRunsOrgWorkflowTriggerKeyUnique: uniqueIndex("workflow_runs_org_workflow_trigger_key_unique").on(
+    table.organizationId,
+    table.workflowId,
+    table.triggerKey
+  ),
   workflowRunsOrgStatusBlockedIdx: index("workflow_runs_org_status_blocked_idx").on(
     table.organizationId,
     table.status,
     table.blockedRequestId
+  ),
+}));
+
+export const workflowTriggerSubscriptions = pgTable("workflow_trigger_subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  requestedByUserId: uuid("requested_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  workflowRevision: integer("workflow_revision").notNull(),
+  triggerType: text("trigger_type").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  cronExpr: text("cron_expr"),
+  heartbeatIntervalSec: integer("heartbeat_interval_sec"),
+  heartbeatJitterSec: integer("heartbeat_jitter_sec"),
+  heartbeatMaxSkewSec: integer("heartbeat_max_skew_sec"),
+  webhookTokenHash: text("webhook_token_hash"),
+  nextFireAt: timestamp("next_fire_at", { withTimezone: true }),
+  lastTriggeredAt: timestamp("last_triggered_at", { withTimezone: true }),
+  lastTriggerKey: text("last_trigger_key"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workflowTriggerSubscriptionsOrgWorkflowTypeUnique: uniqueIndex("workflow_trigger_subscriptions_org_workflow_type_unique").on(
+    table.organizationId,
+    table.workflowId,
+    table.triggerType
+  ),
+  workflowTriggerSubscriptionsWebhookTokenHashUnique: uniqueIndex("workflow_trigger_subscriptions_webhook_token_hash_unique").on(
+    table.webhookTokenHash
+  ),
+  workflowTriggerSubscriptionsReadyIdx: index("workflow_trigger_subscriptions_ready_idx").on(
+    table.enabled,
+    table.nextFireAt,
+    table.id
+  ),
+  workflowTriggerSubscriptionsOrgUpdatedIdx: index("workflow_trigger_subscriptions_org_updated_idx").on(
+    table.organizationId,
+    table.updatedAt
   ),
 }));
 
@@ -193,6 +240,70 @@ export const workflowRunEvents = pgTable("workflow_run_events", {
   workflowRunEventsOrgRunCreatedAtIdx: index("workflow_run_events_org_run_created_at_idx").on(
     table.organizationId,
     table.runId,
+    table.createdAt
+  ),
+}));
+
+export const organizationPolicyRules = pgTable("organization_policy_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  priority: integer("priority").notNull().default(100),
+  effect: text("effect").notNull(),
+  scope: jsonb("scope").notNull().default(sql`'{}'::jsonb`),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  updatedByUserId: uuid("updated_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  organizationPolicyRulesOrgEnabledPriorityIdx: index("organization_policy_rules_org_enabled_priority_idx").on(
+    table.organizationId,
+    table.enabled,
+    table.priority,
+    table.id
+  ),
+  organizationPolicyRulesOrgUpdatedIdx: index("organization_policy_rules_org_updated_idx").on(
+    table.organizationId,
+    table.updatedAt
+  ),
+}));
+
+export const workflowApprovalRequests = pgTable("workflow_approval_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => workflowRuns.id, { onDelete: "cascade" }),
+  nodeId: text("node_id").notNull(),
+  nodeType: text("node_type").notNull(),
+  requestKind: text("request_kind").notNull().default("policy"),
+  status: text("status").notNull().default("pending"),
+  reason: text("reason"),
+  context: jsonb("context").notNull().default(sql`'{}'::jsonb`),
+  requestedByUserId: uuid("requested_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  decidedByUserId: uuid("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  decisionNote: text("decision_note"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workflowApprovalRequestsOrgStatusCreatedIdx: index("workflow_approval_requests_org_status_created_idx").on(
+    table.organizationId,
+    table.status,
+    table.createdAt,
+    table.id
+  ),
+  workflowApprovalRequestsOrgRunIdx: index("workflow_approval_requests_org_run_idx").on(
+    table.organizationId,
+    table.runId,
+    table.createdAt
+  ),
+  workflowApprovalRequestsOrgRunNodeStatusIdx: index("workflow_approval_requests_org_run_node_status_idx").on(
+    table.organizationId,
+    table.runId,
+    table.nodeId,
+    table.status,
     table.createdAt
   ),
 }));
@@ -728,7 +839,10 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
   invitations: many(organizationInvitations),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
+  workflowTriggerSubscriptions: many(workflowTriggerSubscriptions),
   workflowRunEvents: many(workflowRunEvents),
+  policyRules: many(organizationPolicyRules),
+  approvalRequests: many(workflowApprovalRequests),
   connectorSecrets: many(connectorSecrets),
   agents: many(organizationAgents),
   agentPairingTokens: many(agentPairingTokens),
@@ -754,6 +868,10 @@ export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(authSessions),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
+  workflowTriggerSubscriptions: many(workflowTriggerSubscriptions),
+  policyRulesCreated: many(organizationPolicyRules),
+  approvalRequestsRequested: many(workflowApprovalRequests),
+  approvalRequestsDecided: many(workflowApprovalRequests),
   agentSessions: many(agentSessions),
 }));
 
@@ -823,7 +941,9 @@ export const workflowsRelations = relations(workflows, ({ one, many }) => ({
     references: [users.id],
   }),
   runs: many(workflowRuns),
+  triggerSubscriptions: many(workflowTriggerSubscriptions),
   events: many(workflowRunEvents),
+  approvalRequests: many(workflowApprovalRequests),
 }));
 
 export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
@@ -841,6 +961,21 @@ export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
   }),
 }));
 
+export const workflowTriggerSubscriptionsRelations = relations(workflowTriggerSubscriptions, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [workflowTriggerSubscriptions.organizationId],
+    references: [organizations.id],
+  }),
+  workflow: one(workflows, {
+    fields: [workflowTriggerSubscriptions.workflowId],
+    references: [workflows.id],
+  }),
+  requestedByUser: one(users, {
+    fields: [workflowTriggerSubscriptions.requestedByUserId],
+    references: [users.id],
+  }),
+}));
+
 export const workflowRunEventsRelations = relations(workflowRunEvents, ({ one }) => ({
   organization: one(organizations, {
     fields: [workflowRunEvents.organizationId],
@@ -853,6 +988,44 @@ export const workflowRunEventsRelations = relations(workflowRunEvents, ({ one })
   run: one(workflowRuns, {
     fields: [workflowRunEvents.runId],
     references: [workflowRuns.id],
+  }),
+}));
+
+export const organizationPolicyRulesRelations = relations(organizationPolicyRules, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [organizationPolicyRules.organizationId],
+    references: [organizations.id],
+  }),
+  createdByUser: one(users, {
+    fields: [organizationPolicyRules.createdByUserId],
+    references: [users.id],
+  }),
+  updatedByUser: one(users, {
+    fields: [organizationPolicyRules.updatedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const workflowApprovalRequestsRelations = relations(workflowApprovalRequests, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [workflowApprovalRequests.organizationId],
+    references: [organizations.id],
+  }),
+  workflow: one(workflows, {
+    fields: [workflowApprovalRequests.workflowId],
+    references: [workflows.id],
+  }),
+  run: one(workflowRuns, {
+    fields: [workflowApprovalRequests.runId],
+    references: [workflowRuns.id],
+  }),
+  requestedByUser: one(users, {
+    fields: [workflowApprovalRequests.requestedByUserId],
+    references: [users.id],
+  }),
+  decidedByUser: one(users, {
+    fields: [workflowApprovalRequests.decidedByUserId],
+    references: [users.id],
   }),
 }));
 
@@ -1091,7 +1264,10 @@ export type DbOrganizationInvitation = typeof organizationInvitations.$inferSele
 export type DbAuthSession = typeof authSessions.$inferSelect;
 export type DbWorkflow = typeof workflows.$inferSelect;
 export type DbWorkflowRun = typeof workflowRuns.$inferSelect;
+export type DbWorkflowTriggerSubscription = typeof workflowTriggerSubscriptions.$inferSelect;
 export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;
+export type DbOrganizationPolicyRule = typeof organizationPolicyRules.$inferSelect;
+export type DbWorkflowApprovalRequest = typeof workflowApprovalRequests.$inferSelect;
 export type DbConnectorSecret = typeof connectorSecrets.$inferSelect;
 export type DbOrganizationAgent = typeof organizationAgents.$inferSelect;
 export type DbAgentPairingToken = typeof agentPairingTokens.$inferSelect;

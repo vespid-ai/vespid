@@ -189,6 +189,18 @@ importers:
         specifier: ^5.8.1
         version: 5.8.1
 
+  apps/scheduler:
+    dependencies:
+      '@vespid/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@vespid/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      bullmq:
+        specifier: ^5.69.1
+        version: 5.69.1
+
   apps/web:
     dependencies:
       '@radix-ui/react-avatar':

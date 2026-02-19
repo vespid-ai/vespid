@@ -1425,5 +1425,14 @@
   "emptyState": {
     "nextStep": "下一步",
     "noData": "这里还没有内容"
+  },
+  "llm": {
+    "compact": {
+      "advanced": "高级模型连接设置",
+      "advancedDescription": "在高级设置中调整提供方与模型连接。主路径仅修改模型。",
+      "clearModel": "清空",
+      "inheritModel": "（继承）",
+      "oauthRequired": "所选提供方需要已连接账号。"
+    }
   }
 }

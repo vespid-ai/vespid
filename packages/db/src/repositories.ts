@@ -26,6 +26,7 @@ import {
   organizationAgents,
   organizationExecutors,
   memberships,
+  organizationPolicyRules,
   organizationInvitations,
   platformAuditLogs,
   platformSettings,
@@ -38,7 +39,9 @@ import {
   toolsetBuilderTurns,
   users,
   workflowRunEvents,
+  workflowApprovalRequests,
   workflowRuns,
+  workflowTriggerSubscriptions,
   workflows,
 } from "./schema.js";
 
@@ -484,6 +487,450 @@ export async function publishWorkflow(
   return row ?? null;
 }
 
+export type WorkflowTriggerSubscriptionInput =
+  | {
+      triggerType: "cron";
+      cronExpr: string;
+      enabled?: boolean;
+    }
+  | {
+      triggerType: "heartbeat";
+      heartbeatIntervalSec: number;
+      heartbeatJitterSec: number;
+      heartbeatMaxSkewSec: number;
+      enabled?: boolean;
+    }
+  | {
+      triggerType: "webhook";
+      webhookTokenHash: string;
+      enabled?: boolean;
+    };
+
+export async function replaceWorkflowTriggerSubscriptions(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    requestedByUserId: string;
+    workflowRevision: number;
+    subscriptions: WorkflowTriggerSubscriptionInput[];
+  }
+) {
+  await db
+    .delete(workflowTriggerSubscriptions)
+    .where(
+      and(
+        eq(workflowTriggerSubscriptions.organizationId, input.organizationId),
+        eq(workflowTriggerSubscriptions.workflowId, input.workflowId)
+      )
+    );
+
+  if (input.subscriptions.length === 0) {
+    return [];
+  }
+
+  const now = new Date();
+  const rows = input.subscriptions.map((subscription) => {
+    if (subscription.triggerType === "cron") {
+      return {
+        organizationId: input.organizationId,
+        workflowId: input.workflowId,
+        requestedByUserId: input.requestedByUserId,
+        workflowRevision: input.workflowRevision,
+        triggerType: "cron",
+        enabled: subscription.enabled ?? true,
+        cronExpr: subscription.cronExpr,
+        heartbeatIntervalSec: null,
+        heartbeatJitterSec: null,
+        heartbeatMaxSkewSec: null,
+        webhookTokenHash: null,
+        nextFireAt: null,
+        lastTriggeredAt: null,
+        lastTriggerKey: null,
+        lastError: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+
+    if (subscription.triggerType === "heartbeat") {
+      return {
+        organizationId: input.organizationId,
+        workflowId: input.workflowId,
+        requestedByUserId: input.requestedByUserId,
+        workflowRevision: input.workflowRevision,
+        triggerType: "heartbeat",
+        enabled: subscription.enabled ?? true,
+        cronExpr: null,
+        heartbeatIntervalSec: subscription.heartbeatIntervalSec,
+        heartbeatJitterSec: subscription.heartbeatJitterSec,
+        heartbeatMaxSkewSec: subscription.heartbeatMaxSkewSec,
+        webhookTokenHash: null,
+        nextFireAt: null,
+        lastTriggeredAt: null,
+        lastTriggerKey: null,
+        lastError: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+
+    return {
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      requestedByUserId: input.requestedByUserId,
+      workflowRevision: input.workflowRevision,
+      triggerType: "webhook",
+      enabled: subscription.enabled ?? true,
+      cronExpr: null,
+      heartbeatIntervalSec: null,
+      heartbeatJitterSec: null,
+      heartbeatMaxSkewSec: null,
+      webhookTokenHash: subscription.webhookTokenHash,
+      nextFireAt: null,
+      lastTriggeredAt: null,
+      lastTriggerKey: null,
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+  });
+
+  return db.insert(workflowTriggerSubscriptions).values(rows as any).returning();
+}
+
+export async function listWorkflowTriggerSubscriptions(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId?: string;
+    limit?: number;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit ?? 200));
+  const where = input.workflowId
+    ? and(
+        eq(workflowTriggerSubscriptions.organizationId, input.organizationId),
+        eq(workflowTriggerSubscriptions.workflowId, input.workflowId)
+      )
+    : eq(workflowTriggerSubscriptions.organizationId, input.organizationId);
+  const rows = await db
+    .select()
+    .from(workflowTriggerSubscriptions)
+    .where(where)
+    .orderBy(desc(workflowTriggerSubscriptions.updatedAt), desc(workflowTriggerSubscriptions.id))
+    .limit(limit);
+  return rows;
+}
+
+export async function getWorkflowTriggerSubscriptionById(
+  db: Db,
+  input: {
+    organizationId: string;
+    subscriptionId: string;
+  }
+) {
+  const [row] = await db
+    .select()
+    .from(workflowTriggerSubscriptions)
+    .where(
+      and(
+        eq(workflowTriggerSubscriptions.organizationId, input.organizationId),
+        eq(workflowTriggerSubscriptions.id, input.subscriptionId)
+      )
+    );
+  return row ?? null;
+}
+
+export async function getWorkflowTriggerSubscriptionByWebhookTokenHash(
+  db: Db,
+  input: {
+    webhookTokenHash: string;
+  }
+) {
+  const [row] = await db
+    .select()
+    .from(workflowTriggerSubscriptions)
+    .where(
+      and(
+        eq(workflowTriggerSubscriptions.triggerType, "webhook"),
+        eq(workflowTriggerSubscriptions.webhookTokenHash, input.webhookTokenHash)
+      )
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+export async function updateWorkflowTriggerSubscriptionEnabled(
+  db: Db,
+  input: {
+    organizationId: string;
+    subscriptionId: string;
+    enabled: boolean;
+  }
+) {
+  const [row] = await db
+    .update(workflowTriggerSubscriptions)
+    .set({
+      enabled: input.enabled,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(workflowTriggerSubscriptions.organizationId, input.organizationId),
+        eq(workflowTriggerSubscriptions.id, input.subscriptionId)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function listDueWorkflowTriggerSubscriptions(
+  db: Db,
+  input: {
+    now: Date;
+    limit: number;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit));
+  const rows = await db
+    .select({
+      subscription: workflowTriggerSubscriptions,
+      workflow: workflows,
+    })
+    .from(workflowTriggerSubscriptions)
+    .innerJoin(
+      workflows,
+      and(
+        eq(workflows.id, workflowTriggerSubscriptions.workflowId),
+        eq(workflows.organizationId, workflowTriggerSubscriptions.organizationId)
+      )
+    )
+    .where(
+      and(
+        eq(workflowTriggerSubscriptions.enabled, true),
+        eq(workflows.status, "published"),
+        or(
+          eq(workflowTriggerSubscriptions.triggerType, "cron"),
+          eq(workflowTriggerSubscriptions.triggerType, "heartbeat")
+        ),
+        or(isNull(workflowTriggerSubscriptions.nextFireAt), lte(workflowTriggerSubscriptions.nextFireAt, input.now))
+      )
+    )
+    .orderBy(asc(workflowTriggerSubscriptions.nextFireAt), asc(workflowTriggerSubscriptions.id))
+    .limit(limit);
+  return rows;
+}
+
+export async function updateWorkflowTriggerSubscriptionSchedule(
+  db: Db,
+  input: {
+    subscriptionId: string;
+    nextFireAt?: Date | null;
+    lastTriggeredAt?: Date | null;
+    lastTriggerKey?: string | null;
+    lastError?: string | null;
+  }
+) {
+  const [row] = await db
+    .update(workflowTriggerSubscriptions)
+    .set({
+      ...(input.nextFireAt !== undefined ? { nextFireAt: input.nextFireAt } : {}),
+      ...(input.lastTriggeredAt !== undefined ? { lastTriggeredAt: input.lastTriggeredAt } : {}),
+      ...(input.lastTriggerKey !== undefined ? { lastTriggerKey: input.lastTriggerKey } : {}),
+      ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(workflowTriggerSubscriptions.id, input.subscriptionId))
+    .returning();
+  return row ?? null;
+}
+
+export async function listOrganizationPolicyRules(
+  db: Db,
+  input: {
+    organizationId: string;
+    enabledOnly?: boolean;
+  }
+) {
+  const where = input.enabledOnly
+    ? and(eq(organizationPolicyRules.organizationId, input.organizationId), eq(organizationPolicyRules.enabled, true))
+    : eq(organizationPolicyRules.organizationId, input.organizationId);
+  const rows = await db
+    .select()
+    .from(organizationPolicyRules)
+    .where(where)
+    .orderBy(asc(organizationPolicyRules.priority), asc(organizationPolicyRules.createdAt), asc(organizationPolicyRules.id));
+  return rows;
+}
+
+export async function createWorkflowApprovalRequest(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    runId: string;
+    nodeId: string;
+    nodeType: string;
+    requestKind?: string;
+    reason?: string | null;
+    context?: unknown;
+    requestedByUserId: string;
+    expiresAt: Date;
+  }
+) {
+  const [row] = await db
+    .insert(workflowApprovalRequests)
+    .values({
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      nodeType: input.nodeType,
+      requestKind: input.requestKind ?? "policy",
+      status: "pending",
+      reason: input.reason ?? null,
+      context: input.context ?? {},
+      requestedByUserId: input.requestedByUserId,
+      expiresAt: input.expiresAt,
+    })
+    .returning();
+  return row ?? null;
+}
+
+export async function listWorkflowApprovalRequests(
+  db: Db,
+  input: {
+    organizationId: string;
+    status?: "pending" | "approved" | "rejected" | "expired";
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit));
+  const baseWhere = input.status
+    ? and(eq(workflowApprovalRequests.organizationId, input.organizationId), eq(workflowApprovalRequests.status, input.status))
+    : eq(workflowApprovalRequests.organizationId, input.organizationId);
+  const cursorWhere = input.cursor
+    ? or(
+        lt(workflowApprovalRequests.createdAt, input.cursor.createdAt),
+        and(
+          eq(workflowApprovalRequests.createdAt, input.cursor.createdAt),
+          lt(workflowApprovalRequests.id, input.cursor.id)
+        )
+      )
+    : null;
+  const where = cursorWhere ? and(baseWhere, cursorWhere) : baseWhere;
+
+  const rows = await db
+    .select()
+    .from(workflowApprovalRequests)
+    .where(where)
+    .orderBy(desc(workflowApprovalRequests.createdAt), desc(workflowApprovalRequests.id))
+    .limit(limit);
+
+  const last = rows.length > 0 ? rows[rows.length - 1] : null;
+  const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+  return { rows, nextCursor };
+}
+
+export async function getWorkflowApprovalRequestById(
+  db: Db,
+  input: {
+    organizationId: string;
+    approvalRequestId: string;
+  }
+) {
+  const [row] = await db
+    .select()
+    .from(workflowApprovalRequests)
+    .where(
+      and(
+        eq(workflowApprovalRequests.organizationId, input.organizationId),
+        eq(workflowApprovalRequests.id, input.approvalRequestId)
+      )
+    );
+  return row ?? null;
+}
+
+export async function hasApprovedWorkflowApprovalForRunNode(
+  db: Db,
+  input: {
+    organizationId: string;
+    runId: string;
+    nodeId: string;
+    now?: Date;
+  }
+) {
+  const now = input.now ?? new Date();
+  const rows = await db
+    .select({ id: workflowApprovalRequests.id })
+    .from(workflowApprovalRequests)
+    .where(
+      and(
+        eq(workflowApprovalRequests.organizationId, input.organizationId),
+        eq(workflowApprovalRequests.runId, input.runId),
+        eq(workflowApprovalRequests.nodeId, input.nodeId),
+        eq(workflowApprovalRequests.status, "approved"),
+        gt(workflowApprovalRequests.expiresAt, now)
+      )
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function decideWorkflowApprovalRequest(
+  db: Db,
+  input: {
+    organizationId: string;
+    approvalRequestId: string;
+    status: "approved" | "rejected" | "expired";
+    decidedByUserId?: string | null;
+    decisionNote?: string | null;
+  }
+) {
+  const [row] = await db
+    .update(workflowApprovalRequests)
+    .set({
+      status: input.status,
+      decidedByUserId: input.decidedByUserId ?? null,
+      decisionNote: input.decisionNote ?? null,
+      decidedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(workflowApprovalRequests.organizationId, input.organizationId),
+        eq(workflowApprovalRequests.id, input.approvalRequestId),
+        eq(workflowApprovalRequests.status, "pending")
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function getWorkflowRunByBlockedRequestId(
+  db: Db,
+  input: {
+    organizationId: string;
+    blockedRequestId: string;
+  }
+) {
+  const [row] = await db
+    .select()
+    .from(workflowRuns)
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        eq(workflowRuns.blockedRequestId, input.blockedRequestId),
+        eq(workflowRuns.status, "running")
+      )
+    )
+    .orderBy(desc(workflowRuns.createdAt), desc(workflowRuns.id))
+    .limit(1);
+  return row ?? null;
+}
+
 export async function updateWorkflowDraft(
   db: Db,
   input: {
@@ -569,10 +1016,13 @@ export async function createWorkflowRun(
   input: {
     organizationId: string;
     workflowId: string;
-    triggerType: "manual" | "channel";
+    triggerType: "manual" | "channel" | "cron" | "webhook" | "heartbeat";
     requestedByUserId: string;
     input?: unknown;
     maxAttempts?: number;
+    triggerKey?: string | null;
+    triggeredAt?: Date | null;
+    triggerSource?: string | null;
   }
 ) {
   const [row] = await db
@@ -581,6 +1031,9 @@ export async function createWorkflowRun(
       organizationId: input.organizationId,
       workflowId: input.workflowId,
       triggerType: input.triggerType,
+      triggerKey: input.triggerKey ?? null,
+      triggeredAt: input.triggeredAt ?? null,
+      triggerSource: input.triggerSource ?? null,
       status: "queued",
       requestedByUserId: input.requestedByUserId,
       input: input.input ?? null,
