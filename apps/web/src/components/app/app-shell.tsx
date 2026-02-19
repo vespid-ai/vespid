@@ -454,16 +454,18 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Link
                   key={href}
                   href={href}
+                  aria-current={active ? "page" : undefined}
+                  data-state={active ? "active" : "inactive"}
                   className={cn(
-                    "group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm",
+                    "group relative flex items-center gap-2 rounded-[var(--radius-sm)] border border-transparent px-3 py-2 text-sm",
                     "transition-[box-shadow,background-color,color,border-color] duration-200",
                     active
                       ? isConversationRoute
-                        ? "bg-panel/72 text-text"
-                        : "bg-surface2/60 text-text shadow-elev1"
+                        ? "border-accent/70 bg-accent/12 text-text shadow-elev1 ring-1 ring-accent/30"
+                        : "border-accent/75 bg-accent/14 text-text shadow-elev2 ring-1 ring-accent/35"
                       : isConversationRoute
-                        ? "text-muted hover:bg-panel/45 hover:text-text"
-                        : "text-muted hover:bg-panel/55 hover:text-text hover:shadow-elev1",
+                        ? "text-muted hover:border-borderSubtle/60 hover:bg-panel/45 hover:text-text"
+                        : "text-muted hover:border-borderSubtle/60 hover:bg-panel/55 hover:text-text hover:shadow-elev1",
                     sidebarCollapsed ? "justify-center px-2" : ""
                   )}
                 >
@@ -539,12 +541,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                                 key={href}
                                 href={href}
                                 onClick={() => setMobileNavOpen(false)}
+                                aria-current={active ? "page" : undefined}
+                                data-state={active ? "active" : "inactive"}
                                 className={cn(
-                                  "group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-sm",
+                                  "group relative flex items-center gap-2 rounded-[var(--radius-sm)] border border-transparent px-3 py-2 text-sm",
                                   "transition-[box-shadow,background-color,color,border-color] duration-200",
                                   active
-                                    ? "bg-surface2/60 text-text shadow-elev1"
-                                    : "text-muted hover:bg-panel/55 hover:text-text hover:shadow-elev1"
+                                    ? "border-accent/75 bg-accent/14 text-text shadow-elev2 ring-1 ring-accent/35"
+                                    : "text-muted hover:border-borderSubtle/60 hover:bg-panel/55 hover:text-text hover:shadow-elev1"
                                 )}
                               >
                                 {active ? (

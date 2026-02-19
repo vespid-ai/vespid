@@ -20,8 +20,9 @@ export function TabsTrigger({ className, ...props }: ComponentPropsWithoutRef<ty
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1 text-sm font-medium text-muted",
-        "data-[state=active]:bg-panel data-[state=active]:text-text data-[state=active]:shadow-sm",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-sm border border-transparent px-3 py-1 text-sm font-medium text-muted",
+        "hover:bg-panel/65 hover:text-text",
+        "data-[state=active]:border-accent/70 data-[state=active]:bg-accent/12 data-[state=active]:text-text data-[state=active]:shadow-elev1 data-[state=active]:ring-1 data-[state=active]:ring-accent/35",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30",
         className
       )}

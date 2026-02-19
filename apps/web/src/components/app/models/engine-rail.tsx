@@ -35,9 +35,13 @@ export function EngineRail(props: {
             variant="outline"
             className={cn(
               "h-auto justify-start rounded-xl border p-3 text-left",
-              active ? "border-accent/60 bg-accent/10 shadow-elev1" : "border-borderSubtle/60 bg-panel/55"
+              active
+                ? "border-accent/80 bg-accent/14 shadow-elev2 ring-2 ring-accent/25"
+                : "border-borderSubtle/60 bg-panel/55"
             )}
             onClick={() => props.onSelect(item.id)}
+            aria-pressed={active}
+            data-state={active ? "active" : "inactive"}
             data-testid={`engine-rail-item-${item.id}`}
           >
             <div className="grid w-full gap-1">

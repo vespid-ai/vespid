@@ -32,8 +32,12 @@ export function ConnectionPathCards(props: {
             onClick={() => props.onChange(item.id)}
             className={cn(
               "h-auto min-w-0 items-start justify-start whitespace-normal rounded-xl border p-3 text-left",
-              selected ? "border-accent/65 bg-accent/10 shadow-elev1" : "border-borderSubtle/60 bg-panel/50"
+              selected
+                ? "border-accent/80 bg-accent/14 shadow-elev2 ring-2 ring-accent/25"
+                : "border-borderSubtle/60 bg-panel/50"
             )}
+            aria-pressed={selected}
+            data-state={selected ? "active" : "inactive"}
             data-testid={`connection-path-${item.id}`}
           >
             <div className="grid min-w-0 w-full gap-1.5">
