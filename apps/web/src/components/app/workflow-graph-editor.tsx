@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -39,6 +40,7 @@ import { type LlmConfigValue } from "./llm/llm-config-field";
 import { LlmCompactConfigField } from "./llm/llm-compact-config-field";
 import { ModelPickerField } from "./model-picker/model-picker-field";
 import { SecretSelectField } from "./secrets/secret-select-field";
+import { cn } from "../../lib/cn";
 
 type EdgeKind = "always" | "cond_true" | "cond_false";
 
@@ -67,6 +69,8 @@ type WorkflowGraphEditorProps = {
   locale: string;
   variant?: "embedded" | "full";
 };
+
+const RIGHT_PANEL_COLLAPSED_STORAGE_KEY = "vespid.ui.workflow-graph.right-panel-collapsed.v1";
 
 function normalizeIssues(maybeIssues: unknown): GraphValidationIssue[] {
   if (!Array.isArray(maybeIssues)) {
@@ -121,6 +125,109 @@ function defaultPosition(index: number) {
   const col = index % 4;
   const row = Math.floor(index / 4);
   return { x: 60 + col * 260, y: 60 + row * 140 };
+}
+
+function autoLayoutNodesLeftToRight(input: { nodes: Node[]; edges: Edge[] }): Node[] {
+  if (input.nodes.length === 0) {
+    return input.nodes;
+  }
+
+  const nodeById = new Map(input.nodes.map((node) => [node.id, node] as const));
+  const inDegree = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+  for (const node of input.nodes) {
+    inDegree.set(node.id, 0);
+    outgoing.set(node.id, []);
+  }
+
+  for (const edge of input.edges) {
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) {
+      continue;
+    }
+    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target]);
+  }
+
+  const queue = Array.from(inDegree.entries())
+    .filter(([, degree]) => degree === 0)
+    .map(([id]) => id)
+    .sort((a, b) => a.localeCompare(b));
+  const visited = new Set<string>();
+  const layerByNode = new Map<string, number>();
+
+  for (const id of queue) {
+    layerByNode.set(id, 0);
+  }
+
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    if (!currentId) {
+      continue;
+    }
+    visited.add(currentId);
+    const currentLayer = layerByNode.get(currentId) ?? 0;
+    for (const targetId of outgoing.get(currentId) ?? []) {
+      layerByNode.set(targetId, Math.max(layerByNode.get(targetId) ?? 0, currentLayer + 1));
+      const nextDegree = (inDegree.get(targetId) ?? 0) - 1;
+      inDegree.set(targetId, nextDegree);
+      if (nextDegree === 0) {
+        queue.push(targetId);
+        queue.sort((a, b) => a.localeCompare(b));
+      }
+    }
+  }
+
+  if (visited.size !== input.nodes.length) {
+    let fallbackLayer = Math.max(0, ...Array.from(layerByNode.values())) + 1;
+    const unresolved = input.nodes
+      .map((node) => node.id)
+      .filter((id) => !visited.has(id))
+      .sort((a, b) => a.localeCompare(b));
+    for (const id of unresolved) {
+      if (!layerByNode.has(id)) {
+        layerByNode.set(id, fallbackLayer);
+        fallbackLayer += 1;
+      }
+    }
+  }
+
+  const layerMap = new Map<number, Node[]>();
+  const stableNodes = [...input.nodes].sort((a, b) => {
+    const ay = a.position?.y ?? 0;
+    const by = b.position?.y ?? 0;
+    if (ay !== by) return ay - by;
+    const ax = a.position?.x ?? 0;
+    const bx = b.position?.x ?? 0;
+    if (ax !== bx) return ax - bx;
+    return a.id.localeCompare(b.id);
+  });
+
+  for (const node of stableNodes) {
+    const layer = layerByNode.get(node.id) ?? 0;
+    layerMap.set(layer, [...(layerMap.get(layer) ?? []), node]);
+  }
+
+  const nextPositionById = new Map<string, { x: number; y: number }>();
+  const layerIndices = Array.from(layerMap.keys()).sort((a, b) => a - b);
+  const horizontalGap = 300;
+  const verticalGap = 170;
+  const originX = 80;
+  const originY = 80;
+
+  for (const layerIndex of layerIndices) {
+    const layerNodes = layerMap.get(layerIndex) ?? [];
+    layerNodes.forEach((node, rowIndex) => {
+      nextPositionById.set(node.id, {
+        x: originX + layerIndex * horizontalGap,
+        y: originY + rowIndex * verticalGap,
+      });
+    });
+  }
+
+  return input.nodes.map((node) => ({
+    ...node,
+    position: nextPositionById.get(node.id) ?? node.position,
+  }));
 }
 
 function toFlowNodes(input: { dsl: WorkflowDslV3; editorState: EditorState | null }): Node[] {
@@ -238,7 +345,7 @@ function defaultNodeByType(params: {
         limits: {
           maxTurns: 8,
           maxToolCalls: 20,
-          timeoutMs: 60_000,
+          timeoutMs: 300_000,
           maxOutputChars: 50_000,
           maxRuntimeChars: 200_000,
         },
@@ -412,6 +519,7 @@ function JsonValueField(props: {
 }
 
 export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: WorkflowGraphEditorProps) {
+  const t = useTranslations("workflows.graphEditor");
   const orgId = useActiveOrgId() ?? null;
   const workflowQuery = useWorkflow(orgId, workflowId);
   const updateDraft = useUpdateWorkflowDraft(orgId, workflowId);
@@ -427,6 +535,9 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
   const [nameDraft, setNameDraft] = useState<string>("");
   const [issues, setIssues] = useState<GraphValidationIssue[]>([]);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("form");
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(true);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
 
   const bulkInitRef = useRef(false);
   const [bulkAgentLlm, setBulkAgentLlm] = useState<LlmConfigValue>({ providerId: "openai-codex", modelId: "gpt-5-codex", secretId: null });
@@ -473,6 +584,41 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     setBulkTeammateModel(orgDefaultAgentLlm.modelId);
     bulkInitRef.current = true;
   }, [orgDefaultAgentLlm]);
+
+  function setRightPanelCollapsedPersist(next: boolean) {
+    setRightPanelCollapsed(next);
+    if (typeof window !== "undefined" && typeof window.localStorage !== "undefined") {
+      window.localStorage.setItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+    }
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+      return;
+    }
+    const raw = window.localStorage.getItem(RIGHT_PANEL_COLLAPSED_STORAGE_KEY);
+    if (raw === "0") {
+      setRightPanelCollapsed(false);
+      return;
+    }
+    setRightPanelCollapsed(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const syncFullscreen = () => {
+      const root = editorContainerRef.current;
+      const fullscreenElement = document.fullscreenElement;
+      setIsFullscreen(Boolean(root && fullscreenElement && (fullscreenElement === root || root.contains(fullscreenElement))));
+    };
+    syncFullscreen();
+    document.addEventListener("fullscreenchange", syncFullscreen);
+    return () => {
+      document.removeEventListener("fullscreenchange", syncFullscreen);
+    };
+  }, []);
 
   const decoratedNodes = useMemo<Node[]>(() => {
     return nodes.map((n) => {
@@ -608,6 +754,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     setSelectedNodeId(id);
     setSelectedEdgeId("");
     setInspectorTab("form");
+    setRightPanelCollapsedPersist(false);
   }
 
   async function saveSelectedNodeConfig() {
@@ -654,6 +801,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     if (!issue) {
       return;
     }
+    setRightPanelCollapsedPersist(false);
     if (issue.nodeId) {
       setSelectedNodeId(issue.nodeId);
       setSelectedEdgeId("");
@@ -823,7 +971,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
 
     const maxTurns = asNumber(limits["maxTurns"], 8);
     const maxToolCalls = asNumber(limits["maxToolCalls"], 20);
-    const timeoutMs = asNumber(limits["timeoutMs"], 60_000);
+    const timeoutMs = asNumber(limits["timeoutMs"], 300_000);
 
     const toolsetId = typeof cfg["toolsetId"] === "string" ? (cfg["toolsetId"] as string) : "";
     const executionCfg = asObject(cfg["execution"]) ?? {};
@@ -1113,7 +1261,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                     id: "teammate-1",
                     prompt: { instructions: "Help the lead agent by completing delegated tasks." },
                     tools: { allow: [], execution: "cloud" },
-                    limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
+                    limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 300_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
                     output: { mode: "text" },
                   };
                   return {
@@ -1423,7 +1571,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                         id: `teammate-${nextIdx}`,
                         prompt: { instructions: "Help the lead agent by completing delegated tasks." },
                         tools: { allow: [], execution: "cloud" },
-                        limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
+                        limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 300_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
                         output: { mode: "text" },
                       };
                       return { ...cur, config: { ...curCfg, team: { ...curTeam, teammates: [...list, next] } } };
@@ -2189,10 +2337,49 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
     }
   }
 
+  function runAutoLayout() {
+    if (nodes.length === 0) {
+      return;
+    }
+    const nextNodes = autoLayoutNodesLeftToRight({ nodes, edges });
+    setNodes(nextNodes);
+    requestAnimationFrame(() => {
+      instance?.fitView({ padding: 0.18, duration: 280 });
+    });
+    toast.success(t("autoLayoutSuccess"));
+  }
+
+  async function toggleFullscreen() {
+    if (typeof document === "undefined") {
+      return;
+    }
+    const root = editorContainerRef.current;
+    if (!root || typeof root.requestFullscreen !== "function" || typeof document.exitFullscreen !== "function") {
+      toast.error(t("fullscreenUnsupported"));
+      return;
+    }
+    const fullscreenElement = document.fullscreenElement;
+    const isCurrentRootFullscreen = Boolean(fullscreenElement && (fullscreenElement === root || root.contains(fullscreenElement)));
+    try {
+      if (isCurrentRootFullscreen) {
+        await document.exitFullscreen();
+      } else {
+        setRightPanelCollapsedPersist(true);
+        await root.requestFullscreen();
+      }
+    } catch {
+      toast.error(t("fullscreenFailed"));
+    }
+  }
+
   const isEmbedded = variant === "embedded";
 
   return (
-    <div className="grid gap-4">
+    <div
+      ref={editorContainerRef}
+      className={cn("grid gap-4", isFullscreen ? "min-h-dvh bg-surface0 p-4" : "")}
+      data-testid="workflow-graph-editor-root"
+    >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="font-[var(--font-display)] text-2xl font-semibold tracking-tight">
@@ -2215,6 +2402,31 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
               </Button>
             </>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            aria-pressed={!rightPanelCollapsed}
+            data-state={!rightPanelCollapsed ? "active" : "inactive"}
+            data-testid="workflow-graph-right-panel-toggle"
+            onClick={() => setRightPanelCollapsedPersist(!rightPanelCollapsed)}
+          >
+            {rightPanelCollapsed ? t("showPanel") : t("hidePanel")}
+          </Button>
+          <Button type="button" variant="outline" onClick={runAutoLayout} data-testid="workflow-graph-auto-layout">
+            {t("autoLayout")}
+          </Button>
+          {!isEmbedded ? (
+            <Button
+              type="button"
+              variant="outline"
+              aria-pressed={isFullscreen}
+              data-state={isFullscreen ? "active" : "inactive"}
+              data-testid="workflow-graph-fullscreen-toggle"
+              onClick={toggleFullscreen}
+            >
+              {isFullscreen ? t("exitFullscreen") : t("enterFullscreen")}
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             onClick={() => {
@@ -2250,7 +2462,12 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
       ) : !loaded ? (
         <div className="text-sm text-muted">Workflow not found.</div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
+        <div
+          className={cn(
+            "grid gap-4",
+            rightPanelCollapsed ? "lg:grid-cols-[minmax(0,1fr)_0px]" : "lg:grid-cols-[minmax(0,1fr)_340px]"
+          )}
+        >
           <Card className="min-h-[640px] overflow-hidden">
             <CardHeader>
               <CardTitle>Graph</CardTitle>
@@ -2276,10 +2493,17 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 onNodeClick={(_, n) => {
                   setSelectedNodeId(n.id);
                   setSelectedEdgeId("");
+                  setRightPanelCollapsedPersist(false);
                 }}
                 onEdgeClick={(_, e) => {
                   setSelectedEdgeId(e.id);
                   setSelectedNodeId("");
+                  setRightPanelCollapsedPersist(false);
+                }}
+                onPaneClick={() => {
+                  setSelectedNodeId("");
+                  setSelectedEdgeId("");
+                  setRightPanelCollapsedPersist(true);
                 }}
                 fitView
               >
@@ -2290,6 +2514,14 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
             </CardContent>
           </Card>
 
+          <div
+            className={cn(
+              "min-w-0 transition-opacity duration-200 [&>*]:min-w-0 [&_*]:break-words",
+              rightPanelCollapsed ? "lg:pointer-events-none lg:opacity-0" : "opacity-100"
+            )}
+            data-state={rightPanelCollapsed ? "collapsed" : "expanded"}
+            data-testid="workflow-graph-right-panel"
+          >
           <div className="grid gap-4">
             <Card>
               <CardHeader>
@@ -2618,6 +2850,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                         if (issue.nodeId) {
                           setSelectedNodeId(issue.nodeId);
                           setSelectedEdgeId("");
+                          setRightPanelCollapsedPersist(false);
                           const hit = nodes.find((n) => n.id === issue.nodeId);
                           if (hit && instance) {
                             instance.setCenter(hit.position.x, hit.position.y, { zoom: 1.2, duration: 250 });
@@ -2627,6 +2860,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                         if (issue.edgeId) {
                           setSelectedEdgeId(issue.edgeId);
                           setSelectedNodeId("");
+                          setRightPanelCollapsedPersist(false);
                         }
                       }}
                     >
@@ -2639,6 +2873,7 @@ export function WorkflowGraphEditor({ workflowId, locale, variant = "full" }: Wo
                 </CardContent>
               </Card>
             ) : null}
+          </div>
           </div>
         </div>
       )}

@@ -136,6 +136,54 @@ export const workflows = pgTable("workflows", {
   workflowsOrgStatusIdx: index("workflows_org_status_idx").on(table.organizationId, table.status),
 }));
 
+export const workflowShareInvitations = pgTable("workflow_share_invitations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  email: text("email").notNull(),
+  accessRole: text("access_role").notNull().default("runner"),
+  token: text("token").notNull().unique(),
+  status: text("status").notNull().default("pending"),
+  invitedByUserId: uuid("invited_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  acceptedByUserId: uuid("accepted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workflowShareInvitationsOrgWorkflowIdx: index("workflow_share_invitations_org_workflow_idx").on(
+    table.organizationId,
+    table.workflowId,
+    table.createdAt
+  ),
+  workflowShareInvitationsTokenIdx: index("workflow_share_invitations_token_idx").on(table.token),
+  workflowShareInvitationsWorkflowEmailStatusUnique: uniqueIndex("workflow_share_invitations_workflow_email_status_unique").on(
+    table.workflowId,
+    table.email,
+    table.status
+  ),
+}));
+
+export const workflowShares = pgTable("workflow_shares", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  workflowId: uuid("workflow_id").notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  accessRole: text("access_role").notNull().default("runner"),
+  sourceInvitationId: uuid("source_invitation_id").references(() => workflowShareInvitations.id, { onDelete: "set null" }),
+  createdByUserId: uuid("created_by_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  workflowSharesOrgWorkflowIdx: index("workflow_shares_org_workflow_idx").on(table.organizationId, table.workflowId, table.createdAt),
+  workflowSharesUserIdx: index("workflow_shares_user_idx").on(table.userId, table.createdAt),
+  workflowSharesWorkflowUserRevokedUnique: uniqueIndex("workflow_shares_workflow_user_revoked_unique").on(
+    table.workflowId,
+    table.userId,
+    table.revokedAt
+  ),
+}));
+
 export const workflowRuns = pgTable("workflow_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -944,6 +992,50 @@ export const workflowsRelations = relations(workflows, ({ one, many }) => ({
   triggerSubscriptions: many(workflowTriggerSubscriptions),
   events: many(workflowRunEvents),
   approvalRequests: many(workflowApprovalRequests),
+  shareInvitations: many(workflowShareInvitations),
+  shares: many(workflowShares),
+}));
+
+export const workflowShareInvitationsRelations = relations(workflowShareInvitations, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [workflowShareInvitations.organizationId],
+    references: [organizations.id],
+  }),
+  workflow: one(workflows, {
+    fields: [workflowShareInvitations.workflowId],
+    references: [workflows.id],
+  }),
+  invitedByUser: one(users, {
+    fields: [workflowShareInvitations.invitedByUserId],
+    references: [users.id],
+  }),
+  acceptedByUser: one(users, {
+    fields: [workflowShareInvitations.acceptedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const workflowSharesRelations = relations(workflowShares, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [workflowShares.organizationId],
+    references: [organizations.id],
+  }),
+  workflow: one(workflows, {
+    fields: [workflowShares.workflowId],
+    references: [workflows.id],
+  }),
+  user: one(users, {
+    fields: [workflowShares.userId],
+    references: [users.id],
+  }),
+  sourceInvitation: one(workflowShareInvitations, {
+    fields: [workflowShares.sourceInvitationId],
+    references: [workflowShareInvitations.id],
+  }),
+  createdByUser: one(users, {
+    fields: [workflowShares.createdByUserId],
+    references: [users.id],
+  }),
 }));
 
 export const workflowRunsRelations = relations(workflowRuns, ({ one }) => ({
@@ -1263,6 +1355,8 @@ export type DbMembership = typeof memberships.$inferSelect;
 export type DbOrganizationInvitation = typeof organizationInvitations.$inferSelect;
 export type DbAuthSession = typeof authSessions.$inferSelect;
 export type DbWorkflow = typeof workflows.$inferSelect;
+export type DbWorkflowShareInvitation = typeof workflowShareInvitations.$inferSelect;
+export type DbWorkflowShare = typeof workflowShares.$inferSelect;
 export type DbWorkflowRun = typeof workflowRuns.$inferSelect;
 export type DbWorkflowTriggerSubscription = typeof workflowTriggerSubscriptions.$inferSelect;
 export type DbWorkflowRunEvent = typeof workflowRunEvents.$inferSelect;

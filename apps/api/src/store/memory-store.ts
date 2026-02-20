@@ -21,6 +21,8 @@ import type {
   WorkflowRecord,
   WorkflowRunEventRecord,
   WorkflowRunRecord,
+  WorkflowShareInvitationRecord,
+  WorkflowShareRecord,
   ToolsetBuilderSessionRecord,
   ToolsetBuilderTurnRecord,
   AgentSessionRecord,
@@ -62,6 +64,8 @@ export class MemoryAppStore implements AppStore {
   private sessions = new Map<string, SessionRecord>();
   private workflows = new Map<string, WorkflowRecord>();
   private workflowRuns = new Map<string, WorkflowRunRecord>();
+  private workflowShareInvitations = new Map<string, WorkflowShareInvitationRecord>();
+  private workflowShares = new Map<string, WorkflowShareRecord>();
   private workflowTriggerSubscriptions = new Map<string, WorkflowTriggerSubscriptionRecord>();
   private workflowWebhookSubscriptionByTokenHash = new Map<string, string>();
   private workflowApprovalRequests = new Map<string, WorkflowApprovalRequestRecord>();
@@ -527,6 +531,300 @@ export class MemoryAppStore implements AppStore {
       membershipId: membership.id,
       accepted: true,
     };
+  }
+
+  async createWorkflowShareInvitation(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    email: string;
+    ttlHours?: number;
+  }): Promise<WorkflowShareInvitationRecord> {
+    const workflow = this.workflows.get(input.workflowId);
+    if (!workflow || workflow.organizationId !== input.organizationId) {
+      throw new Error("WORKFLOW_NOT_FOUND");
+    }
+    const normalizedEmail = input.email.toLowerCase();
+    const existingPending = [...this.workflowShareInvitations.values()].some(
+      (invitation) =>
+        invitation.organizationId === input.organizationId &&
+        invitation.workflowId === input.workflowId &&
+        invitation.status === "pending" &&
+        invitation.email.toLowerCase() === normalizedEmail
+    );
+    if (existingPending) {
+      throw new Error("WORKFLOW_SHARE_INVITATION_ALREADY_PENDING");
+    }
+    const invitation: WorkflowShareInvitationRecord = {
+      id: crypto.randomUUID(),
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      email: normalizedEmail,
+      accessRole: "runner",
+      token: `${input.organizationId}.${input.workflowId}.${crypto.randomUUID()}`,
+      status: "pending",
+      invitedByUserId: input.actorUserId,
+      acceptedByUserId: null,
+      expiresAt: new Date(Date.now() + (input.ttlHours ?? 72) * 3600 * 1000).toISOString(),
+      acceptedAt: null,
+      createdAt: nowIso(),
+    };
+    this.workflowShareInvitations.set(invitation.id, invitation);
+    return invitation;
+  }
+
+  async listWorkflowShareInvitations(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    status?: "pending" | "accepted" | "revoked" | "expired";
+    limit?: number;
+  }): Promise<WorkflowShareInvitationRecord[]> {
+    const limit = Math.min(500, Math.max(1, input.limit ?? 200));
+    return [...this.workflowShareInvitations.values()]
+      .filter((item) => item.organizationId === input.organizationId && item.workflowId === input.workflowId)
+      .filter((item) => (input.status ? item.status === input.status : true))
+      .sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, limit);
+  }
+
+  async getWorkflowShareInvitationByToken(input: {
+    organizationId: string;
+    token: string;
+    actorUserId: string;
+  }): Promise<WorkflowShareInvitationRecord | null> {
+    for (const invitation of this.workflowShareInvitations.values()) {
+      if (invitation.organizationId === input.organizationId && invitation.token === input.token) {
+        return invitation;
+      }
+    }
+    return null;
+  }
+
+  async acceptWorkflowShareInvitation(input: {
+    organizationId: string;
+    token: string;
+    userId: string;
+    email: string;
+  }): Promise<{ invitation: WorkflowShareInvitationRecord; share: WorkflowShareRecord; workflow: WorkflowRecord }> {
+    const invitation = await this.getWorkflowShareInvitationByToken({
+      organizationId: input.organizationId,
+      token: input.token,
+      actorUserId: input.userId,
+    });
+    if (!invitation) {
+      throw new Error("WORKFLOW_SHARE_INVITATION_NOT_FOUND");
+    }
+    if (invitation.email.toLowerCase() !== input.email.toLowerCase()) {
+      throw new Error("WORKFLOW_SHARE_INVITATION_EMAIL_MISMATCH");
+    }
+    if (new Date(invitation.expiresAt).getTime() <= Date.now()) {
+      throw new Error("WORKFLOW_SHARE_INVITATION_EXPIRED");
+    }
+    if (invitation.status !== "pending") {
+      throw new Error("WORKFLOW_SHARE_INVITATION_NOT_PENDING");
+    }
+    const workflow = this.workflows.get(invitation.workflowId);
+    if (!workflow || workflow.organizationId !== invitation.organizationId) {
+      throw new Error("WORKFLOW_NOT_FOUND");
+    }
+
+    const acceptedInvitation: WorkflowShareInvitationRecord = {
+      ...invitation,
+      status: "accepted",
+      acceptedByUserId: input.userId,
+      acceptedAt: nowIso(),
+    };
+    this.workflowShareInvitations.set(invitation.id, acceptedInvitation);
+
+    for (const [id, share] of this.workflowShares.entries()) {
+      if (
+        share.organizationId === invitation.organizationId &&
+        share.workflowId === invitation.workflowId &&
+        share.userId === input.userId &&
+        !share.revokedAt
+      ) {
+        this.workflowShares.set(id, { ...share, revokedAt: nowIso(), updatedAt: nowIso() });
+      }
+    }
+
+    const share: WorkflowShareRecord = {
+      id: crypto.randomUUID(),
+      organizationId: invitation.organizationId,
+      workflowId: invitation.workflowId,
+      userId: input.userId,
+      accessRole: "runner",
+      sourceInvitationId: invitation.id,
+      createdByUserId: input.userId,
+      revokedAt: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.workflowShares.set(share.id, share);
+
+    return {
+      invitation: acceptedInvitation,
+      share,
+      workflow,
+    };
+  }
+
+  async listWorkflowShares(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    includeRevoked?: boolean;
+    limit?: number;
+  }): Promise<WorkflowShareRecord[]> {
+    const limit = Math.min(500, Math.max(1, input.limit ?? 200));
+    return [...this.workflowShares.values()]
+      .filter((item) => item.organizationId === input.organizationId && item.workflowId === input.workflowId)
+      .filter((item) => (input.includeRevoked ? true : !item.revokedAt))
+      .sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, limit);
+  }
+
+  async revokeWorkflowShare(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    shareId: string;
+  }): Promise<WorkflowShareRecord | null> {
+    const existing = this.workflowShares.get(input.shareId);
+    if (!existing || existing.organizationId !== input.organizationId || existing.workflowId !== input.workflowId || existing.revokedAt) {
+      return null;
+    }
+    const updated: WorkflowShareRecord = {
+      ...existing,
+      revokedAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    this.workflowShares.set(updated.id, updated);
+    return updated;
+  }
+
+  async getSharedWorkflowByShareId(input: {
+    shareId: string;
+    userId: string;
+  }): Promise<{ share: WorkflowShareRecord; workflow: WorkflowRecord } | null> {
+    const share = this.workflowShares.get(input.shareId);
+    if (!share || share.userId !== input.userId || share.revokedAt) {
+      return null;
+    }
+    const workflow = this.workflows.get(share.workflowId);
+    if (!workflow || workflow.organizationId !== share.organizationId) {
+      return null;
+    }
+    return { share, workflow };
+  }
+
+  async listWorkflowRunsByShare(input: {
+    shareId: string;
+    userId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ runs: WorkflowRunRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const shared = await this.getSharedWorkflowByShareId({ shareId: input.shareId, userId: input.userId });
+    if (!shared) {
+      return { runs: [], nextCursor: null };
+    }
+    const limit = Math.min(200, Math.max(1, input.limit));
+    const cursorCreatedAt = input.cursor?.createdAt ? new Date(input.cursor.createdAt).getTime() : null;
+    const cursorId = input.cursor?.id ?? null;
+    const runs = [...this.workflowRuns.values()]
+      .filter((run) => run.organizationId === shared.workflow.organizationId && run.workflowId === shared.workflow.id)
+      .filter((run) => run.requestedByUserId === input.userId)
+      .filter((run) => {
+        if (!cursorCreatedAt || !cursorId) {
+          return true;
+        }
+        const createdAt = new Date(run.createdAt).getTime();
+        return createdAt < cursorCreatedAt || (createdAt === cursorCreatedAt && run.id < cursorId);
+      })
+      .sort((a, b) => {
+        const diff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return b.id.localeCompare(a.id);
+      })
+      .slice(0, limit);
+    const last = runs.length > 0 ? runs[runs.length - 1] : null;
+    return { runs, nextCursor: last ? { createdAt: last.createdAt, id: last.id } : null };
+  }
+
+  async getWorkflowRunByIdForShare(input: {
+    shareId: string;
+    userId: string;
+    runId: string;
+  }): Promise<WorkflowRunRecord | null> {
+    const shared = await this.getSharedWorkflowByShareId({ shareId: input.shareId, userId: input.userId });
+    if (!shared) {
+      return null;
+    }
+    const run = this.workflowRuns.get(input.runId);
+    if (!run) {
+      return null;
+    }
+    if (
+      run.organizationId !== shared.workflow.organizationId ||
+      run.workflowId !== shared.workflow.id ||
+      run.requestedByUserId !== input.userId
+    ) {
+      return null;
+    }
+    return run;
+  }
+
+  async listWorkflowRunEventsByShare(input: {
+    shareId: string;
+    userId: string;
+    runId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ events: WorkflowRunEventRecord[]; nextCursor: { createdAt: string; id: string } | null }> {
+    const run = await this.getWorkflowRunByIdForShare({
+      shareId: input.shareId,
+      userId: input.userId,
+      runId: input.runId,
+    });
+    if (!run) {
+      return { events: [], nextCursor: null };
+    }
+    const limit = Math.min(500, Math.max(1, input.limit));
+    const cursorCreatedAt = input.cursor?.createdAt ? new Date(input.cursor.createdAt).getTime() : null;
+    const cursorId = input.cursor?.id ?? null;
+    const events = [...this.workflowRunEvents.values()]
+      .filter((event) => event.organizationId === run.organizationId && event.workflowId === run.workflowId && event.runId === run.id)
+      .filter((event) => {
+        if (!cursorCreatedAt || !cursorId) {
+          return true;
+        }
+        const createdAt = new Date(event.createdAt).getTime();
+        return createdAt > cursorCreatedAt || (createdAt === cursorCreatedAt && event.id > cursorId);
+      })
+      .sort((a, b) => {
+        const diff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        if (diff !== 0) {
+          return diff;
+        }
+        return a.id.localeCompare(b.id);
+      })
+      .slice(0, limit);
+    const last = events.length > 0 ? events[events.length - 1] : null;
+    return { events, nextCursor: last ? { createdAt: last.createdAt, id: last.id } : null };
   }
 
   async updateMembershipRole(input: {

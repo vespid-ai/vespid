@@ -565,6 +565,78 @@
         "open": "打开",
         "replay": "回放"
       }
+    },
+    "graphEditor": {
+      "showPanel": "展开右栏",
+      "hidePanel": "收起右栏",
+      "autoLayout": "最佳分布",
+      "autoLayoutSuccess": "已完成最佳分布并适配视图。",
+      "enterFullscreen": "进入全屏",
+      "exitFullscreen": "退出全屏",
+      "fullscreenUnsupported": "当前浏览器不支持全屏模式。",
+      "fullscreenFailed": "切换全屏失败，请重试。"
+    },
+    "share": {
+      "button": "分享流程",
+      "title": "分享流程访问",
+      "subtitle": "按邮箱邀请对 \"{workflow}\" 的 runner 访问权限。",
+      "createTitle": "创建邀请",
+      "createDescription": "创建链接后手动发送给目标邮箱。",
+      "emailLabel": "邮箱",
+      "emailRequired": "邮箱不能为空。",
+      "createAction": "创建邀请链接",
+      "latestInvite": "最新邀请链接",
+      "copyInvite": "复制链接",
+      "copied": "邀请链接已复制。",
+      "inviteCreated": "邀请已创建。",
+      "pendingExists": "该邮箱已有待接受邀请。",
+      "activeAccessTitle": "已授权访问",
+      "activeAccessDescription": "被分享用户可运行该流程，但不可编辑。",
+      "noShares": "暂无已授权用户。",
+      "revoke": "撤销",
+      "revoked": "已撤销共享权限。",
+      "pendingInvitesTitle": "待接受邀请",
+      "pendingInvitesDescription": "邀请被接受后会从这里消失。",
+      "noPendingInvites": "暂无待接受邀请。",
+      "accept": {
+        "title": "接受流程分享",
+        "subtitle": "请用被邀请邮箱登录后接受访问权限。",
+        "token": "令牌",
+        "cardTitle": "流程分享邀请",
+        "missingToken": "（缺少令牌）",
+        "loginHint": "请先登录，再接受该邀请。",
+        "acceptAction": "接受邀请",
+        "goAuth": "去登录",
+        "openSharedWorkflow": "打开共享流程",
+        "errors": {
+          "emailMismatch": "当前登录邮箱与邀请邮箱不一致。",
+          "expired": "该邀请已过期。",
+          "notPending": "该邀请已不是待接受状态。",
+          "notFound": "未找到该邀请。",
+          "loginRequired": "请先登录。"
+        }
+      },
+      "shared": {
+        "title": "共享流程",
+        "subtitle": "仅 runner 访问。你只能运行并查看自己触发的运行记录。",
+        "runnerRole": "runner",
+        "runTitle": "运行流程",
+        "runDescription": "填写 JSON 输入并触发该共享流程运行。",
+        "runInputLabel": "运行输入（JSON）",
+        "runAction": "运行",
+        "runsTitle": "我的运行",
+        "runsDescription": "这里只展示你自己触发的运行。",
+        "noRuns": "暂无运行记录。",
+        "eventsTitle": "运行事件",
+        "eventsDescription": "仅展示当前选中运行的事件。",
+        "selectRun": "请选择一个运行查看事件。",
+        "noEvents": "暂无事件。",
+        "runCreated": "运行已入队。",
+        "invalidShare": "缺少共享流程 ID。",
+        "notPublished": "该流程尚未发布。",
+        "invalidJson": "运行输入必须是合法 JSON。",
+        "notFound": "未找到共享流程。"
+      }
     }
   },
   "runs": {
@@ -599,7 +671,17 @@
     "quickActions": "快捷操作",
     "healthTitle": "健康状态",
     "healthEventsError": "加载事件失败。",
-    "healthRunError": "加载运行失败。"
+    "healthRunError": "加载运行失败。",
+    "pendingRemote": {
+      "title": "等待工作节点返回结果",
+      "badge": "等待远端结果",
+      "description": "该节点已分发到工作节点执行，正在等待回调。",
+      "node": "节点：{nodeId}",
+      "kind": "类型：{kind}",
+      "elapsed": "已等待：{duration}",
+      "request": "请求：{requestId}",
+      "hint": "等待过久通常与端点延迟、冷启动或执行器主机网络可达性有关。"
+    }
   },
   "agents": {
     "title": "工作节点",
@@ -736,6 +818,20 @@
       "reconnect": "重连",
       "notConnected": "未连接到网关。",
       "error": "WebSocket 错误。"
+    },
+    "errors": {
+      "timeoutToast": "模型请求超时，请检查端点可达性和超时设置。",
+      "timeoutTitle": "模型请求超时",
+      "timeoutDescription": "{engine} 在配置的执行时间内未返回结果。",
+      "timeoutHint": "如果持续超时，请确认执行器主机可访问 Base URL，并按需提高超时阈值。",
+      "timeoutValue": "执行超时：{seconds} 秒",
+      "baseUrlLabel": "运行时 Base URL：",
+      "baseUrlDefault": "官方默认端点",
+      "engineLabel": "引擎：{engine}",
+      "rawMessage": "原始错误：{message}",
+      "genericTitle": "执行器请求失败",
+      "genericDescription": "该轮对话在执行器运行时发生错误。",
+      "genericHint": "请查看原始错误详情与工作节点日志进行排查。"
     },
     "chat": {
       "title": "对话",
@@ -1433,6 +1529,10 @@
       "clearModel": "清空",
       "inheritModel": "（继承）",
       "oauthRequired": "所选提供方需要已连接账号。"
+    },
+    "secret": {
+      "linkedDefaultName": "默认（来自模型连接）",
+      "linkedExecutorOauthHint": "使用来自模型连接的执行器 OAuth。"
     }
   }
 }

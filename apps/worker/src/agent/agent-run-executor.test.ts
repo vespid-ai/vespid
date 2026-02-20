@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAgentRunExecutor } from "./agent-run-executor.js";
 
 describe("agent.run executor", () => {
-  it("always blocks agent.run to gateway brain", async () => {
+  it("blocks agent.run to gateway brain when no pending remote result exists", async () => {
     const loadSecretValue = vi.fn(async () => "sk-secret");
     const executor = createAgentRunExecutor({
       getGithubApiBaseUrl: () => "https://api.github.com",
@@ -43,6 +43,88 @@ describe("agent.run executor", () => {
     expect((result.block as any)?.executorSelector?.tag).toBe("west");
     expect((result.block as any)?.executorSelector?.pool).toBe("byon");
     expect(loadSecretValue).not.toHaveBeenCalled();
+  });
+
+  it("resumes from pending remote success result without re-dispatching", async () => {
+    const executor = createAgentRunExecutor({
+      getGithubApiBaseUrl: () => "https://api.github.com",
+      loadSecretValue: vi.fn(async () => "sk-secret"),
+      fetchImpl: vi.fn() as any,
+    });
+
+    const node = {
+      id: "n1",
+      type: "agent.run",
+      config: {
+        engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+        execution: { mode: "gateway" },
+        prompt: { instructions: "Do the thing." },
+        tools: { allow: [], execution: "cloud" },
+        limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 200_000 },
+        output: { mode: "text" },
+      },
+    };
+
+    const result = await executor.execute({
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      runId: "00000000-0000-0000-0000-000000000001",
+      attemptCount: 1,
+      requestedByUserId: "00000000-0000-0000-0000-000000000002",
+      nodeId: "n1",
+      nodeType: "agent.run",
+      node,
+      runInput: {},
+      steps: [],
+      runtime: { pendingRemoteResult: { requestId: "req-1", result: { status: "succeeded", output: { text: "ok" } } } },
+      pendingRemoteResult: { requestId: "req-1", result: { status: "succeeded", output: { text: "ok" } } },
+      organizationSettings: {},
+    });
+
+    expect(result.status).toBe("succeeded");
+    expect((result as any).output).toEqual({ text: "ok" });
+    expect((result as any).runtime?.pendingRemoteResult).toBeNull();
+  });
+
+  it("resumes from pending remote failure result", async () => {
+    const executor = createAgentRunExecutor({
+      getGithubApiBaseUrl: () => "https://api.github.com",
+      loadSecretValue: vi.fn(async () => "sk-secret"),
+      fetchImpl: vi.fn() as any,
+    });
+
+    const node = {
+      id: "n1",
+      type: "agent.run",
+      config: {
+        engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+        execution: { mode: "gateway" },
+        prompt: { instructions: "Do the thing." },
+        tools: { allow: [], execution: "cloud" },
+        limits: { maxTurns: 2, maxToolCalls: 1, timeoutMs: 10_000, maxOutputChars: 10_000, maxRuntimeChars: 200_000 },
+        output: { mode: "text" },
+      },
+    };
+
+    const result = await executor.execute({
+      organizationId: "org-1",
+      workflowId: "wf-1",
+      runId: "00000000-0000-0000-0000-000000000001",
+      attemptCount: 1,
+      requestedByUserId: "00000000-0000-0000-0000-000000000002",
+      nodeId: "n1",
+      nodeType: "agent.run",
+      node,
+      runInput: {},
+      steps: [],
+      runtime: { pendingRemoteResult: { requestId: "req-1", result: { status: "failed", error: "UPSTREAM_FAIL" } } },
+      pendingRemoteResult: { requestId: "req-1", result: { status: "failed", error: "UPSTREAM_FAIL" } },
+      organizationSettings: {},
+    });
+
+    expect(result.status).toBe("failed");
+    expect((result as any).error).toBe("UPSTREAM_FAIL");
+    expect((result as any).runtime?.pendingRemoteResult).toBeNull();
   });
 
   it("passes only secret references (not decrypted secret values)", async () => {

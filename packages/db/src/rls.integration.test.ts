@@ -296,4 +296,118 @@ describeIf("RLS integration", () => {
       client.release();
     }
   });
+
+  it("allows shared workflow read while restricting runs/events to shared user's own executions", async () => {
+    if (!databaseUrl) {
+      return;
+    }
+
+    const owner = await appPool.query<{ id: string }>(
+      "insert into users(email, password_hash) values ($1, 'x') returning id",
+      [`rls-share-owner-${Date.now()}@example.com`]
+    );
+    const sharedUser = await appPool.query<{ id: string }>(
+      "insert into users(email, password_hash) values ($1, 'x') returning id",
+      [`rls-share-guest-${Date.now()}@example.com`]
+    );
+    const outsider = await appPool.query<{ id: string }>(
+      "insert into users(email, password_hash) values ($1, 'x') returning id",
+      [`rls-share-outsider-${Date.now()}@example.com`]
+    );
+
+    const ownerId = owner.rows.at(0)?.id;
+    const sharedUserId = sharedUser.rows.at(0)?.id;
+    const outsiderId = outsider.rows.at(0)?.id;
+    if (!ownerId || !sharedUserId || !outsiderId) {
+      throw new Error("Failed to setup users");
+    }
+
+    const orgId = crypto.randomUUID();
+    const workflowId = crypto.randomUUID();
+    const ownerRunId = crypto.randomUUID();
+    const sharedRunId = crypto.randomUUID();
+
+    const setup = await appPool.connect();
+    try {
+      await setup.query("begin");
+      await setup.query(
+        "select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)",
+        [ownerId, orgId]
+      );
+      await setup.query("insert into organizations(id, name, slug) values ($1, 'Share Org', $2)", [
+        orgId,
+        `share-org-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      ]);
+      await setup.query("insert into memberships(organization_id, user_id, role_key) values ($1, $2, 'owner')", [orgId, ownerId]);
+      await setup.query(
+        "insert into workflows(id, organization_id, name, status, version, dsl, created_by_user_id) values ($1, $2, 'Shared Workflow', 'published', 1, $3::jsonb, $4)",
+        [
+          workflowId,
+          orgId,
+          JSON.stringify({
+            version: "v2",
+            trigger: { type: "trigger.manual" },
+            nodes: [{ id: "n1", type: "agent.execute" }],
+          }),
+          ownerId,
+        ]
+      );
+      await setup.query(
+        "insert into workflow_shares(id, organization_id, workflow_id, user_id, access_role, created_by_user_id) values ($1, $2, $3, $4, 'runner', $5)",
+        [crypto.randomUUID(), orgId, workflowId, sharedUserId, ownerId]
+      );
+      await setup.query(
+        "insert into workflow_runs(id, organization_id, workflow_id, trigger_type, status, requested_by_user_id, input) values ($1, $2, $3, 'manual', 'queued', $4, $5::jsonb)",
+        [ownerRunId, orgId, workflowId, ownerId, JSON.stringify({ owner: true })]
+      );
+      await setup.query(
+        "insert into workflow_runs(id, organization_id, workflow_id, trigger_type, status, requested_by_user_id, input) values ($1, $2, $3, 'manual', 'queued', $4, $5::jsonb)",
+        [sharedRunId, orgId, workflowId, sharedUserId, JSON.stringify({ guest: true })]
+      );
+      await setup.query(
+        "insert into workflow_run_events(organization_id, workflow_id, run_id, attempt_count, event_type, level, message) values ($1, $2, $3, 1, 'run_started', 'info', 'owner-run')",
+        [orgId, workflowId, ownerRunId]
+      );
+      await setup.query(
+        "insert into workflow_run_events(organization_id, workflow_id, run_id, attempt_count, event_type, level, message) values ($1, $2, $3, 1, 'run_started', 'info', 'shared-run')",
+        [orgId, workflowId, sharedRunId]
+      );
+      await setup.query("commit");
+    } catch (error) {
+      await setup.query("rollback");
+      throw error;
+    } finally {
+      setup.release();
+    }
+
+    const client = await appPool.connect();
+    try {
+      await client.query("begin");
+      await client.query(
+        "select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)",
+        [sharedUserId, ""]
+      );
+      const sharedWorkflowVisible = await client.query("select id from workflows where id = $1", [workflowId]);
+      expect(sharedWorkflowVisible.rowCount).toBe(1);
+
+      const sharedRuns = await client.query("select id from workflow_runs where workflow_id = $1 order by id asc", [workflowId]);
+      expect(sharedRuns.rowCount).toBe(1);
+      expect(sharedRuns.rows[0]?.id).toBe(sharedRunId);
+
+      const ownerEventsHidden = await client.query("select id from workflow_run_events where run_id = $1", [ownerRunId]);
+      expect(ownerEventsHidden.rowCount).toBe(0);
+      const sharedEventsVisible = await client.query("select id from workflow_run_events where run_id = $1", [sharedRunId]);
+      expect(sharedEventsVisible.rowCount).toBe(1);
+
+      await client.query("select set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true)", [
+        outsiderId,
+        "",
+      ]);
+      const outsiderWorkflow = await client.query("select id from workflows where id = $1", [workflowId]);
+      expect(outsiderWorkflow.rowCount).toBe(0);
+      await client.query("rollback");
+    } finally {
+      client.release();
+    }
+  });
 });

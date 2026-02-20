@@ -2297,6 +2297,244 @@ describe("api hardening foundation", () => {
     expect(mismatch.statusCode).toBe(403);
   });
 
+  it("supports workflow share invitations and shared runner access boundaries", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `wf-share-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const memberEmail = `wf-share-member-${Date.now()}@example.com`;
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: memberEmail,
+        password: "Password123",
+      },
+    });
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+
+    const sharedEmail = `wf-share-target-${Date.now()}@example.com`;
+    const wrongEmail = `wf-share-wrong-${Date.now()}@example.com`;
+    const wrongSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: wrongEmail,
+        password: "Password123",
+      },
+    });
+    const wrongToken = bearerToken(wrongSignup.json() as { session: { token: string } });
+
+    const sharedSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: sharedEmail,
+        password: "Password123",
+      },
+    });
+    const sharedToken = bearerToken(sharedSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: {
+        name: "Workflow Share Org",
+        slug: `workflow-share-org-${Date.now()}`,
+      },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const inviteMember = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: memberEmail,
+        roleKey: "member",
+      },
+    });
+    expect(inviteMember.statusCode).toBe(201);
+    const memberInviteToken = (inviteMember.json() as { invitation: { token: string } }).invitation.token;
+
+    const acceptMember = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${memberInviteToken}/accept`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+      },
+    });
+    expect(acceptMember.statusCode).toBe(200);
+
+    const createWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        name: "Workflow Share Target",
+        dsl: {
+          version: "v2",
+          trigger: { type: "trigger.manual" },
+          nodes: [{ id: "node1", type: "agent.execute" }],
+        },
+      },
+    });
+    expect(createWorkflow.statusCode).toBe(201);
+    const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+    const publishWorkflow = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(publishWorkflow.statusCode).toBe(200);
+
+    const memberCreateShareDenied = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/shares/invitations`,
+      headers: {
+        authorization: `Bearer ${memberToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: sharedEmail,
+      },
+    });
+    expect(memberCreateShareDenied.statusCode).toBe(403);
+
+    const createShareInvitation = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/shares/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: sharedEmail,
+      },
+    });
+    expect(createShareInvitation.statusCode).toBe(201);
+    const shareInvitationToken = (createShareInvitation.json() as { invitation: { token: string } }).invitation.token;
+
+    const duplicateShareInvitation = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/shares/invitations`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        email: sharedEmail,
+      },
+    });
+    expect(duplicateShareInvitation.statusCode).toBe(409);
+    expect((duplicateShareInvitation.json() as { code: string }).code).toBe("WORKFLOW_SHARE_INVITATION_ALREADY_PENDING");
+
+    const wrongAccept = await server.inject({
+      method: "POST",
+      url: `/v1/workflow-shares/invitations/${shareInvitationToken}/accept`,
+      headers: {
+        authorization: `Bearer ${wrongToken}`,
+      },
+    });
+    expect(wrongAccept.statusCode).toBe(403);
+
+    const acceptShare = await server.inject({
+      method: "POST",
+      url: `/v1/workflow-shares/invitations/${shareInvitationToken}/accept`,
+      headers: {
+        authorization: `Bearer ${sharedToken}`,
+      },
+    });
+    expect(acceptShare.statusCode).toBe(200);
+    const acceptedBody = acceptShare.json() as { share: { id: string } };
+    const shareId = acceptedBody.share.id;
+
+    const getSharedWorkflow = await server.inject({
+      method: "GET",
+      url: `/v1/workflow-shares/${shareId}`,
+      headers: {
+        authorization: `Bearer ${sharedToken}`,
+      },
+    });
+    expect(getSharedWorkflow.statusCode).toBe(200);
+
+    const ownerRun = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+      payload: {
+        input: { source: "owner" },
+      },
+    });
+    expect(ownerRun.statusCode).toBe(201);
+
+    const sharedRun = await server.inject({
+      method: "POST",
+      url: `/v1/workflow-shares/${shareId}/runs`,
+      headers: {
+        authorization: `Bearer ${sharedToken}`,
+      },
+      payload: {
+        input: { source: "shared" },
+      },
+    });
+    expect(sharedRun.statusCode).toBe(201);
+    const sharedRunId = (sharedRun.json() as { run: { id: string } }).run.id;
+    expect(queueProducer.enqueued.some((item) => item.runId === sharedRunId)).toBe(true);
+
+    const sharedRunsList = await server.inject({
+      method: "GET",
+      url: `/v1/workflow-shares/${shareId}/runs`,
+      headers: {
+        authorization: `Bearer ${sharedToken}`,
+      },
+    });
+    expect(sharedRunsList.statusCode).toBe(200);
+    const sharedRunsBody = sharedRunsList.json() as { runs: Array<{ id: string }> };
+    expect(sharedRunsBody.runs.length).toBe(1);
+    expect(sharedRunsBody.runs[0]?.id).toBe(sharedRunId);
+
+    const revokeShare = await server.inject({
+      method: "DELETE",
+      url: `/v1/orgs/${orgId}/workflows/${workflowId}/shares/${shareId}`,
+      headers: {
+        authorization: `Bearer ${ownerToken}`,
+        "x-org-id": orgId,
+      },
+    });
+    expect(revokeShare.statusCode).toBe(200);
+
+    const sharedAfterRevoke = await server.inject({
+      method: "GET",
+      url: `/v1/workflow-shares/${shareId}`,
+      headers: {
+        authorization: `Bearer ${sharedToken}`,
+      },
+    });
+    expect(sharedAfterRevoke.statusCode).toBe(404);
+  });
+
   it("manages connector secrets (metadata only) and enforces admin-only access", async () => {
     const priorKek = process.env.SECRETS_KEK_BASE64;
     const priorKekId = process.env.SECRETS_KEK_ID;

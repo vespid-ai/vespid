@@ -5,7 +5,7 @@ import path from "node:path";
 import WebSocket from "ws";
 import { z } from "zod";
 import { getCommunityConnectorAction, type ConnectorId } from "@vespid/connectors";
-import { createMemoryManager } from "@vespid/agent-runtime";
+import { createMemoryManager, runLlmInference } from "@vespid/agent-runtime";
 import type {
   AgentEngineId,
   GatewayInvokeToolV2,
@@ -643,11 +643,39 @@ async function executeEnginePrompt(input: {
   | { ok: true; content: string; raw: { stdout: string; stderr: string } }
   | { ok: false; code: string; message: string; raw?: { stdout: string; stderr: string } }
 > {
+  const apiKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
+  const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+
+  // API-key mode must work without requiring executor OAuth or local CLI auth.
+  if (apiKey.length > 0) {
+    const provider = input.engineId === "gateway.claude.v2" ? "anthropic" : "openai";
+    const infer = await runLlmInference({
+      provider,
+      model: input.model,
+      messages: [{ role: "user", content: input.prompt }],
+      timeoutMs: input.timeoutMs,
+      auth: { kind: "api_key", apiKey },
+      ...(baseUrl.length > 0 ? { apiBaseUrl: baseUrl } : {}),
+    });
+    if (infer.ok) {
+      return {
+        ok: true,
+        content: infer.content,
+        raw: { stdout: infer.content, stderr: "" },
+      };
+    }
+    return {
+      ok: false,
+      code: REMOTE_EXEC_ERROR.NodeExecutionFailed,
+      message: infer.error,
+    };
+  }
+
   const command = resolveEngineCommand(input.engineId);
   const env = buildEngineCredentialEnv({
     engineId: input.engineId,
-    apiKey: input.apiKey ?? null,
-    baseUrl: input.baseUrl ?? null,
+    apiKey,
+    baseUrl,
   });
 
   const attempts: string[][] =

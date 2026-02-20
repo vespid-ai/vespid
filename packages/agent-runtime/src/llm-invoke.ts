@@ -16,6 +16,7 @@ export type LlmInvokeInput = {
   messages: OpenAiChatMessage[];
   timeoutMs: number;
   maxOutputChars?: number;
+  apiBaseUrl?: string;
   auth: LlmInvokeAuth;
   fetchImpl?: typeof fetch;
 };
@@ -37,6 +38,7 @@ export async function runLlmInference(input: LlmInvokeInput): Promise<LlmInvokeR
       messages: input.messages as any,
       timeoutMs: input.timeoutMs,
       ...(typeof input.maxOutputChars === "number" ? { maxOutputChars: input.maxOutputChars } : {}),
+      ...(typeof input.apiBaseUrl === "string" && input.apiBaseUrl.trim().length > 0 ? { apiBaseUrl: input.apiBaseUrl } : {}),
       ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     });
   }
@@ -52,6 +54,7 @@ export async function runLlmInference(input: LlmInvokeInput): Promise<LlmInvokeR
       messages: input.messages,
       timeoutMs: input.timeoutMs,
       ...(typeof input.maxOutputChars === "number" ? { maxOutputChars: input.maxOutputChars } : {}),
+      ...(typeof input.apiBaseUrl === "string" && input.apiBaseUrl.trim().length > 0 ? { apiBaseUrl: input.apiBaseUrl } : {}),
       ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     });
   }
@@ -63,6 +66,7 @@ export async function runLlmInference(input: LlmInvokeInput): Promise<LlmInvokeR
       messages: input.messages as any,
       timeoutMs: input.timeoutMs,
       ...(typeof input.maxOutputChars === "number" ? { maxOutputChars: input.maxOutputChars } : {}),
+      ...(typeof input.apiBaseUrl === "string" && input.apiBaseUrl.trim().length > 0 ? { apiBaseUrl: input.apiBaseUrl } : {}),
       ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     });
   }
@@ -73,6 +77,7 @@ export async function runLlmInference(input: LlmInvokeInput): Promise<LlmInvokeR
     messages: input.messages,
     timeoutMs: input.timeoutMs,
     ...(typeof input.maxOutputChars === "number" ? { maxOutputChars: input.maxOutputChars } : {}),
+    ...(typeof input.apiBaseUrl === "string" && input.apiBaseUrl.trim().length > 0 ? { apiBaseUrl: input.apiBaseUrl } : {}),
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
   });
 }

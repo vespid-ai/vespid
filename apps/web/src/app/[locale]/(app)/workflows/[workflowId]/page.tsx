@@ -21,7 +21,9 @@ import { Textarea } from "../../../../../components/ui/textarea";
 import { WorkflowGraphEditor } from "../../../../../components/app/workflow-graph-editor";
 import { AdvancedSection } from "../../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../../components/app/auth-required-state";
+import { WorkflowShareDialog } from "../../../../../components/app/workflows/workflow-share-dialog";
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
+import { useMe } from "../../../../../lib/hooks/use-me";
 import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
 import {
   type WorkflowRun,
@@ -74,6 +76,7 @@ export default function WorkflowDetailPage() {
   const orgId = useActiveOrgId() ?? null;
   const authSession = useAuthSession();
   const scopedOrgId = authSession.data?.session ? orgId : null;
+  const meQuery = useMe(Boolean(authSession.data?.session));
 
   const workflowQuery = useWorkflow(scopedOrgId, workflowId);
   const runsQuery = useRuns(scopedOrgId, workflowId);
@@ -85,6 +88,7 @@ export default function WorkflowDetailPage() {
   const run = useRunWorkflow(scopedOrgId, workflowId);
 
   const [runInput, setRunInput] = useState("{\"issueKey\":\"ABC-123\"}");
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailSection, setDetailSection] = useState<"summary" | "history">("summary");
@@ -103,6 +107,8 @@ export default function WorkflowDetailPage() {
   const revisionCount = revisions.length;
 
   const loadedWorkflow = workflowQuery.data?.workflow ?? null;
+  const roleKey = meQuery.data?.orgs?.find((org) => org.id === scopedOrgId)?.roleKey ?? null;
+  const canManageWorkflowShares = roleKey === "owner" || roleKey === "admin";
   const dslInfo = useMemo(() => getDslInfo(loadedWorkflow?.dsl), [loadedWorkflow?.dsl]);
   const createdAtShort = String(loadedWorkflow?.createdAt ?? "").slice(0, 19);
   const updatedAtShort = String(loadedWorkflow?.updatedAt ?? "").slice(0, 19);
@@ -379,6 +385,11 @@ export default function WorkflowDetailPage() {
               {publish.isPending ? t("common.loading") : t("workflows.detail.publish")}
             </Button>
           )}
+          {canManageWorkflowShares ? (
+            <Button variant="outline" onClick={() => setShareDialogOpen(true)}>
+              {t("workflows.share.button")}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -633,6 +644,15 @@ export default function WorkflowDetailPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      <WorkflowShareDialog
+        open={shareDialogOpen}
+        onOpenChange={setShareDialogOpen}
+        locale={locale}
+        orgId={scopedOrgId}
+        workflowId={workflowId}
+        workflowName={loadedWorkflow?.name ?? workflowId}
+      />
     </div>
   );
 }

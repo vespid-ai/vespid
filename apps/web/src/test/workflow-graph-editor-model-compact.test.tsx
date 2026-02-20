@@ -103,6 +103,9 @@ describe("WorkflowGraphEditor model compact config", () => {
       </NextIntlClientProvider>
     );
 
+    expect(screen.getByTestId("workflow-graph-right-panel")).toHaveAttribute("data-state", "collapsed");
+    await user.click(screen.getByTestId("workflow-graph-right-panel-toggle"));
+    expect(screen.getByTestId("workflow-graph-right-panel")).toHaveAttribute("data-state", "expanded");
     await user.click(screen.getByRole("button", { name: "Show" }));
     expect(screen.getByTestId("workflow-graph-bulk-agent-llm-compact")).toBeInTheDocument();
 

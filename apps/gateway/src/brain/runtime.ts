@@ -12,6 +12,7 @@ import {
   getExecutionWorkspaceByOwner,
   getOrganizationById,
   tryLockExecutionWorkspace,
+  releaseExecutionWorkspaceLock,
   commitExecutionWorkspaceVersion,
   withTenantContext,
 } from "@vespid/db";
@@ -404,6 +405,8 @@ export async function startGatewayBrainRuntime(input?: {
 
   const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
   const sessionOpenTimeoutMs = Math.max(5_000, envNumber("GATEWAY_SESSION_OPEN_TIMEOUT_MS", 20_000));
+  // Allow small transport slack so gateway doesn't timeout right before executor returns.
+  const executorReplyGraceMs = Math.max(500, envNumber("GATEWAY_EXECUTOR_REPLY_GRACE_MS", 5_000));
   const brainId = input?.brainId ?? process.env.GATEWAY_BRAIN_ID ?? `brain-${crypto.randomBytes(6).toString("hex")}`;
 
   const orgMaxInFlightDefault = Math.max(1, envNumber("GATEWAY_ORG_MAX_INFLIGHT", 50));
@@ -474,6 +477,7 @@ export async function startGatewayBrainRuntime(input?: {
     timeoutMs: number;
     networkMode: "none" | "enabled";
     workspaceOwner: { ownerType: "session" | "workflow_run"; ownerId: string };
+    requestId?: string;
   }): Promise<{ status: "succeeded" | "failed"; output?: unknown; error?: string; workspace?: any }>{
     const orgMaxInFlight = await getOrgMaxInFlight(inputTool.organizationId);
     const selected = await selectExecutorForTool(redis, {
@@ -497,6 +501,8 @@ export async function startGatewayBrainRuntime(input?: {
       return { status: "failed", error: "NO_EXECUTOR_AVAILABLE" };
     }
     const selectedExecutor = selected.selected;
+    let workspaceId: string | null = null;
+    let workspaceLockToken: string | null = null;
 
     try {
       const workspaceRow =
@@ -517,6 +523,7 @@ export async function startGatewayBrainRuntime(input?: {
             currentObjectKey: "",
           })
         ));
+      workspaceId = workspaceRow.id;
 
       const lockToken = crypto.randomBytes(16).toString("hex");
       const locked = await withTenantContext(pool, { organizationId: inputTool.organizationId }, async (db) =>
@@ -530,6 +537,7 @@ export async function startGatewayBrainRuntime(input?: {
       if (!locked) {
         return { status: "failed", error: "WORKSPACE_LOCKED" };
       }
+      workspaceLockToken = lockToken;
 
       const expectedVersion = workspaceRow.currentVersion ?? 0;
       const currentObjectKey = workspaceRow.currentObjectKey ?? "";
@@ -558,7 +566,7 @@ export async function startGatewayBrainRuntime(input?: {
         expiresInSec: workspaceUrlExpiresInSec,
       });
 
-      const toolRequestId = `${inputTool.workspaceOwner.ownerId}:${crypto.randomBytes(8).toString("hex")}`;
+      const toolRequestId = inputTool.requestId && inputTool.requestId.trim().length > 0 ? inputTool.requestId : `${inputTool.workspaceOwner.ownerId}:${crypto.randomBytes(8).toString("hex")}`;
       const invoke: GatewayInvokeToolV2 = {
         type: "invoke_tool_v2",
         requestId: toolRequestId,
@@ -591,7 +599,7 @@ export async function startGatewayBrainRuntime(input?: {
 
       await xaddJson(redis, streamToEdge(selectedExecutor.edgeId), { type: "executor_invoke", executorId: selectedExecutor.executorId, invoke });
 
-      const reply = await waitForJsonReply<any>(redis, toolRequestId, inputTool.timeoutMs);
+      const reply = await waitForJsonReply<any>(redis, toolRequestId, inputTool.timeoutMs + executorReplyGraceMs);
       if (!reply || typeof reply !== "object") {
         return { status: "failed", error: REMOTE_EXEC_ERROR.NodeExecutionTimeout };
       }
@@ -614,10 +622,24 @@ export async function startGatewayBrainRuntime(input?: {
         if (!committed) {
           return { status: "failed", error: "WORKSPACE_VERSION_CONFLICT" };
         }
+        workspaceLockToken = null;
       }
 
       return { status, ...(output !== undefined ? { output } : {}), ...(error ? { error } : {}), ...(workspace ? { workspace } : {}) };
     } finally {
+      if (workspaceId && workspaceLockToken) {
+        try {
+          await withTenantContext(pool, { organizationId: inputTool.organizationId }, async (db) =>
+            releaseExecutionWorkspaceLock(db, {
+              organizationId: inputTool.organizationId,
+              workspaceId,
+              lockToken: workspaceLockToken,
+            })
+          );
+        } catch {
+          // ignore unlock best-effort failures
+        }
+      }
       await releaseCapacity(redis, { executorId: selectedExecutor.executorId, organizationId: inputTool.organizationId });
     }
   }
@@ -633,8 +655,26 @@ export async function startGatewayBrainRuntime(input?: {
     };
 
     const runAsync = async () => {
-      const response = await executeWorkflowDispatchInternal({ requestId, dispatch, timeoutMs });
+      let response: GatewayDispatchResponse;
+      try {
+        response = await executeWorkflowDispatchInternal({ requestId, dispatch, timeoutMs });
+      } catch (error) {
+        response = {
+          status: "failed",
+          error: error instanceof Error ? error.message : "WORKFLOW_DISPATCH_ASYNC_FAILED",
+        };
+        jsonLog("error", {
+          event: "workflow_dispatch_async_failed",
+          requestId,
+          workflowId: dispatch.workflowId,
+          runId: dispatch.runId,
+          error: response.error,
+        });
+      }
+
       await resultsStore.set(requestId, response, resultsTtlSec);
+      await redis.set(replyKey(requestId), safeJsonStringify(response), "EX", resultsTtlSec);
+
       if (continuationQueue) {
         const payload: WorkflowContinuationJobPayload = {
           type: "remote.apply",
@@ -646,11 +686,21 @@ export async function startGatewayBrainRuntime(input?: {
           result: response,
         };
         const requestHash = sha256Hex(requestId);
-        await continuationQueue.add("continuation", payload, {
-          jobId: `apply-${requestHash}`,
-          removeOnComplete: 1000,
-          removeOnFail: 1000,
-        });
+        try {
+          await continuationQueue.add("continuation", payload, {
+            jobId: `apply-${requestHash}`,
+            removeOnComplete: 1000,
+            removeOnFail: 1000,
+          });
+        } catch (error) {
+          jsonLog("warn", {
+            event: "workflow_dispatch_async_apply_enqueue_failed",
+            requestId,
+            workflowId: dispatch.workflowId,
+            runId: dispatch.runId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     };
 
@@ -680,6 +730,7 @@ export async function startGatewayBrainRuntime(input?: {
         timeoutMs: inputDispatch.timeoutMs,
         networkMode: "none",
         workspaceOwner: { ownerType: "workflow_run", ownerId: dispatch.runId },
+        requestId: inputDispatch.requestId,
       });
       return {
         status: tool.status,
@@ -772,6 +823,7 @@ export async function startGatewayBrainRuntime(input?: {
         timeoutMs: inputDispatch.timeoutMs,
         networkMode: "none",
         workspaceOwner: { ownerType: "workflow_run", ownerId: parsed.data.runId },
+        requestId: inputDispatch.requestId,
       });
       return {
         status: tool.status,
@@ -1113,7 +1165,7 @@ export async function startGatewayBrainRuntime(input?: {
       const opened = await waitForJsonReply<{ status: "ok" | "failed"; error?: string }>(
         redis,
         openRequestId,
-        Math.min(timeoutMs, sessionOpenTimeoutMs)
+        Math.min(timeoutMs, sessionOpenTimeoutMs) + executorReplyGraceMs
       );
       if (!opened || opened.status !== "ok") {
         await failSession({
@@ -1152,7 +1204,7 @@ export async function startGatewayBrainRuntime(input?: {
       const turnReply = await waitForJsonReply<{ status: "succeeded" | "failed"; content?: string; payload?: unknown; error?: string; code?: string }>(
         redis,
         msg.requestId,
-        timeoutMs
+        timeoutMs + executorReplyGraceMs
       );
       if (!turnReply) {
         await failSession({

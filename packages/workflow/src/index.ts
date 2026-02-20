@@ -79,6 +79,48 @@ const nodeExecutionSelectorSchema = z
   })
   .default({ pool: "byon" });
 
+const teammateConfigSchema = z.object({
+  id: z.string().min(1).max(64),
+  displayName: z.string().min(1).max(120).optional(),
+  llm: z
+    .object({
+      model: z.string().min(1).max(120).optional(),
+    })
+    .optional(),
+  prompt: z.object({
+    system: z.string().max(200_000).optional(),
+    instructions: z.string().min(1).max(200_000),
+    inputTemplate: z.string().max(200_000).optional(),
+  }),
+  tools: z.object({
+    allow: z.array(z.string().min(1).max(120)),
+    execution: z.literal("cloud").default("cloud"),
+    authDefaults: z
+      .object({
+        connectors: z
+          .record(
+            z.string().min(1).max(80),
+            z.object({
+              secretId: z.string().uuid(),
+            })
+          )
+          .optional(),
+      })
+      .optional(),
+  }),
+  limits: z.object({
+    maxTurns: z.number().int().min(1).max(64).default(8),
+    maxToolCalls: z.number().int().min(0).max(200).default(20),
+    timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
+    maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
+    maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
+  }),
+  output: z.object({
+    mode: z.enum(["text", "json"]).default("text"),
+    jsonSchema: z.unknown().optional(),
+  }),
+});
+
 const agentRunNodeSchema = z.object({
   id: z.string().min(1),
   type: z.literal("agent.run"),
@@ -138,6 +180,14 @@ const agentRunNodeSchema = z.object({
           jsonSchema: z.unknown().optional(),
         })
         .default({ mode: "text" }),
+      team: z
+        .object({
+          mode: z.literal("supervisor").default("supervisor"),
+          maxParallel: z.number().int().min(1).max(16).default(3),
+          leadMode: z.enum(["delegate_only", "normal"]).default("normal"),
+          teammates: z.array(teammateConfigSchema).min(1).max(32),
+        })
+        .optional(),
     })
     .strict(),
 });

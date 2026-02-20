@@ -196,6 +196,14 @@ export function ModelPickerDialog({
   }, [filteredItems]);
 
   const selectedLower = value.trim().toLowerCase();
+  const applyModel = useCallback(
+    (modelId: string) => {
+      pushRecent(modelId);
+      onChange(modelId);
+      onOpenChange(false);
+    },
+    [onChange, onOpenChange]
+  );
 
   return (
     <Dialog
@@ -257,13 +265,10 @@ export function ModelPickerDialog({
                           <Command.Item
                             key={`recent:${it.modelId}`}
                             value={`${it.providerId} ${it.modelId} ${it.name}`}
-                            onSelect={() => {
-                              pushRecent(it.modelId);
-                              onChange(it.modelId);
-                              onOpenChange(false);
-                            }}
+                            onSelect={() => applyModel(it.modelId)}
+                            onClick={() => applyModel(it.modelId)}
                             className={cn(
-                              "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-2 text-sm text-text outline-none",
+                              "flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-2 text-sm text-text outline-none",
                               "aria-selected:bg-panel/70"
                             )}
                           >
@@ -294,13 +299,10 @@ export function ModelPickerDialog({
                             <Command.Item
                               key={`${it.providerId}:${it.modelId}`}
                               value={`${it.providerId} ${it.modelId} ${it.name}`}
-                              onSelect={() => {
-                                pushRecent(it.modelId);
-                                onChange(it.modelId);
-                                onOpenChange(false);
-                              }}
+                              onSelect={() => applyModel(it.modelId)}
+                              onClick={() => applyModel(it.modelId)}
                               className={cn(
-                                "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-2 text-sm text-text outline-none",
+                                "flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-2 text-sm text-text outline-none",
                                 "aria-selected:bg-panel/70"
                               )}
                             >

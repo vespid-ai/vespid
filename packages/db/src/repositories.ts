@@ -39,6 +39,8 @@ import {
   toolsetBuilderTurns,
   users,
   workflowRunEvents,
+  workflowShareInvitations,
+  workflowShares,
   workflowApprovalRequests,
   workflowRuns,
   workflowTriggerSubscriptions,
@@ -231,6 +233,319 @@ export async function markInvitationAccepted(db: Db, invitationId: string) {
     .set({ status: "accepted" })
     .where(eq(organizationInvitations.id, invitationId))
     .returning();
+  return row ?? null;
+}
+
+export async function createWorkflowShareInvitation(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    email: string;
+    invitedByUserId: string;
+    accessRole?: "runner";
+    ttlHours?: number;
+  }
+) {
+  const ttlHours = input.ttlHours ?? 72;
+  const token = `${input.organizationId}.${input.workflowId}.${crypto.randomUUID()}`;
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+  try {
+    const [row] = await db
+      .insert(workflowShareInvitations)
+      .values({
+        organizationId: input.organizationId,
+        workflowId: input.workflowId,
+        email: input.email.toLowerCase(),
+        accessRole: input.accessRole ?? "runner",
+        token,
+        status: "pending",
+        invitedByUserId: input.invitedByUserId,
+        acceptedByUserId: null,
+        expiresAt,
+        acceptedAt: null,
+      })
+      .returning();
+    if (!row) {
+      throw new Error("WORKFLOW_SHARE_INVITATION_CREATE_FAILED");
+    }
+    return row;
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      throw new Error("WORKFLOW_SHARE_INVITATION_ALREADY_PENDING");
+    }
+    throw error;
+  }
+}
+
+export async function getWorkflowShareInvitationByToken(
+  db: Db,
+  input: {
+    organizationId: string;
+    token: string;
+  }
+) {
+  const [row] = await db
+    .select()
+    .from(workflowShareInvitations)
+    .where(
+      and(
+        eq(workflowShareInvitations.organizationId, input.organizationId),
+        eq(workflowShareInvitations.token, input.token)
+      )
+    );
+  return row ?? null;
+}
+
+export async function listWorkflowShareInvitations(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    status?: "pending" | "accepted" | "revoked" | "expired";
+    limit?: number;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit ?? 200));
+  const where = input.status
+    ? and(
+        eq(workflowShareInvitations.organizationId, input.organizationId),
+        eq(workflowShareInvitations.workflowId, input.workflowId),
+        eq(workflowShareInvitations.status, input.status)
+      )
+    : and(
+        eq(workflowShareInvitations.organizationId, input.organizationId),
+        eq(workflowShareInvitations.workflowId, input.workflowId)
+      );
+  return db
+    .select()
+    .from(workflowShareInvitations)
+    .where(where)
+    .orderBy(desc(workflowShareInvitations.createdAt), desc(workflowShareInvitations.id))
+    .limit(limit);
+}
+
+export async function markWorkflowShareInvitationAccepted(
+  db: Db,
+  input: {
+    organizationId: string;
+    invitationId: string;
+    acceptedByUserId: string;
+  }
+) {
+  const [row] = await db
+    .update(workflowShareInvitations)
+    .set({
+      status: "accepted",
+      acceptedByUserId: input.acceptedByUserId,
+      acceptedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(workflowShareInvitations.organizationId, input.organizationId),
+        eq(workflowShareInvitations.id, input.invitationId),
+        eq(workflowShareInvitations.status, "pending")
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function revokeWorkflowShareInvitation(
+  db: Db,
+  input: {
+    organizationId: string;
+    invitationId: string;
+  }
+) {
+  const [row] = await db
+    .update(workflowShareInvitations)
+    .set({
+      status: "revoked",
+      acceptedByUserId: null,
+      acceptedAt: null,
+    })
+    .where(
+      and(
+        eq(workflowShareInvitations.organizationId, input.organizationId),
+        eq(workflowShareInvitations.id, input.invitationId),
+        eq(workflowShareInvitations.status, "pending")
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function revokeActiveWorkflowSharesForUser(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    userId: string;
+  }
+) {
+  return db
+    .update(workflowShares)
+    .set({
+      revokedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(workflowShares.organizationId, input.organizationId),
+        eq(workflowShares.workflowId, input.workflowId),
+        eq(workflowShares.userId, input.userId),
+        isNull(workflowShares.revokedAt)
+      )
+    )
+    .returning();
+}
+
+export async function createWorkflowShare(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    userId: string;
+    accessRole: "runner";
+    sourceInvitationId?: string | null;
+    createdByUserId: string;
+  }
+) {
+  const [row] = await db
+    .insert(workflowShares)
+    .values({
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      userId: input.userId,
+      accessRole: input.accessRole,
+      sourceInvitationId: input.sourceInvitationId ?? null,
+      createdByUserId: input.createdByUserId,
+      revokedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!row) {
+    throw new Error("WORKFLOW_SHARE_CREATE_FAILED");
+  }
+  return row;
+}
+
+export async function listWorkflowSharesByWorkflow(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    includeRevoked?: boolean;
+    limit?: number;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit ?? 200));
+  const where = input.includeRevoked
+    ? and(eq(workflowShares.organizationId, input.organizationId), eq(workflowShares.workflowId, input.workflowId))
+    : and(
+        eq(workflowShares.organizationId, input.organizationId),
+        eq(workflowShares.workflowId, input.workflowId),
+        isNull(workflowShares.revokedAt)
+      );
+  return db
+    .select()
+    .from(workflowShares)
+    .where(where)
+    .orderBy(desc(workflowShares.createdAt), desc(workflowShares.id))
+    .limit(limit);
+}
+
+export async function getWorkflowShareById(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId?: string;
+    shareId: string;
+  }
+) {
+  const where = input.workflowId
+    ? and(
+        eq(workflowShares.organizationId, input.organizationId),
+        eq(workflowShares.workflowId, input.workflowId),
+        eq(workflowShares.id, input.shareId)
+      )
+    : and(eq(workflowShares.organizationId, input.organizationId), eq(workflowShares.id, input.shareId));
+  const [row] = await db.select().from(workflowShares).where(where);
+  return row ?? null;
+}
+
+export async function getActiveWorkflowShareByIdForUser(
+  db: Db,
+  input: {
+    shareId: string;
+    userId: string;
+  }
+) {
+  const [row] = await db
+    .select()
+    .from(workflowShares)
+    .where(
+      and(
+        eq(workflowShares.id, input.shareId),
+        eq(workflowShares.userId, input.userId),
+        isNull(workflowShares.revokedAt)
+      )
+    );
+  return row ?? null;
+}
+
+export async function revokeWorkflowShare(
+  db: Db,
+  input: {
+    organizationId: string;
+    workflowId: string;
+    shareId: string;
+  }
+) {
+  const [row] = await db
+    .update(workflowShares)
+    .set({
+      revokedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(workflowShares.organizationId, input.organizationId),
+        eq(workflowShares.workflowId, input.workflowId),
+        eq(workflowShares.id, input.shareId),
+        isNull(workflowShares.revokedAt)
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function getSharedWorkflowByShareForUser(
+  db: Db,
+  input: {
+    shareId: string;
+    userId: string;
+  }
+) {
+  const [row] = await db
+    .select({
+      share: workflowShares,
+      workflow: workflows,
+    })
+    .from(workflowShares)
+    .innerJoin(
+      workflows,
+      and(eq(workflows.organizationId, workflowShares.organizationId), eq(workflows.id, workflowShares.workflowId))
+    )
+    .where(
+      and(
+        eq(workflowShares.id, input.shareId),
+        eq(workflowShares.userId, input.userId),
+        isNull(workflowShares.revokedAt)
+      )
+    );
   return row ?? null;
 }
 
@@ -1328,6 +1643,132 @@ export async function listWorkflowRunEvents(
   return { rows, nextCursor };
 }
 
+export async function listWorkflowRunsForShareUser(
+  db: Db,
+  input: {
+    shareId: string;
+    userId: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+) {
+  const limit = Math.min(200, Math.max(1, input.limit));
+  const baseWhere = and(
+    eq(workflowShares.id, input.shareId),
+    eq(workflowShares.userId, input.userId),
+    isNull(workflowShares.revokedAt),
+    eq(workflowRuns.workflowId, workflowShares.workflowId),
+    eq(workflowRuns.organizationId, workflowShares.organizationId),
+    eq(workflowRuns.requestedByUserId, input.userId)
+  );
+  const cursorWhere = input.cursor
+    ? or(
+        lt(workflowRuns.createdAt, input.cursor.createdAt),
+        and(eq(workflowRuns.createdAt, input.cursor.createdAt), lt(workflowRuns.id, input.cursor.id))
+      )
+    : null;
+  const where = cursorWhere ? and(baseWhere, cursorWhere) : baseWhere;
+
+  const rows = await db
+    .select({ run: workflowRuns })
+    .from(workflowRuns)
+    .innerJoin(
+      workflowShares,
+      and(eq(workflowShares.workflowId, workflowRuns.workflowId), eq(workflowShares.organizationId, workflowRuns.organizationId))
+    )
+    .where(where)
+    .orderBy(desc(workflowRuns.createdAt), desc(workflowRuns.id))
+    .limit(limit);
+
+  const runRows = rows.map((row) => row.run);
+  const last = runRows.length > 0 ? runRows[runRows.length - 1] : null;
+  const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+  return { rows: runRows, nextCursor };
+}
+
+export async function getWorkflowRunByIdForShareUser(
+  db: Db,
+  input: {
+    shareId: string;
+    runId: string;
+    userId: string;
+  }
+) {
+  const [row] = await db
+    .select({ run: workflowRuns })
+    .from(workflowRuns)
+    .innerJoin(
+      workflowShares,
+      and(eq(workflowShares.workflowId, workflowRuns.workflowId), eq(workflowShares.organizationId, workflowRuns.organizationId))
+    )
+    .where(
+      and(
+        eq(workflowShares.id, input.shareId),
+        eq(workflowShares.userId, input.userId),
+        isNull(workflowShares.revokedAt),
+        eq(workflowRuns.id, input.runId),
+        eq(workflowRuns.requestedByUserId, input.userId)
+      )
+    );
+  return row?.run ?? null;
+}
+
+export async function listWorkflowRunEventsForShareUser(
+  db: Db,
+  input: {
+    shareId: string;
+    runId: string;
+    userId: string;
+    limit: number;
+    cursor?: { createdAt: Date; id: string } | null;
+  }
+) {
+  const limit = Math.min(500, Math.max(1, input.limit));
+  const baseWhere = and(
+    eq(workflowShares.id, input.shareId),
+    eq(workflowShares.userId, input.userId),
+    isNull(workflowShares.revokedAt),
+    eq(workflowRuns.id, input.runId),
+    eq(workflowRuns.workflowId, workflowShares.workflowId),
+    eq(workflowRuns.organizationId, workflowShares.organizationId),
+    eq(workflowRuns.requestedByUserId, input.userId),
+    eq(workflowRunEvents.runId, workflowRuns.id),
+    eq(workflowRunEvents.workflowId, workflowRuns.workflowId),
+    eq(workflowRunEvents.organizationId, workflowRuns.organizationId)
+  );
+  const cursorWhere = input.cursor
+    ? or(
+        gt(workflowRunEvents.createdAt, input.cursor.createdAt),
+        and(eq(workflowRunEvents.createdAt, input.cursor.createdAt), gt(workflowRunEvents.id, input.cursor.id))
+      )
+    : null;
+  const where = cursorWhere ? and(baseWhere, cursorWhere) : baseWhere;
+
+  const rows = await db
+    .select({ event: workflowRunEvents })
+    .from(workflowRunEvents)
+    .innerJoin(
+      workflowRuns,
+      and(
+        eq(workflowRuns.id, workflowRunEvents.runId),
+        eq(workflowRuns.workflowId, workflowRunEvents.workflowId),
+        eq(workflowRuns.organizationId, workflowRunEvents.organizationId)
+      )
+    )
+    .innerJoin(
+      workflowShares,
+      and(eq(workflowShares.workflowId, workflowRuns.workflowId), eq(workflowShares.organizationId, workflowRuns.organizationId))
+    )
+    .where(where)
+    .orderBy(asc(workflowRunEvents.createdAt), asc(workflowRunEvents.id))
+    .limit(limit);
+
+  const eventRows = rows.map((row) => row.event);
+  const last = eventRows.length > 0 ? eventRows[eventRows.length - 1] : null;
+  const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
+  return { rows: eventRows, nextCursor };
+}
+
 export async function deleteQueuedWorkflowRun(
   db: Db,
   input: { organizationId: string; workflowId: string; runId: string }
@@ -1741,6 +2182,28 @@ export async function tryLockExecutionWorkspace(
         eq(executionWorkspaces.organizationId, input.organizationId),
         eq(executionWorkspaces.id, input.workspaceId),
         or(isNull(executionWorkspaces.lockExpiresAt), lt(executionWorkspaces.lockExpiresAt, sql`now()`))
+      )
+    )
+    .returning();
+  return row ?? null;
+}
+
+export async function releaseExecutionWorkspaceLock(
+  db: Db,
+  input: { organizationId: string; workspaceId: string; lockToken: string }
+) {
+  const [row] = await db
+    .update(executionWorkspaces)
+    .set({
+      lockToken: null,
+      lockExpiresAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(executionWorkspaces.organizationId, input.organizationId),
+        eq(executionWorkspaces.id, input.workspaceId),
+        eq(executionWorkspaces.lockToken, input.lockToken)
       )
     )
     .returning();

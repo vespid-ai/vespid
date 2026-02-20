@@ -156,6 +156,20 @@
       "notConnected": "Not connected to gateway.",
       "error": "WebSocket error."
     },
+    "errors": {
+      "timeoutToast": "Model request timed out. Check endpoint reachability and timeout settings.",
+      "timeoutTitle": "Model request timed out",
+      "timeoutDescription": "{engine} did not return within the configured execution window.",
+      "timeoutHint": "If this keeps happening, verify the executor host can reach your Base URL and increase timeout if needed.",
+      "timeoutValue": "Execution timeout: {seconds}s",
+      "baseUrlLabel": "Runtime Base URL:",
+      "baseUrlDefault": "Official default endpoint",
+      "engineLabel": "Engine: {engine}",
+      "rawMessage": "Raw error: {message}",
+      "genericTitle": "Request failed on executor",
+      "genericDescription": "The executor reported a runtime error for this turn.",
+      "genericHint": "Inspect the raw error details and worker-node logs for this request."
+    },
     "chat": {
       "title": "Chat",
       "subtitle": "Messages are persisted as events.",
@@ -679,6 +693,78 @@
         "open": "Open",
         "replay": "Replay"
       }
+    },
+    "graphEditor": {
+      "showPanel": "Show panel",
+      "hidePanel": "Hide panel",
+      "autoLayout": "Auto layout",
+      "autoLayoutSuccess": "Layout updated to best fit.",
+      "enterFullscreen": "Enter fullscreen",
+      "exitFullscreen": "Exit fullscreen",
+      "fullscreenUnsupported": "Fullscreen is not supported in this browser.",
+      "fullscreenFailed": "Unable to switch fullscreen mode."
+    },
+    "share": {
+      "button": "Share workflow",
+      "title": "Share workflow access",
+      "subtitle": "Invite by email for runner-only access to \"{workflow}\".",
+      "createTitle": "Create invitation",
+      "createDescription": "Create a link and send it manually to the target email.",
+      "emailLabel": "Email",
+      "emailRequired": "Email is required.",
+      "createAction": "Create invite link",
+      "latestInvite": "Latest invite link",
+      "copyInvite": "Copy link",
+      "copied": "Invite link copied.",
+      "inviteCreated": "Invitation created.",
+      "pendingExists": "A pending invitation already exists for this email.",
+      "activeAccessTitle": "Active shared access",
+      "activeAccessDescription": "Shared users can run this workflow but cannot edit it.",
+      "noShares": "No active shared access yet.",
+      "revoke": "Revoke",
+      "revoked": "Shared access revoked.",
+      "pendingInvitesTitle": "Pending invitations",
+      "pendingInvitesDescription": "Accepted invitations disappear from this list.",
+      "noPendingInvites": "No pending invitations.",
+      "accept": {
+        "title": "Accept workflow share",
+        "subtitle": "Sign in with the invited email, then accept access.",
+        "token": "TOKEN",
+        "cardTitle": "Workflow share invitation",
+        "missingToken": "(missing token)",
+        "loginHint": "You must sign in before accepting this invitation.",
+        "acceptAction": "Accept invitation",
+        "goAuth": "Go to sign in",
+        "openSharedWorkflow": "Open shared workflow",
+        "errors": {
+          "emailMismatch": "This login email does not match the invitation email.",
+          "expired": "This invitation has expired.",
+          "notPending": "This invitation is no longer pending.",
+          "notFound": "Invitation not found.",
+          "loginRequired": "Please sign in first."
+        }
+      },
+      "shared": {
+        "title": "Shared workflow",
+        "subtitle": "Runner-only access. You can run and view your own runs only.",
+        "runnerRole": "runner",
+        "runTitle": "Run workflow",
+        "runDescription": "Provide JSON input and trigger a run for this shared workflow.",
+        "runInputLabel": "Run input (JSON)",
+        "runAction": "Run",
+        "runsTitle": "Your runs",
+        "runsDescription": "Only runs created by your account are visible here.",
+        "noRuns": "No runs yet.",
+        "eventsTitle": "Run events",
+        "eventsDescription": "Events are limited to your selected run.",
+        "selectRun": "Select a run to view events.",
+        "noEvents": "No events yet.",
+        "runCreated": "Run queued.",
+        "invalidShare": "Shared workflow id is missing.",
+        "notPublished": "This workflow is not published.",
+        "invalidJson": "Run input must be valid JSON.",
+        "notFound": "Shared workflow not found."
+      }
     }
   },
   "runs": {
@@ -713,7 +799,17 @@
     "quickActions": "Quick actions",
     "healthTitle": "Health",
     "healthEventsError": "Failed to load events.",
-    "healthRunError": "Failed to load run."
+    "healthRunError": "Failed to load run.",
+    "pendingRemote": {
+      "title": "Waiting for worker-node result",
+      "badge": "Waiting remote result",
+      "description": "This node was dispatched to a worker node and is still waiting for callback.",
+      "node": "Node: {nodeId}",
+      "kind": "Kind: {kind}",
+      "elapsed": "Elapsed: {duration}",
+      "request": "Request: {requestId}",
+      "hint": "Long waits usually indicate endpoint latency, cold starts, or network reachability issues on the executor host."
+    }
   },
   "agents": {
     "title": "Worker Nodes",
@@ -1433,6 +1529,10 @@
       "clearModel": "Clear",
       "inheritModel": "(inherit)",
       "oauthRequired": "Selected provider requires a connected account."
+    },
+    "secret": {
+      "linkedDefaultName": "default (Model Connections)",
+      "linkedExecutorOauthHint": "Using executor OAuth from Model Connections."
     }
   }
 }

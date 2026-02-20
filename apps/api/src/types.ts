@@ -128,6 +128,34 @@ export type WorkflowRecord = {
   updatedAt: string;
 };
 
+export type WorkflowShareInvitationRecord = {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  email: string;
+  accessRole: "runner";
+  token: string;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  invitedByUserId: string;
+  acceptedByUserId: string | null;
+  expiresAt: string;
+  acceptedAt: string | null;
+  createdAt: string;
+};
+
+export type WorkflowShareRecord = {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  userId: string;
+  accessRole: "runner";
+  sourceInvitationId: string | null;
+  createdByUserId: string;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type WorkflowRunRecord = {
   id: string;
   organizationId: string;
@@ -622,6 +650,70 @@ export interface AppStore {
     memberUserId: string;
     roleKey: "owner" | "admin" | "member";
   }): Promise<MembershipRecord | null>;
+  createWorkflowShareInvitation(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    email: string;
+    ttlHours?: number;
+  }): Promise<WorkflowShareInvitationRecord>;
+  listWorkflowShareInvitations(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    status?: "pending" | "accepted" | "revoked" | "expired";
+    limit?: number;
+  }): Promise<WorkflowShareInvitationRecord[]>;
+  getWorkflowShareInvitationByToken(input: {
+    organizationId: string;
+    token: string;
+    actorUserId: string;
+  }): Promise<WorkflowShareInvitationRecord | null>;
+  acceptWorkflowShareInvitation(input: {
+    organizationId: string;
+    token: string;
+    userId: string;
+    email: string;
+  }): Promise<{
+    invitation: WorkflowShareInvitationRecord;
+    share: WorkflowShareRecord;
+    workflow: WorkflowRecord;
+  }>;
+  listWorkflowShares(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    includeRevoked?: boolean;
+    limit?: number;
+  }): Promise<WorkflowShareRecord[]>;
+  revokeWorkflowShare(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    shareId: string;
+  }): Promise<WorkflowShareRecord | null>;
+  getSharedWorkflowByShareId(input: {
+    shareId: string;
+    userId: string;
+  }): Promise<{ share: WorkflowShareRecord; workflow: WorkflowRecord } | null>;
+  listWorkflowRunsByShare(input: {
+    shareId: string;
+    userId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ runs: WorkflowRunRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
+  getWorkflowRunByIdForShare(input: {
+    shareId: string;
+    userId: string;
+    runId: string;
+  }): Promise<WorkflowRunRecord | null>;
+  listWorkflowRunEventsByShare(input: {
+    shareId: string;
+    userId: string;
+    runId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }): Promise<{ events: WorkflowRunEventRecord[]; nextCursor: { createdAt: string; id: string } | null }>;
   createSession(input: {
     id?: string;
     userId: string;

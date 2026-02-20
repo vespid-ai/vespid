@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
     session: {
       id: "session_1",
       title: "Ops Chat",
+      engineId: "gateway.claude.v2",
+      limits: { timeoutMs: 60000 },
     },
   },
   eventsData: {
@@ -105,6 +107,22 @@ vi.mock("../lib/hooks/use-engine-auth-status", () => ({
     isError: false,
     data: mocks.engineAuthStatusData,
     refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("../lib/hooks/use-org-settings", () => ({
+  useOrgSettings: () => ({
+    data: {
+      settings: {
+        agents: {
+          engineRuntimeDefaults: {
+            "gateway.codex.v2": { baseUrl: null },
+            "gateway.claude.v2": { baseUrl: "http://127.0.0.1:8045" },
+            "gateway.opencode.v2": { baseUrl: null },
+          },
+        },
+      },
+    },
   }),
 }));
 
@@ -413,6 +431,36 @@ describe("Conversation detail layout", () => {
       expect(screen.queryByTestId("conversation-detail-executor-onboarding-guide")).not.toBeInTheDocument();
     });
     expect(mocks.createPairingToken).not.toHaveBeenCalled();
+  });
+
+  it("shows actionable timeout insight with base URL and timeout", async () => {
+    const messages = readMessages("en");
+    mocks.eventsData.events = [
+      {
+        id: "event_timeout",
+        organizationId: "org_1",
+        sessionId: "session_1",
+        seq: 6,
+        eventType: "error",
+        level: "error",
+        handoffFromAgentId: null,
+        handoffToAgentId: null,
+        idempotencyKey: null,
+        payload: { code: "NODE_EXECUTION_FAILED", message: "LLM_TIMEOUT" },
+        createdAt: "2026-02-19T12:10:00.000Z",
+      },
+    ];
+
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <ConversationDetailPage />
+      </NextIntlClientProvider>
+    );
+
+    expect(await screen.findByTestId("conversation-session-error-insight")).toBeInTheDocument();
+    expect(screen.getByText(messages.sessions.errors.timeoutTitle)).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:8045")).toBeInTheDocument();
+    expect(screen.getByText("Execution timeout: 60s")).toBeInTheDocument();
   });
 
   it("archives conversation from detail header", async () => {

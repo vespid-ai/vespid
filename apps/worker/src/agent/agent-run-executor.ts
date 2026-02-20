@@ -55,6 +55,52 @@ const agentRunNodeSchema = z.object({
       mode: z.enum(["text", "json"]).default("text"),
       jsonSchema: z.unknown().optional(),
     }),
+    team: z
+      .object({
+        mode: z.literal("supervisor").default("supervisor"),
+        maxParallel: z.number().int().min(1).max(16).default(3),
+        leadMode: z.enum(["delegate_only", "normal"]).default("normal"),
+        teammates: z
+          .array(
+            z.object({
+              id: z.string().min(1).max(64),
+              displayName: z.string().min(1).max(120).optional(),
+              llm: z
+                .object({
+                  model: z.string().min(1).max(120).optional(),
+                })
+                .optional(),
+              prompt: z.object({
+                system: z.string().max(200_000).optional(),
+                instructions: z.string().min(1).max(200_000),
+                inputTemplate: z.string().max(200_000).optional(),
+              }),
+              tools: z.object({
+                allow: z.array(z.string().min(1).max(120)),
+                execution: z.literal("cloud").default("cloud"),
+                authDefaults: z
+                  .object({
+                    connectors: z.record(z.string().min(1).max(80), z.object({ secretId: z.string().uuid() })).optional(),
+                  })
+                  .optional(),
+              }),
+              limits: z.object({
+                maxTurns: z.number().int().min(1).max(64).default(8),
+                maxToolCalls: z.number().int().min(0).max(200).default(20),
+                timeoutMs: z.number().int().min(1000).max(10 * 60 * 1000).default(60_000),
+                maxOutputChars: z.number().int().min(256).max(1_000_000).default(50_000),
+                maxRuntimeChars: z.number().int().min(1024).max(2_000_000).default(200_000),
+              }),
+              output: z.object({
+                mode: z.enum(["text", "json"]).default("text"),
+                jsonSchema: z.unknown().optional(),
+              }),
+            })
+          )
+          .min(1)
+          .max(32),
+      })
+      .optional(),
   }),
 });
 
@@ -122,6 +168,33 @@ export function createAgentRunExecutor(input: {
       const nodeParsed = agentRunNodeSchema.safeParse(context.node);
       if (!nodeParsed.success) {
         return { status: "failed", error: "INVALID_NODE_CONFIG" };
+      }
+
+      // Resume path: continuation worker stores gateway reply under runtime.pendingRemoteResult.
+      if (context.pendingRemoteResult) {
+        const pending = context.pendingRemoteResult as any;
+        const remote = pending && typeof pending === "object" && "result" in pending ? (pending as any).result : pending;
+        if (remote && typeof remote === "object" && (remote as any).status === "succeeded") {
+          return {
+            status: "succeeded",
+            output: (remote as any).output ?? null,
+            runtime:
+              context.runtime && typeof context.runtime === "object"
+                ? { ...(context.runtime as any), pendingRemoteResult: null }
+                : { pendingRemoteResult: null },
+          };
+        }
+        if (remote && typeof remote === "object" && (remote as any).status === "failed") {
+          return {
+            status: "failed",
+            error: (remote as any).error ?? "REMOTE_EXECUTION_FAILED",
+            runtime:
+              context.runtime && typeof context.runtime === "object"
+                ? { ...(context.runtime as any), pendingRemoteResult: null }
+                : { pendingRemoteResult: null },
+          };
+        }
+        return { status: "failed", error: "REMOTE_RESULT_INVALID" };
       }
 
       const node = nodeParsed.data;

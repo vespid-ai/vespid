@@ -271,6 +271,20 @@ const createWorkflowRunSchema = z.object({
   input: z.unknown().optional(),
 });
 
+const createWorkflowShareInvitationSchema = z
+  .object({
+    email: z.string().email(),
+    ttlHours: z.coerce.number().int().min(1).max(30 * 24).optional(),
+  })
+  .strict();
+
+const listWorkflowSharesQuerySchema = z
+  .object({
+    includeRevoked: z.coerce.boolean().optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  })
+  .strict();
+
 const webhookTriggerParamsSchema = z
   .object({
     token: z.string().min(8).max(1024),
@@ -1301,6 +1315,21 @@ function parseInvitationTokenOrganizationId(token: string): string | null {
   return parsed.data;
 }
 
+function parseWorkflowShareInvitationTokenContext(
+  token: string
+): { organizationId: string; workflowId: string } | null {
+  const [organizationId, workflowId] = token.split(".");
+  const parsedOrg = z.string().uuid().safeParse(organizationId);
+  const parsedWorkflow = z.string().uuid().safeParse(workflowId);
+  if (!parsedOrg.success || !parsedWorkflow.success) {
+    return null;
+  }
+  return {
+    organizationId: parsedOrg.data,
+    workflowId: parsedWorkflow.data,
+  };
+}
+
 function parsePairingTokenOrganizationId(token: string): string | null {
   const [organizationId] = token.split(".");
   const parsed = z.string().uuid().safeParse(organizationId);
@@ -1383,6 +1412,44 @@ function invitationErrorToAppError(error: Error): AppError {
   });
 }
 
+function workflowShareInvitationErrorToAppError(error: Error): AppError {
+  if (error.message === "WORKFLOW_SHARE_INVITATION_NOT_FOUND") {
+    return notFound("Workflow share invitation not found");
+  }
+  if (error.message === "WORKFLOW_SHARE_INVITATION_EXPIRED") {
+    return badRequest("Workflow share invitation has expired");
+  }
+  if (error.message === "WORKFLOW_SHARE_INVITATION_EMAIL_MISMATCH") {
+    return forbidden("Workflow share invitation email does not match authenticated user");
+  }
+  if (error.message === "WORKFLOW_SHARE_INVITATION_NOT_PENDING") {
+    return badRequest("Workflow share invitation is not pending");
+  }
+  if (error.message === "WORKFLOW_NOT_FOUND") {
+    return notFound("Workflow not found");
+  }
+  return new AppError(500, {
+    code: "WORKFLOW_SHARE_INVITATION_ACCEPT_FAILED",
+    message: "Workflow share invitation accept failed",
+  });
+}
+
+function workflowShareCreateErrorToAppError(error: Error): AppError {
+  if (error.message === "WORKFLOW_SHARE_INVITATION_ALREADY_PENDING") {
+    return new AppError(409, {
+      code: "WORKFLOW_SHARE_INVITATION_ALREADY_PENDING",
+      message: "A pending workflow share invitation already exists for this email",
+    });
+  }
+  if (error.message === "WORKFLOW_NOT_FOUND") {
+    return notFound("Workflow not found");
+  }
+  return new AppError(500, {
+    code: "WORKFLOW_SHARE_INVITATION_CREATE_FAILED",
+    message: "Workflow share invitation create failed",
+  });
+}
+
 function parsePositiveInt(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return null;
@@ -1431,6 +1498,10 @@ export async function buildServer(input?: {
   agentInstaller?: Partial<AgentInstallerConfig>;
 }) {
   const server = Fastify({
+    // Share invitation tokens include org/workflow context and can exceed Fastify's default maxParamLength(100).
+    routerOptions: {
+      maxParamLength: 512,
+    },
     logger: {
       level: API_LOG_LEVEL,
       redact: {
@@ -5925,6 +5996,129 @@ export async function buildServer(input?: {
     return { workflow };
   });
 
+  server.post("/v1/orgs/:orgId/workflows/:workflowId/shares/invitations", async (request, reply) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to share workflows");
+    }
+
+    const parsed = createWorkflowShareInvitationSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid workflow share invitation payload", parsed.error.flatten());
+    }
+
+    const workflow = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+    if (workflow.status !== "published") {
+      throw conflict("Only published workflows can be shared");
+    }
+
+    let invitation;
+    try {
+      invitation = await store.createWorkflowShareInvitation({
+        organizationId: orgContext.organizationId,
+        workflowId: workflow.id,
+        actorUserId: auth.userId,
+        email: parsed.data.email,
+        ...(parsed.data.ttlHours !== undefined ? { ttlHours: parsed.data.ttlHours } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      throw workflowShareCreateErrorToAppError(error);
+    }
+
+    const acceptLanguage = Array.isArray(request.headers["accept-language"])
+      ? request.headers["accept-language"][0]
+      : request.headers["accept-language"];
+    const locale = localeFromAcceptLanguage(typeof acceptLanguage === "string" ? acceptLanguage : undefined);
+    const inviteUrl = new URL(`/${locale}/workflow-share/${encodeURIComponent(invitation.token)}`, WEB_BASE_URL).toString();
+
+    return reply.status(201).send({ invitation, inviteUrl });
+  });
+
+  server.get("/v1/orgs/:orgId/workflows/:workflowId/shares", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string };
+    if (!params.orgId || !params.workflowId) {
+      throw badRequest("Missing orgId or workflowId");
+    }
+
+    const queryParsed = listWorkflowSharesQuerySchema.safeParse(request.query ?? {});
+    if (!queryParsed.success) {
+      throw badRequest("Invalid list workflow shares query", queryParsed.error.flatten());
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to list workflow shares");
+    }
+
+    const workflow = await store.getWorkflowById({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+    });
+    if (!workflow) {
+      throw notFound("Workflow not found");
+    }
+
+    const sharesPromise = store.listWorkflowShares({
+      organizationId: orgContext.organizationId,
+      workflowId: workflow.id,
+      actorUserId: auth.userId,
+      includeRevoked: queryParsed.data.includeRevoked ?? false,
+      ...(queryParsed.data.limit !== undefined ? { limit: queryParsed.data.limit } : {}),
+    });
+    const invitationsPromise = store.listWorkflowShareInvitations({
+      organizationId: orgContext.organizationId,
+      workflowId: workflow.id,
+      actorUserId: auth.userId,
+      status: "pending",
+      ...(queryParsed.data.limit !== undefined ? { limit: queryParsed.data.limit } : {}),
+    });
+    const [shares, invitations] = await Promise.all([sharesPromise, invitationsPromise]);
+
+    return { shares, invitations };
+  });
+
+  server.delete("/v1/orgs/:orgId/workflows/:workflowId/shares/:shareId", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string; workflowId?: string; shareId?: string };
+    if (!params.orgId || !params.workflowId || !params.shareId) {
+      throw badRequest("Missing orgId, workflowId, or shareId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Role is not allowed to revoke workflow shares");
+    }
+
+    const revoked = await store.revokeWorkflowShare({
+      organizationId: orgContext.organizationId,
+      workflowId: params.workflowId,
+      actorUserId: auth.userId,
+      shareId: params.shareId,
+    });
+    if (!revoked) {
+      throw notFound("Workflow share not found");
+    }
+    return { share: revoked };
+  });
+
   server.get("/v1/orgs/:orgId/workflows/:workflowId/revisions", async (request) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string; workflowId?: string };
@@ -6908,6 +7102,185 @@ export async function buildServer(input?: {
       );
       throw mapped;
     }
+  });
+
+  server.post("/v1/workflow-shares/invitations/:token/accept", async (request) => {
+    const auth = requireAuth(request);
+    const token = (request.params as { token?: string }).token;
+    if (!token) {
+      throw badRequest("Missing workflow share invitation token");
+    }
+
+    const tokenContext = parseWorkflowShareInvitationTokenContext(token);
+    if (!tokenContext) {
+      throw badRequest("Invalid workflow share invitation token");
+    }
+
+    try {
+      const result = await store.acceptWorkflowShareInvitation({
+        organizationId: tokenContext.organizationId,
+        token,
+        userId: auth.userId,
+        email: auth.email,
+      });
+      return {
+        invitation: result.invitation,
+        share: result.share,
+        workflow: {
+          id: result.workflow.id,
+          name: result.workflow.name,
+          status: result.workflow.status,
+        },
+      };
+    } catch (error) {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      throw workflowShareInvitationErrorToAppError(error);
+    }
+  });
+
+  server.get("/v1/workflow-shares/:shareId", async (request) => {
+    const auth = requireAuth(request);
+    const shareId = (request.params as { shareId?: string }).shareId;
+    if (!shareId) {
+      throw badRequest("Missing shareId");
+    }
+
+    const shared = await store.getSharedWorkflowByShareId({ shareId, userId: auth.userId });
+    if (!shared) {
+      throw notFound("Workflow share not found");
+    }
+    return shared;
+  });
+
+  server.post("/v1/workflow-shares/:shareId/runs", async (request, reply) => {
+    const auth = requireAuth(request);
+    const shareId = (request.params as { shareId?: string }).shareId;
+    if (!shareId) {
+      throw badRequest("Missing shareId");
+    }
+
+    const parsed = createWorkflowRunSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid workflow run payload", parsed.error.flatten());
+    }
+
+    const shared = await store.getSharedWorkflowByShareId({ shareId, userId: auth.userId });
+    if (!shared) {
+      throw notFound("Workflow share not found");
+    }
+    if (shared.share.accessRole !== "runner") {
+      throw forbidden("Workflow share role is not allowed to run");
+    }
+    if (shared.workflow.status !== "published") {
+      throw conflict("Workflow must be published before runs can be created");
+    }
+
+    const run = await store.createWorkflowRun({
+      organizationId: shared.workflow.organizationId,
+      workflowId: shared.workflow.id,
+      triggerType: "manual",
+      requestedByUserId: auth.userId,
+      input: parsed.data.input,
+      triggerSource: "api.workflow_share",
+    });
+
+    try {
+      await queueProducer.enqueueWorkflowRun({
+        payload: {
+          runId: run.id,
+          organizationId: run.organizationId,
+          workflowId: run.workflowId,
+          requestedByUserId: run.requestedByUserId,
+        },
+        maxAttempts: run.maxAttempts,
+      });
+    } catch (error) {
+      await store.deleteQueuedWorkflowRun({
+        organizationId: run.organizationId,
+        workflowId: run.workflowId,
+        runId: run.id,
+        actorUserId: auth.userId,
+      });
+      throw queueUnavailable();
+    }
+
+    return reply.status(201).send({ run });
+  });
+
+  server.get("/v1/workflow-shares/:shareId/runs", async (request) => {
+    const auth = requireAuth(request);
+    const shareId = (request.params as { shareId?: string }).shareId;
+    if (!shareId) {
+      throw badRequest("Missing shareId");
+    }
+
+    const parsed = listWorkflowRunsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid list runs query", parsed.error.flatten());
+    }
+    const cursor = parsed.data.cursor
+      ? decodeCursor<{ createdAt: string; id: string }>(parsed.data.cursor)
+      : null;
+    const normalizedCursor =
+      cursor && typeof cursor === "object" && "createdAt" in cursor && "id" in cursor
+        ? (cursor as { createdAt: string; id: string })
+        : null;
+
+    const result = await store.listWorkflowRunsByShare({
+      shareId,
+      userId: auth.userId,
+      limit: parsed.data.limit ?? 50,
+      cursor: normalizedCursor,
+    });
+
+    return {
+      runs: result.runs,
+      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
+    };
+  });
+
+  server.get("/v1/workflow-shares/:shareId/runs/:runId/events", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { shareId?: string; runId?: string };
+    if (!params.shareId || !params.runId) {
+      throw badRequest("Missing shareId or runId");
+    }
+
+    const parsed = listWorkflowRunEventsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid list run events query", parsed.error.flatten());
+    }
+    const cursor = parsed.data.cursor
+      ? decodeCursor<{ createdAt: string; id: string }>(parsed.data.cursor)
+      : null;
+    const normalizedCursor =
+      cursor && typeof cursor === "object" && "createdAt" in cursor && "id" in cursor
+        ? (cursor as { createdAt: string; id: string })
+        : null;
+
+    const run = await store.getWorkflowRunByIdForShare({
+      shareId: params.shareId,
+      userId: auth.userId,
+      runId: params.runId,
+    });
+    if (!run) {
+      throw notFound("Workflow run not found");
+    }
+
+    const result = await store.listWorkflowRunEventsByShare({
+      shareId: params.shareId,
+      userId: auth.userId,
+      runId: params.runId,
+      limit: parsed.data.limit ?? 200,
+      cursor: normalizedCursor,
+    });
+
+    return {
+      events: result.events,
+      nextCursor: result.nextCursor ? encodeCursor(result.nextCursor) : null,
+    };
   });
 
   server.get("/healthz", async () => ({ ok: true }));

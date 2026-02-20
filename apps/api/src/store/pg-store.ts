@@ -4,6 +4,18 @@ import {
   createDb,
   createPool,
   createInvitation,
+  createWorkflowShareInvitation as dbCreateWorkflowShareInvitation,
+  listWorkflowShareInvitations as dbListWorkflowShareInvitations,
+  getWorkflowShareInvitationByToken as dbGetWorkflowShareInvitationByToken,
+  markWorkflowShareInvitationAccepted as dbMarkWorkflowShareInvitationAccepted,
+  revokeActiveWorkflowSharesForUser as dbRevokeActiveWorkflowSharesForUser,
+  createWorkflowShare as dbCreateWorkflowShare,
+  listWorkflowSharesByWorkflow as dbListWorkflowSharesByWorkflow,
+  revokeWorkflowShare as dbRevokeWorkflowShare,
+  getSharedWorkflowByShareForUser as dbGetSharedWorkflowByShareForUser,
+  listWorkflowRunsForShareUser as dbListWorkflowRunsForShareUser,
+  getWorkflowRunByIdForShareUser as dbGetWorkflowRunByIdForShareUser,
+  listWorkflowRunEventsForShareUser as dbListWorkflowRunEventsForShareUser,
   createOrganizationWithOwner,
   createMembershipIfNotExists,
   createUser,
@@ -162,6 +174,8 @@ import type {
   UserOrgSummaryRecord,
   WorkflowApprovalRequestRecord,
   WorkflowRunRecord,
+  WorkflowShareInvitationRecord,
+  WorkflowShareRecord,
   WorkflowTriggerSubscriptionRecord,
 } from "../types.js";
 
@@ -270,6 +284,38 @@ export class PgAppStore implements AppStore {
       createdAt: toIso(row.createdAt),
       startedAt: row.startedAt ? toIso(row.startedAt) : null,
       finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+    };
+  }
+
+  private toWorkflowShareInvitationRecord(row: any): WorkflowShareInvitationRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      email: row.email,
+      accessRole: row.accessRole as "runner",
+      token: row.token,
+      status: row.status as "pending" | "accepted" | "revoked" | "expired",
+      invitedByUserId: row.invitedByUserId,
+      acceptedByUserId: row.acceptedByUserId ?? null,
+      expiresAt: toIso(row.expiresAt),
+      acceptedAt: row.acceptedAt ? toIso(row.acceptedAt) : null,
+      createdAt: toIso(row.createdAt),
+    };
+  }
+
+  private toWorkflowShareRecord(row: any): WorkflowShareRecord {
+    return {
+      id: row.id,
+      organizationId: row.organizationId,
+      workflowId: row.workflowId,
+      userId: row.userId,
+      accessRole: row.accessRole as "runner",
+      sourceInvitationId: row.sourceInvitationId ?? null,
+      createdByUserId: row.createdByUserId,
+      revokedAt: row.revokedAt ? toIso(row.revokedAt) : null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
     };
   }
 
@@ -991,6 +1037,294 @@ export class PgAppStore implements AppStore {
     });
   }
 
+  async createWorkflowShareInvitation(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    email: string;
+    ttlHours?: number;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCreateWorkflowShareInvitation(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          invitedByUserId: input.actorUserId,
+          email: input.email,
+          accessRole: "runner",
+          ...(input.ttlHours !== undefined ? { ttlHours: input.ttlHours } : {}),
+        })
+    );
+    return this.toWorkflowShareInvitationRecord(row);
+  }
+
+  async listWorkflowShareInvitations(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    status?: "pending" | "accepted" | "revoked" | "expired";
+    limit?: number;
+  }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowShareInvitations(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((row) => this.toWorkflowShareInvitationRecord(row));
+  }
+
+  async getWorkflowShareInvitationByToken(input: {
+    organizationId: string;
+    token: string;
+    actorUserId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbGetWorkflowShareInvitationByToken(db, {
+          organizationId: input.organizationId,
+          token: input.token,
+        })
+    );
+    return row ? this.toWorkflowShareInvitationRecord(row) : null;
+  }
+
+  async acceptWorkflowShareInvitation(input: {
+    organizationId: string;
+    token: string;
+    userId: string;
+    email: string;
+  }) {
+    return this.withOrgContext({ userId: input.userId, organizationId: input.organizationId }, async (db) => {
+      const invitation = await dbGetWorkflowShareInvitationByToken(db, {
+        organizationId: input.organizationId,
+        token: input.token,
+      });
+      if (!invitation) {
+        throw new Error("WORKFLOW_SHARE_INVITATION_NOT_FOUND");
+      }
+      if (invitation.email.toLowerCase() !== input.email.toLowerCase()) {
+        throw new Error("WORKFLOW_SHARE_INVITATION_EMAIL_MISMATCH");
+      }
+      if (invitation.expiresAt.getTime() <= Date.now()) {
+        throw new Error("WORKFLOW_SHARE_INVITATION_EXPIRED");
+      }
+      if (invitation.status !== "pending") {
+        throw new Error("WORKFLOW_SHARE_INVITATION_NOT_PENDING");
+      }
+
+      const workflow = await dbGetWorkflowById(db, {
+        organizationId: invitation.organizationId,
+        workflowId: invitation.workflowId,
+      });
+      if (!workflow) {
+        throw new Error("WORKFLOW_NOT_FOUND");
+      }
+
+      const acceptedInvitation = await dbMarkWorkflowShareInvitationAccepted(db, {
+        organizationId: invitation.organizationId,
+        invitationId: invitation.id,
+        acceptedByUserId: input.userId,
+      });
+      if (!acceptedInvitation) {
+        throw new Error("WORKFLOW_SHARE_INVITATION_NOT_PENDING");
+      }
+
+      await dbRevokeActiveWorkflowSharesForUser(db, {
+        organizationId: invitation.organizationId,
+        workflowId: invitation.workflowId,
+        userId: input.userId,
+      });
+
+      const share = await dbCreateWorkflowShare(db, {
+        organizationId: invitation.organizationId,
+        workflowId: invitation.workflowId,
+        userId: input.userId,
+        accessRole: "runner",
+        sourceInvitationId: invitation.id,
+        createdByUserId: input.userId,
+      });
+
+      return {
+        invitation: this.toWorkflowShareInvitationRecord(acceptedInvitation),
+        share: this.toWorkflowShareRecord(share),
+        workflow: {
+          id: workflow.id,
+          organizationId: workflow.organizationId,
+          familyId: (workflow as any).familyId,
+          revision: (workflow as any).revision,
+          sourceWorkflowId: ((workflow as any).sourceWorkflowId ?? null) as string | null,
+          name: workflow.name,
+          status: workflow.status as "draft" | "published",
+          version: workflow.version,
+          dsl: workflow.dsl,
+          editorState: (workflow as any).editorState ?? null,
+          createdByUserId: workflow.createdByUserId,
+          publishedAt: workflow.publishedAt ? toIso(workflow.publishedAt) : null,
+          createdAt: toIso(workflow.createdAt),
+          updatedAt: toIso(workflow.updatedAt),
+        },
+      };
+    });
+  }
+
+  async listWorkflowShares(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    includeRevoked?: boolean;
+    limit?: number;
+  }) {
+    const rows = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbListWorkflowSharesByWorkflow(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          ...(input.includeRevoked !== undefined ? { includeRevoked: input.includeRevoked } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        })
+    );
+    return rows.map((row) => this.toWorkflowShareRecord(row));
+  }
+
+  async revokeWorkflowShare(input: {
+    organizationId: string;
+    workflowId: string;
+    actorUserId: string;
+    shareId: string;
+  }) {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbRevokeWorkflowShare(db, {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          shareId: input.shareId,
+        })
+    );
+    if (!row) {
+      return null;
+    }
+    return this.toWorkflowShareRecord(row);
+  }
+
+  async getSharedWorkflowByShareId(input: { shareId: string; userId: string }) {
+    const row = await this.withPublicContext({ userId: input.userId }, async (db) =>
+      dbGetSharedWorkflowByShareForUser(db, { shareId: input.shareId, userId: input.userId })
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      share: this.toWorkflowShareRecord(row.share),
+      workflow: {
+        id: row.workflow.id,
+        organizationId: row.workflow.organizationId,
+        familyId: (row.workflow as any).familyId,
+        revision: (row.workflow as any).revision,
+        sourceWorkflowId: ((row.workflow as any).sourceWorkflowId ?? null) as string | null,
+        name: row.workflow.name,
+        status: row.workflow.status as "draft" | "published",
+        version: row.workflow.version,
+        dsl: row.workflow.dsl,
+        editorState: (row.workflow as any).editorState ?? null,
+        createdByUserId: row.workflow.createdByUserId,
+        publishedAt: row.workflow.publishedAt ? toIso(row.workflow.publishedAt) : null,
+        createdAt: toIso(row.workflow.createdAt),
+        updatedAt: toIso(row.workflow.updatedAt),
+      },
+    };
+  }
+
+  async listWorkflowRunsByShare(input: {
+    shareId: string;
+    userId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }) {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+    const result = await this.withPublicContext({ userId: input.userId }, async (db) =>
+      dbListWorkflowRunsForShareUser(db, {
+        shareId: input.shareId,
+        userId: input.userId,
+        limit: input.limit,
+        cursor,
+      })
+    );
+    return {
+      runs: result.rows.map((row) => this.toWorkflowRunRecord(row)),
+      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
+    };
+  }
+
+  async getWorkflowRunByIdForShare(input: {
+    shareId: string;
+    userId: string;
+    runId: string;
+  }) {
+    const row = await this.withPublicContext({ userId: input.userId }, async (db) =>
+      dbGetWorkflowRunByIdForShareUser(db, {
+        shareId: input.shareId,
+        userId: input.userId,
+        runId: input.runId,
+      })
+    );
+    return row ? this.toWorkflowRunRecord(row) : null;
+  }
+
+  async listWorkflowRunEventsByShare(input: {
+    shareId: string;
+    userId: string;
+    runId: string;
+    limit: number;
+    cursor?: { createdAt: string; id: string } | null;
+  }) {
+    const cursor = input.cursor
+      ? {
+          createdAt: new Date(input.cursor.createdAt),
+          id: input.cursor.id,
+        }
+      : null;
+    const result = await this.withPublicContext({ userId: input.userId }, async (db) =>
+      dbListWorkflowRunEventsForShareUser(db, {
+        shareId: input.shareId,
+        userId: input.userId,
+        runId: input.runId,
+        limit: input.limit,
+        cursor,
+      })
+    );
+    return {
+      events: result.rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organizationId,
+        workflowId: row.workflowId,
+        runId: row.runId,
+        attemptCount: row.attemptCount,
+        eventType: row.eventType,
+        nodeId: row.nodeId ?? null,
+        nodeType: row.nodeType ?? null,
+        level: row.level as "info" | "warn" | "error",
+        message: row.message ?? null,
+        payload: row.payload,
+        createdAt: toIso(row.createdAt),
+      })),
+      nextCursor: result.nextCursor ? { createdAt: toIso(result.nextCursor.createdAt), id: result.nextCursor.id } : null,
+    };
+  }
+
   async updateMembershipRole(input: {
     organizationId: string;
     actorUserId: string;
@@ -1537,11 +1871,20 @@ export class PgAppStore implements AppStore {
   }) {
     const row = await this.withOrgContext(
       { userId: input.requestedByUserId, organizationId: input.organizationId },
-      async (db) =>
-        dbCreateWorkflowRun(db, {
-          ...input,
+      async (db) => {
+        const createInput: Parameters<typeof dbCreateWorkflowRun>[1] = {
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          triggerType: input.triggerType,
+          requestedByUserId: input.requestedByUserId,
+          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(input.maxAttempts !== undefined ? { maxAttempts: input.maxAttempts } : {}),
+          ...(input.triggerKey !== undefined ? { triggerKey: input.triggerKey } : {}),
+          ...(input.triggerSource !== undefined ? { triggerSource: input.triggerSource } : {}),
           ...(input.triggeredAt ? { triggeredAt: new Date(input.triggeredAt) } : {}),
-        })
+        };
+        return dbCreateWorkflowRun(db, createInput);
+      }
     );
     return this.toWorkflowRunRecord(row);
   }

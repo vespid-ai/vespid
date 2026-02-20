@@ -87,6 +87,44 @@ describe("workflow dsl", () => {
     expect(parsed.nodes[0]?.type).toBe("agent.run");
   });
 
+  it("accepts agent.run team configuration", () => {
+    const parsed = workflowDslSchema.parse({
+      version: "v2",
+      trigger: { type: "trigger.manual" },
+      nodes: [
+        {
+          id: "n1",
+          type: "agent.run",
+          config: {
+            engine: { id: "gateway.codex.v2", model: "gpt-5-codex" },
+            execution: { mode: "gateway", selector: { pool: "byon" } },
+            prompt: { instructions: "Lead and delegate." },
+            tools: { allow: ["team.delegate", "team.map"], execution: "cloud" },
+            limits: { maxTurns: 8, maxToolCalls: 20, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
+            output: { mode: "text" },
+            team: {
+              mode: "supervisor",
+              maxParallel: 2,
+              leadMode: "delegate_only",
+              teammates: [
+                {
+                  id: "ux",
+                  llm: { model: "gpt-5.3-codex" },
+                  prompt: { instructions: "Review UX." },
+                  tools: { allow: [], execution: "cloud" },
+                  limits: { maxTurns: 4, maxToolCalls: 8, timeoutMs: 60_000, maxOutputChars: 50_000, maxRuntimeChars: 200_000 },
+                  output: { mode: "text" },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.nodes[0]?.type).toBe("agent.run");
+  });
+
   it("accepts supported gateway engine ids", () => {
     const parsed = workflowDslSchema.parse({
       version: "v2",

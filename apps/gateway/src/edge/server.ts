@@ -782,10 +782,20 @@ export async function buildGatewayEdgeServer(input?: {
       return reply.status(400).send({ code: "BAD_REQUEST", message: "Invalid requestId" });
     }
     const result = await resultsStore.get(requestId);
-    if (!result) {
+    if (result) {
+      return reply.status(200).send(result);
+    }
+    // Fallback: direct reply-key reads allow continuation polling to recover
+    // when async aggregation has not persisted into resultsStore yet.
+    const rawReply = await redis.get(replyKey(requestId));
+    if (!rawReply) {
       return reply.status(404).send({ code: "RESULT_NOT_READY", message: "Result not ready" });
     }
-    return reply.status(200).send(result);
+    const parsedReply = safeJsonParse(rawReply);
+    if (!parsedReply || typeof parsedReply !== "object") {
+      return reply.status(404).send({ code: "RESULT_NOT_READY", message: "Result not ready" });
+    }
+    return reply.status(200).send(parsedReply);
   });
 
   server.get("/internal/v1/executors/routes", async (request, reply) => {

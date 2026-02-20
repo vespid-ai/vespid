@@ -113,8 +113,17 @@ test.describe("workflow model compact UX", () => {
     await mockWorkflowApis(page);
     await page.goto("/en/workflows/wf_graph/graph");
 
+    const rightPanel = page.getByTestId("workflow-graph-right-panel");
+    await expect(rightPanel).toHaveAttribute("data-state", "collapsed");
+    await page.getByTestId("workflow-graph-right-panel-toggle").click();
+    await expect(rightPanel).toHaveAttribute("data-state", "expanded");
+
     await page.getByRole("button", { name: "Show" }).click();
     await expect(page.getByTestId("workflow-graph-bulk-agent-llm-compact")).toBeVisible();
+
+    await expect(page.getByTestId("workflow-graph-auto-layout")).toBeVisible();
+    await page.getByTestId("workflow-graph-auto-layout").click();
+    await expect(page.getByTestId("workflow-graph-fullscreen-toggle")).toBeVisible();
 
     const bulkTeammateChip = page.getByTestId("workflow-graph-bulk-teammate-model");
     await expect(bulkTeammateChip).toBeVisible();

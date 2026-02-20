@@ -80,6 +80,12 @@ type AgentNodeForm = {
   jsonSchema: string;
 };
 
+function providerIdToEngineId(providerId: string): "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2" {
+  if (providerId === "anthropic") return "gateway.claude.v2";
+  if (providerId === "opencode") return "gateway.opencode.v2";
+  return "gateway.codex.v2";
+}
+
 function defaultTeammate(index: number): TeammateForm {
   const id = `teammate-${index + 1}`;
   return {
@@ -175,15 +181,16 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
   const nodes: Array<Record<string, unknown>> = params.nodes.map((node) => {
     const toolAllowPolicy: string[] = [];
     if (node.toolGithubIssueCreate) {
-      toolAllowPolicy.push("connector.github.issue.create");
+      toolAllowPolicy.push("connector.action");
     }
     if (node.toolShellRun) {
       toolAllowPolicy.push("shell.run");
     }
     if (node.teamEnabled) {
+      toolAllowPolicy.push("team.delegate", "team.map");
       for (const teammate of node.teammates) {
         if (teammate.toolGithubIssueCreate) {
-          toolAllowPolicy.push("connector.github.issue.create");
+          toolAllowPolicy.push("connector.action");
         }
       }
     }
@@ -216,9 +223,11 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
     if (node.toolGithubIssueCreate) {
       toolHints.push(
         [
-          "If you need to create a GitHub issue, call toolId connector.github.issue.create with input:",
+          "If you need to create a GitHub issue, call toolId connector.action with input:",
           JSON.stringify(
             {
+              connectorId: "github",
+              actionId: "issue.create",
               input: { repo: node.githubRepo, title: node.githubTitle, body: node.githubBody },
             },
             null,
@@ -264,16 +273,18 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
         ? node.teammates.map((t) => {
             const teammateAllow: string[] = [];
             if (t.toolGithubIssueCreate) {
-              teammateAllow.push("connector.github.issue.create");
+              teammateAllow.push("connector.action");
             }
 
             const teammateToolHints: string[] = [];
             if (t.toolGithubIssueCreate) {
               teammateToolHints.push(
                 [
-                  "If you need to create a GitHub issue, call toolId connector.github.issue.create with input:",
+                  "If you need to create a GitHub issue, call toolId connector.action with input:",
                   JSON.stringify(
                     {
+                      connectorId: "github",
+                      actionId: "issue.create",
                       input: { repo: node.githubRepo, title: node.githubTitle, body: node.githubBody },
                     },
                     null,
@@ -313,7 +324,7 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
               limits: {
                 maxTurns: 6,
                 maxToolCalls: 12,
-                timeoutMs: 60_000,
+                timeoutMs: 300_000,
                 maxOutputChars: 50_000,
                 maxRuntimeChars: 200_000,
               },
@@ -329,13 +340,14 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
       id: node.id,
       type: "agent.run",
       config: {
-        llm: {
-          provider: effectiveLlm.providerId,
+        engine: {
+          id: providerIdToEngineId(effectiveLlm.providerId),
           model: effectiveLlm.modelId,
-          auth: {
-            ...(effectiveLlm.secretId ? { secretId: effectiveLlm.secretId } : {}),
-            fallbackToEnv: true,
-          },
+          ...(effectiveLlm.secretId ? { auth: { secretId: effectiveLlm.secretId } } : {}),
+        },
+        execution: {
+          mode: "gateway",
+          selector: { pool: "byon" },
         },
         prompt: {
           ...(node.system.trim().length > 0 ? { system: node.system } : {}),
@@ -344,7 +356,7 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
         },
         tools: {
           allow: toolAllow,
-          execution: node.runToolsOnNodeAgent ? "node" : "cloud",
+          execution: node.runToolsOnNodeAgent ? "executor" : "cloud",
           ...(node.githubSecretId.trim().length > 0
             ? { authDefaults: { connectors: { github: { secretId: node.githubSecretId.trim() } } } }
             : {}),
@@ -352,7 +364,7 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
         limits: {
           maxTurns: 8,
           maxToolCalls: 20,
-          timeoutMs: 60_000,
+          timeoutMs: 300_000,
           maxOutputChars: 50_000,
           maxRuntimeChars: 200_000,
         },
@@ -451,9 +463,11 @@ export default function WorkflowsPage() {
     if (defaultLlmInitRef.current) return;
     const defaults = (settingsQuery.data?.settings?.llm?.defaults?.primary as any) ?? null;
     if (!defaults || typeof defaults !== "object") return;
+    const normalizedProvider =
+      typeof defaults.provider === "string" ? (defaults.provider === "openai-codex" ? "openai" : defaults.provider) : null;
     setDefaultAgentLlm((prev) => ({
       ...prev,
-      ...(typeof defaults.provider === "string" ? { providerId: defaults.provider } : {}),
+      ...(normalizedProvider ? { providerId: normalizedProvider as LlmConfigValue["providerId"] } : {}),
       ...(typeof defaults.model === "string" ? { modelId: defaults.model } : {}),
       ...(typeof defaults.secretId === "string" ? { secretId: defaults.secretId } : {}),
     }));
@@ -673,14 +687,18 @@ export default function WorkflowsPage() {
       return;
     }
 
-    const payload = await createWorkflow.mutateAsync({ name: workflowName, dsl: dslPreview });
-    const id = payload.workflow.id;
-    addRecentWorkflowId(id);
-    setRecent(getRecentWorkflowIds());
-    toast.success(t("workflows.toast.created"));
-    setCreateSource("blank");
-    setActiveTemplateId(null);
-    router.push(`/${locale}/workflows/${id}/graph?source=${source === "template" ? "template" : "create"}`);
+    try {
+      const payload = await createWorkflow.mutateAsync({ name: workflowName, dsl: dslPreview });
+      const id = payload.workflow.id;
+      addRecentWorkflowId(id);
+      setRecent(getRecentWorkflowIds());
+      toast.success(t("workflows.toast.created"));
+      setCreateSource("blank");
+      setActiveTemplateId(null);
+      router.push(`/${locale}/workflows/${id}/graph?source=${source === "template" ? "template" : "create"}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("common.unknownError"));
+    }
   }
 
   function openById(id: string) {

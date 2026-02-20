@@ -32,6 +32,7 @@ import { useSession as useAuthSession } from "../../../../../../../lib/hooks/use
 import { useRun, useRunEvents, type WorkflowRunEvent } from "../../../../../../../lib/hooks/use-workflows";
 import { addRecentRunId } from "../../../../../../../lib/recents";
 import { groupEventsByAttempt } from "../../../../../../../lib/run-events";
+import { findPendingRemoteDispatch } from "../../../../../../../lib/run-pending-remote";
 import { cn } from "../../../../../../../lib/cn";
 import { isUnauthorizedError } from "../../../../../../../lib/api";
 
@@ -52,6 +53,15 @@ function eventCreatedAt(event: Record<string, unknown>): string {
   const value = typeof event.createdAt === "string" ? event.createdAt : null;
   const legacy = typeof event.created_at === "string" ? event.created_at : null;
   return value ?? legacy ?? "";
+}
+
+function eventRequestId(event: Record<string, unknown>): string | null {
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const requestId = (payload as Record<string, unknown>).requestId;
+  return typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
 }
 
 function statusVariant(status: string): "ok" | "warn" | "danger" | "neutral" | "accent" {
@@ -338,6 +348,10 @@ export default function RunReplayPage() {
 
   const run = runQuery.data?.run as any;
   const dur = durationMs(run);
+  const pendingRemote = useMemo(
+    () => findPendingRemoteDispatch(events, run?.status, Date.now()),
+    [events, eventsQuery.dataUpdatedAt, run?.status]
+  );
 
   const suggestedPins = useMemo(() => {
     if (!selectedEvent) return [];
@@ -539,6 +553,32 @@ export default function RunReplayPage() {
         </div>
       </div>
 
+      {pendingRemote ? (
+        <div
+          className="grid gap-2 rounded-[var(--radius-md)] border border-accent/35 bg-accent/10 p-3 shadow-elev1"
+          data-testid="run-replay-pending-remote-status"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-text">{t("runs.pendingRemote.title")}</div>
+            <Badge variant="accent">{t("runs.pendingRemote.badge")}</Badge>
+          </div>
+          <div className="text-sm text-muted">{t("runs.pendingRemote.description")}</div>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+            <span>{t("runs.pendingRemote.node", { nodeId: pendingRemote.nodeId })}</span>
+            {pendingRemote.kind ? <span>{t("runs.pendingRemote.kind", { kind: pendingRemote.kind })}</span> : null}
+            {pendingRemote.elapsedMs !== null ? (
+              <span>{t("runs.pendingRemote.elapsed", { duration: formatMs(pendingRemote.elapsedMs) })}</span>
+            ) : null}
+          </div>
+          {pendingRemote.requestId ? (
+            <div className="break-all font-mono text-xs text-text">
+              {t("runs.pendingRemote.request", { requestId: pendingRemote.requestId })}
+            </div>
+          ) : null}
+          <div className="text-xs text-muted">{t("runs.pendingRemote.hint")}</div>
+        </div>
+      ) : null}
+
       <div className="rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/40 shadow-elev2">
         <PanelGroup orientation="horizontal" className="h-[calc(100dvh-220px)] min-h-[560px]">
           <Panel defaultSize={28} minSize={18}>
@@ -628,7 +668,14 @@ export default function RunReplayPage() {
                               const kind = eventKind(event as any);
                               const node = eventNodeId(event as any);
                               const when = eventCreatedAt(event as any);
+                              const requestId = eventRequestId(event as any);
                               const active = key === selectedKey;
+                              const isPendingDispatch =
+                                kind === "node_dispatched" &&
+                                Boolean(pendingRemote) &&
+                                node === pendingRemote?.nodeId &&
+                                (!pendingRemote?.requestId || requestId === pendingRemote.requestId) &&
+                                (!pendingRemote?.eventId || pendingRemote.eventId === key);
 
                               return (
                                 <button
@@ -640,12 +687,17 @@ export default function RunReplayPage() {
                                     "transition-[box-shadow,background-color,border-color] duration-200",
                                     active
                                       ? "border-borderSubtle/60 bg-gradient-to-r from-accent/18 via-accent/10 to-transparent shadow-elev2"
+                                      : isPendingDispatch
+                                        ? "border-accent/45 bg-accent/12 shadow-elev2"
                                       : "border-borderSubtle/60 bg-panel/25 hover:bg-panel/45 hover:shadow-elev1"
                                   )}
                                 >
                                   <div className="flex items-center gap-2">
                                     <span className="truncate text-xs font-medium text-text">{node ? `${node} · ${kind}` : kind}</span>
                                   </div>
+                                  {isPendingDispatch ? (
+                                    <div className="mt-1 text-[11px] font-medium text-accent">{t("runs.pendingRemote.badge")}</div>
+                                  ) : null}
                                   <div className="mt-1 truncate text-[11px] text-muted">{when}</div>
                                 </button>
                               );

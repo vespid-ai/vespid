@@ -16,6 +16,7 @@ import { useAgentInstaller, useCreatePairingToken } from "../../../../../lib/hoo
 import { useActiveOrgId } from "../../../../../lib/hooks/use-active-org-id";
 import { useEngineAuthStatus } from "../../../../../lib/hooks/use-engine-auth-status";
 import { useMe } from "../../../../../lib/hooks/use-me";
+import { useOrgSettings } from "../../../../../lib/hooks/use-org-settings";
 import { useSession as useAuthSession } from "../../../../../lib/hooks/use-session";
 import { useArchiveSession, useRestoreSession, useSession, useSessionEvents, type AgentSessionEvent } from "../../../../../lib/hooks/use-sessions";
 
@@ -96,12 +97,25 @@ type MessageSegment =
   | { kind: "code"; value: string; language: string | null };
 
 const EXECUTOR_SETUP_ERROR_CODES = new Set(["NO_AGENT_AVAILABLE", "PINNED_AGENT_OFFLINE"]);
+const ENGINE_LABELS: Record<string, string> = {
+  "gateway.codex.v2": "Codex",
+  "gateway.claude.v2": "Claude Code",
+  "gateway.opencode.v2": "OpenCode",
+};
 const DEFAULT_NODE_AGENT_CONNECT_TEMPLATE =
   'npx -y @vespid/node-agent@latest connect --pairing-token "<pairing-token>" --api-base "<api-base>"';
 const DEFAULT_NODE_AGENT_START_COMMAND = "npx -y @vespid/node-agent@latest start";
 
 function gatewayWsBase(): string {
-  return process.env.NEXT_PUBLIC_GATEWAY_WS_BASE ?? "ws://localhost:3002";
+  const configured = process.env.NEXT_PUBLIC_GATEWAY_WS_BASE;
+  if (configured && configured.trim().length > 0) {
+    return configured;
+  }
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${protocol}://${window.location.hostname}:3002`;
+  }
+  return "ws://localhost:3002";
 }
 
 function safeJsonParse(input: string): any {
@@ -150,6 +164,66 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function resolveSessionTimeoutMs(limits: unknown): number | null {
+  const record = asRecord(limits);
+  const timeoutMs = record && typeof record.timeoutMs === "number" && Number.isFinite(record.timeoutMs) ? record.timeoutMs : null;
+  return timeoutMs && timeoutMs > 0 ? timeoutMs : null;
+}
+
+function resolveRuntimeBaseUrlForEngine(
+  settings: Record<string, unknown> | undefined,
+  engineId: string | null | undefined
+): string | null {
+  if (!engineId) {
+    return null;
+  }
+  const settingsRecord = asRecord(settings);
+  const agents = asRecord(settingsRecord?.agents);
+  const engineRuntimeDefaults = asRecord(agents?.engineRuntimeDefaults);
+  if (!engineRuntimeDefaults) {
+    return null;
+  }
+  const rec = asRecord(engineRuntimeDefaults[engineId]);
+  const baseUrl = typeof rec?.baseUrl === "string" ? rec.baseUrl.trim() : "";
+  return baseUrl.length > 0 ? baseUrl : null;
+}
+
+function pickLatestSessionError(events: AgentSessionEvent[]): { code: string; message: string } | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (!event) {
+      continue;
+    }
+    const eventType = event.eventType.toLowerCase();
+    if (event.level !== "error" && !eventType.includes("error")) {
+      continue;
+    }
+    const payload = asRecord(event.payload);
+    const code = payload && typeof payload.code === "string" ? payload.code : "SESSION_ERROR";
+    if (code === "TURN_CANCELED") {
+      continue;
+    }
+    if (EXECUTOR_SETUP_ERROR_CODES.has(code)) {
+      continue;
+    }
+    const message = payload && typeof payload.message === "string" ? payload.message : humanizeEventType(event.eventType);
+    return { code, message };
+  }
+  return null;
+}
+
+function isTimeoutSessionError(code: string, message: string): boolean {
+  const normalized = `${code} ${message}`.toUpperCase();
+  return normalized.includes("LLM_TIMEOUT") || normalized.includes("NODE_EXECUTION_TIMEOUT") || normalized.includes("TIMEOUT");
+}
+
+function resolveEngineLabel(engineId: string | null | undefined, fallback = "Model"): string {
+  if (!engineId) {
+    return fallback;
+  }
+  return ENGINE_LABELS[engineId] ?? fallback;
 }
 
 function contentToText(content: unknown): string | null {
@@ -371,6 +445,8 @@ export default function ConversationDetailPage() {
   const installerQuery = useAgentInstaller();
   const createPairingTokenMutation = useCreatePairingToken(scopedOrgId);
   const engineAuthStatusQuery = useEngineAuthStatus(scopedOrgId, { refetchIntervalMs: 10_000 });
+  const orgSettingsQuery = useOrgSettings(scopedOrgId);
+  const session = sessionQuery.data?.session ?? null;
 
   const [events, setEvents] = useState<AgentSessionEvent[]>([]);
   const [connected, setConnected] = useState(false);
@@ -489,6 +565,43 @@ export default function ConversationDetailPage() {
     return set;
   }, [events]);
 
+  const sessionTimeoutMs = useMemo(() => resolveSessionTimeoutMs(session?.limits), [session?.limits]);
+
+  const configuredRuntimeBaseUrl = useMemo(
+    () => resolveRuntimeBaseUrlForEngine(orgSettingsQuery.data?.settings, session?.engineId),
+    [orgSettingsQuery.data?.settings, session?.engineId]
+  );
+
+  const latestSessionErrorInsight = useMemo(() => {
+    const latest = pickLatestSessionError(events);
+    if (!latest) {
+      return null;
+    }
+    const isTimeout = isTimeoutSessionError(latest.code, latest.message);
+    if (!isTimeout) {
+      return {
+        code: latest.code,
+        message: latest.message,
+        title: t("sessions.errors.genericTitle"),
+        description: t("sessions.errors.genericDescription"),
+        hint: t("sessions.errors.genericHint"),
+        showBaseUrl: false,
+        showTimeout: false,
+      };
+    }
+    return {
+      code: latest.code,
+      message: latest.message,
+      title: t("sessions.errors.timeoutTitle"),
+      description: t("sessions.errors.timeoutDescription", {
+        engine: resolveEngineLabel(session?.engineId, t("sessions.fields.engine")),
+      }),
+      hint: t("sessions.errors.timeoutHint"),
+      showBaseUrl: true,
+      showTimeout: true,
+    };
+  }, [events, session?.engineId, t]);
+
   const hasOnlineExecutors = useMemo(() => {
     const engines = engineAuthStatusQuery.data?.engines;
     if (!engines) {
@@ -596,7 +709,11 @@ export default function ConversationDetailPage() {
           setSessionErrorCodes((prev) => (prev.includes(msg.code) ? prev : [...prev, msg.code]));
           setIsGenerating(false);
           if (msg.code !== "TURN_CANCELED") {
-            toast.error(`${msg.code}: ${msg.message}`);
+            if (isTimeoutSessionError(msg.code, msg.message)) {
+              toast.error(t("sessions.errors.timeoutToast"));
+            } else {
+              toast.error(`${msg.code}: ${msg.message}`);
+            }
           }
           return;
         }
@@ -779,7 +896,6 @@ export default function ConversationDetailPage() {
     }
   }
 
-  const session = sessionQuery.data?.session ?? null;
   const headerTitle = session?.title?.trim().length ? session.title : t("sessions.untitled");
 
   if (!authSession.isLoading && !authSession.data?.session) {
@@ -951,6 +1067,39 @@ export default function ConversationDetailPage() {
       </div>
 
       {wsError ? <div className="text-sm text-red-700">{wsError}</div> : null}
+
+      {latestSessionErrorInsight ? (
+        <section
+          className="grid gap-2 rounded-[var(--radius-lg)] border border-danger/35 bg-danger/10 p-4 shadow-elev1"
+          data-testid="conversation-session-error-insight"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold text-danger">{latestSessionErrorInsight.title}</div>
+            <div className="rounded-full border border-danger/45 px-2 py-0.5 font-mono text-[11px] text-danger">
+              {latestSessionErrorInsight.code}
+            </div>
+          </div>
+          <div className="text-sm text-text">{latestSessionErrorInsight.description}</div>
+          <div className="grid gap-1 text-xs text-muted">
+            <div>{t("sessions.errors.engineLabel", { engine: resolveEngineLabel(session.engineId, t("sessions.fields.engine")) })}</div>
+            {latestSessionErrorInsight.showTimeout && sessionTimeoutMs ? (
+              <div>{t("sessions.errors.timeoutValue", { seconds: Math.max(1, Math.round(sessionTimeoutMs / 1000)) })}</div>
+            ) : null}
+            {latestSessionErrorInsight.showBaseUrl ? (
+              <div className="break-all">
+                {t("sessions.errors.baseUrlLabel")}{" "}
+                <code className="rounded border border-borderSubtle/80 bg-surface2/70 px-1 py-0.5">
+                  {configuredRuntimeBaseUrl ?? t("sessions.errors.baseUrlDefault")}
+                </code>
+              </div>
+            ) : null}
+          </div>
+          <div className="text-xs text-muted">{latestSessionErrorInsight.hint}</div>
+          <div className="text-[11px] text-muted">
+            {t("sessions.errors.rawMessage", { message: latestSessionErrorInsight.message })}
+          </div>
+        </section>
+      ) : null}
 
       {showExecutorGuide ? (
         <section

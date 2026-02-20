@@ -9,7 +9,7 @@ import WorkflowsPage from "../app/[locale]/(app)/workflows/page";
 const mocks = vi.hoisted(() => {
   return {
     push: vi.fn(),
-    createWorkflow: vi.fn(async () => ({ workflow: { id: "wf_1" } })),
+    createWorkflow: vi.fn(async (_input: unknown) => ({ workflow: { id: "wf_1" } })),
   };
 });
 
@@ -128,6 +128,10 @@ describe("Workflows quick create", () => {
 
     await user.click(screen.getByRole("button", { name: messages.common.create }));
     await waitFor(() => expect(mocks.createWorkflow).toHaveBeenCalledTimes(1));
+    const payload = mocks.createWorkflow.mock.calls.at(0)?.[0] as any;
+    expect(payload?.dsl?.nodes?.[0]?.config?.engine?.id).toBe("gateway.codex.v2");
+    expect(payload?.dsl?.nodes?.[0]?.config?.engine?.model).toBe("gpt-5.3-codex");
+    expect(payload?.dsl?.nodes?.[0]?.config?.llm).toBeUndefined();
     expect(mocks.push).toHaveBeenCalledWith("/en/workflows/wf_1/graph?source=create");
   });
 
