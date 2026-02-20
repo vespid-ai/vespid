@@ -110,4 +110,49 @@ describe("AppShell conversation mode", () => {
 
     expect(await screen.findByText(messages.onboarding.title)).toBeInTheDocument();
   });
+
+  it("uses wide shell width for workflow deep routes", async () => {
+    routeState.pathname = "/en/workflows/wf_1/graph";
+    const first = renderShell();
+
+    await waitFor(() => {
+      const root = document.querySelector('[data-shell-width="wide"]');
+      expect(root).toBeTruthy();
+    });
+    first.unmount();
+
+    routeState.pathname = "/en/workflows/wf_1/runs/run_1";
+    renderShell();
+
+    await waitFor(() => {
+      const root = document.querySelector('[data-shell-width="wide"]');
+      expect(root).toBeTruthy();
+    });
+  });
+
+  it("uses wide shell width for list and other app routes", async () => {
+    routeState.pathname = "/en/workflows";
+    const first = renderShell();
+
+    await waitFor(() => {
+      const root = document.querySelector('[data-shell-width="wide"]');
+      expect(root).toBeTruthy();
+    });
+    first.unmount();
+
+    routeState.pathname = "/en/conversations";
+    const second = renderShell();
+    await waitFor(() => {
+      const root = document.querySelector('[data-shell-width="wide"]');
+      expect(root).toBeTruthy();
+    });
+    second.unmount();
+
+    routeState.pathname = "/en/models";
+    renderShell();
+    await waitFor(() => {
+      const root = document.querySelector('[data-shell-width="wide"]');
+      expect(root).toBeTruthy();
+    });
+  });
 });

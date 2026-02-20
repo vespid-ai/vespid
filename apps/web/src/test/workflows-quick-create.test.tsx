@@ -129,10 +129,32 @@ describe("Workflows quick create", () => {
     await user.click(screen.getByRole("button", { name: messages.common.create }));
     await waitFor(() => expect(mocks.createWorkflow).toHaveBeenCalledTimes(1));
     const payload = mocks.createWorkflow.mock.calls.at(0)?.[0] as any;
+    expect(payload?.dsl?.trigger?.type).toBe("trigger.manual");
     expect(payload?.dsl?.nodes?.[0]?.config?.engine?.id).toBe("gateway.codex.v2");
     expect(payload?.dsl?.nodes?.[0]?.config?.engine?.model).toBe("gpt-5.3-codex");
     expect(payload?.dsl?.nodes?.[0]?.config?.llm).toBeUndefined();
     expect(mocks.push).toHaveBeenCalledWith("/en/workflows/wf_1/graph?source=create");
+  });
+
+  it("supports cron trigger in quick create", async () => {
+    const user = userEvent.setup();
+    const messages = readMessages("en");
+    render(
+      <NextIntlClientProvider locale="en" messages={messages}>
+        <WorkflowsPage />
+      </NextIntlClientProvider>
+    );
+
+    await user.click(screen.getByRole("button", { name: messages.workflows.trigger.cron }));
+    const cronInput = screen.getByLabelText(messages.workflows.trigger.cronExpr);
+    await user.clear(cronInput);
+    await user.type(cronInput, "0 * * * *");
+
+    await user.click(screen.getByRole("button", { name: messages.common.create }));
+    await waitFor(() => expect(mocks.createWorkflow).toHaveBeenCalledTimes(1));
+
+    const payload = mocks.createWorkflow.mock.calls.at(0)?.[0] as any;
+    expect(payload?.dsl?.trigger).toEqual({ type: "trigger.cron", config: { cron: "0 * * * *" } });
   });
 
   it("disabled create shows a specific reason", async () => {

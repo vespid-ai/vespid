@@ -146,6 +146,15 @@ body {
 }
 
 @layer utilities {
+  .ui-selected {
+    border-color: rgb(var(--accent) / 0.9) !important;
+    background: linear-gradient(180deg, rgb(var(--accent) / 0.24), rgb(var(--accent) / 0.12));
+    color: rgb(var(--text)) !important;
+    box-shadow:
+      0 0 0 1px rgb(var(--accent) / 0.36),
+      var(--shadow-1);
+  }
+
   .grid-lines {
     background-image:
       linear-gradient(to right, rgb(var(--border-subtle) / 0.24) 1px, transparent 1px),

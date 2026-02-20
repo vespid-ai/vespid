@@ -8,6 +8,7 @@ import { isOAuthRequiredProvider } from "@vespid/shared/llm/provider-registry";
 import { toast } from "sonner";
 import { Button } from "../../../../components/ui/button";
 import { Badge } from "../../../../components/ui/badge";
+import { Chip } from "../../../../components/ui/chip";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
 import { DataTable } from "../../../../components/ui/data-table";
 import { EmptyState } from "../../../../components/ui/empty-state";
@@ -80,6 +81,17 @@ type AgentNodeForm = {
   jsonSchema: string;
 };
 
+type WorkflowTriggerType = "trigger.manual" | "trigger.cron" | "trigger.webhook" | "trigger.heartbeat";
+
+type WorkflowTriggerForm = {
+  type: WorkflowTriggerType;
+  cronExpr: string;
+  webhookToken: string;
+  heartbeatIntervalSec: number;
+  heartbeatJitterSec: number;
+  heartbeatMaxSkewSec: number;
+};
+
 function providerIdToEngineId(providerId: string): "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2" {
   if (providerId === "anthropic") return "gateway.claude.v2";
   if (providerId === "opencode") return "gateway.opencode.v2";
@@ -126,6 +138,36 @@ function defaultAgentNode(index: number, defaults?: Partial<LlmConfigValue>): Ag
     outputMode: "text",
     jsonSchema: "",
   };
+}
+
+function createWebhookToken(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(12);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes)
+      .map((value) => value.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return `wf_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function defaultWorkflowTriggerForm(): WorkflowTriggerForm {
+  return {
+    type: "trigger.manual",
+    cronExpr: "*/15 * * * *",
+    webhookToken: createWebhookToken(),
+    heartbeatIntervalSec: 300,
+    heartbeatJitterSec: 0,
+    heartbeatMaxSkewSec: 0,
+  };
+}
+
+function readWorkflowTriggerType(dsl: unknown): WorkflowTriggerType {
+  const raw = (dsl as { trigger?: { type?: string } } | null)?.trigger?.type;
+  if (raw === "trigger.cron" || raw === "trigger.webhook" || raw === "trigger.heartbeat") {
+    return raw;
+  }
+  return "trigger.manual";
 }
 
 function teammatesFromPreset(preset: "none" | "research-triad" | "build-pipeline" | "qa-swarm"): TeammateForm[] {
@@ -177,7 +219,7 @@ function teammatesFromPreset(preset: "none" | "research-triad" | "build-pipeline
   return [];
 }
 
-function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }): unknown {
+function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue; trigger: WorkflowTriggerForm }): unknown {
   const nodes: Array<Record<string, unknown>> = params.nodes.map((node) => {
     const toolAllowPolicy: string[] = [];
     if (node.toolGithubIssueCreate) {
@@ -386,9 +428,25 @@ function buildDsl(params: { nodes: AgentNodeForm[]; defaultLlm: LlmConfigValue }
     };
   });
 
+  const trigger =
+    params.trigger.type === "trigger.cron"
+      ? { type: "trigger.cron" as const, config: { cron: params.trigger.cronExpr.trim() } }
+      : params.trigger.type === "trigger.webhook"
+        ? { type: "trigger.webhook" as const, config: { token: params.trigger.webhookToken.trim() } }
+        : params.trigger.type === "trigger.heartbeat"
+          ? {
+              type: "trigger.heartbeat" as const,
+              config: {
+                intervalSec: Math.max(5, Math.floor(params.trigger.heartbeatIntervalSec || 0)),
+                jitterSec: Math.max(0, Math.floor(params.trigger.heartbeatJitterSec || 0)),
+                maxSkewSec: Math.max(0, Math.floor(params.trigger.heartbeatMaxSkewSec || 0)),
+              },
+            }
+          : { type: "trigger.manual" as const };
+
   return {
     version: "v2",
-    trigger: { type: "trigger.manual" },
+    trigger,
     nodes,
   };
 }
@@ -412,6 +470,7 @@ export default function WorkflowsPage() {
     modelId: "gpt-5.3-codex",
     secretId: null,
   });
+  const [workflowTrigger, setWorkflowTrigger] = useState<WorkflowTriggerForm>(() => defaultWorkflowTriggerForm());
   const [agentNodes, setAgentNodes] = useState<AgentNodeForm[]>(() => [defaultAgentNode(0)]);
   const [workflowAdvancedOpen, setWorkflowAdvancedOpen] = useState(false);
   const [openByIdSheetOpen, setOpenByIdSheetOpen] = useState(false);
@@ -446,11 +505,21 @@ export default function WorkflowsPage() {
           const effective = n.llmUseDefault ? defaultAgentLlm : n.llmOverride;
           return isOAuthRequiredProvider(effective.providerId) && !effective.secretId;
         });
+  const missingTriggerConfig =
+    workflowTrigger.type === "trigger.cron"
+      ? workflowTrigger.cronExpr.trim().length === 0
+      : workflowTrigger.type === "trigger.webhook"
+        ? workflowTrigger.webhookToken.trim().length === 0
+        : false;
   const missingWorkflowName = workflowName.trim().length === 0;
   const createDisabledReason = !scopedOrgId
     ? t("workflows.createDisabledReasons.orgRequired")
     : missingWorkflowName
       ? t("workflows.createDisabledReasons.workflowName")
+      : missingTriggerConfig
+        ? workflowTrigger.type === "trigger.cron"
+          ? t("workflows.createDisabledReasons.triggerCron")
+          : t("workflows.createDisabledReasons.triggerWebhook")
       : missingGithubSecret
         ? t("workflows.createDisabledReasons.githubSecret")
         : missingProviderSecret
@@ -475,7 +544,10 @@ export default function WorkflowsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsQuery.data?.settings]);
 
-  const dslPreview = useMemo(() => buildDsl({ nodes: agentNodes, defaultLlm: defaultAgentLlm }), [agentNodes, defaultAgentLlm]);
+  const dslPreview = useMemo(
+    () => buildDsl({ nodes: agentNodes, defaultLlm: defaultAgentLlm, trigger: workflowTrigger }),
+    [agentNodes, defaultAgentLlm, workflowTrigger]
+  );
 
   const workflowsLatestByFamily = useMemo(() => {
     const rows = workflowsQuery.data?.workflows ?? [];
@@ -505,6 +577,12 @@ export default function WorkflowsPage() {
   }, [workflowsQuery.data]);
 
   const workflowTableColumns = useMemo(() => {
+    const triggerLabel = (type: WorkflowTriggerType) => {
+      if (type === "trigger.cron") return t("workflows.trigger.cron");
+      if (type === "trigger.webhook") return t("workflows.trigger.webhook");
+      if (type === "trigger.heartbeat") return t("workflows.trigger.heartbeat");
+      return t("workflows.trigger.manual");
+    };
     return [
       {
         header: t("workflows.list.columns.name"),
@@ -523,6 +601,15 @@ export default function WorkflowsPage() {
           const status = String(row.original.status ?? "");
           const variant = status === "published" ? "ok" : "neutral";
           return <Badge variant={variant as any}>{status}</Badge>;
+        },
+      },
+      {
+        header: t("workflows.list.columns.trigger"),
+        id: "trigger",
+        cell: ({ row }: any) => {
+          const triggerType = readWorkflowTriggerType(row.original.dsl);
+          const variant = triggerType === "trigger.manual" ? "neutral" : "accent";
+          return <Badge variant={variant as any}>{triggerLabel(triggerType)}</Badge>;
         },
       },
       {
@@ -686,6 +773,14 @@ export default function WorkflowsPage() {
       toast.error(t("workflows.createDisabledReasons.providerSecret"));
       return;
     }
+    if (missingTriggerConfig) {
+      toast.error(
+        workflowTrigger.type === "trigger.cron"
+          ? t("workflows.createDisabledReasons.triggerCron")
+          : t("workflows.createDisabledReasons.triggerWebhook")
+      );
+      return;
+    }
 
     try {
       const payload = await createWorkflow.mutateAsync({ name: workflowName, dsl: dslPreview });
@@ -714,6 +809,9 @@ export default function WorkflowsPage() {
   }
 
   const primaryNode = agentNodes[0] ?? null;
+  const webhookTriggerPath = `/v1/triggers/webhook/${encodeURIComponent(
+    workflowTrigger.webhookToken.trim() || "replace-with-token"
+  )}`;
 
   function setPrimaryNodeInstructions(value: string) {
     setAgentNodes((prev) => {
@@ -825,6 +923,129 @@ export default function WorkflowsPage() {
             <div className="grid gap-1.5">
               <Label htmlFor="workflow-name">{t("workflows.fields.workflowName")}</Label>
               <Input id="workflow-name" value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
+            </div>
+
+            <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">
+              <div className="text-sm font-medium text-text">{t("workflows.trigger.title")}</div>
+              <div className="flex flex-wrap gap-2">
+                <Chip
+                  active={workflowTrigger.type === "trigger.manual"}
+                  onClick={() => setWorkflowTrigger((prev) => ({ ...prev, type: "trigger.manual" }))}
+                >
+                  {t("workflows.trigger.manual")}
+                </Chip>
+                <Chip
+                  active={workflowTrigger.type === "trigger.cron"}
+                  onClick={() => setWorkflowTrigger((prev) => ({ ...prev, type: "trigger.cron" }))}
+                >
+                  {t("workflows.trigger.cron")}
+                </Chip>
+                <Chip
+                  active={workflowTrigger.type === "trigger.webhook"}
+                  onClick={() => setWorkflowTrigger((prev) => ({ ...prev, type: "trigger.webhook" }))}
+                >
+                  {t("workflows.trigger.webhook")}
+                </Chip>
+                <Chip
+                  active={workflowTrigger.type === "trigger.heartbeat"}
+                  onClick={() => setWorkflowTrigger((prev) => ({ ...prev, type: "trigger.heartbeat" }))}
+                >
+                  {t("workflows.trigger.heartbeat")}
+                </Chip>
+              </div>
+
+              {workflowTrigger.type === "trigger.manual" ? (
+                <div className="text-xs text-muted">{t("workflows.trigger.manualHint")}</div>
+              ) : null}
+
+              {workflowTrigger.type === "trigger.cron" ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="workflow-trigger-cron">{t("workflows.trigger.cronExpr")}</Label>
+                  <Input
+                    id="workflow-trigger-cron"
+                    value={workflowTrigger.cronExpr}
+                    onChange={(e) => setWorkflowTrigger((prev) => ({ ...prev, cronExpr: e.target.value }))}
+                    placeholder="*/15 * * * *"
+                  />
+                  <div className="text-xs text-muted">{t("workflows.trigger.cronHint")}</div>
+                </div>
+              ) : null}
+
+              {workflowTrigger.type === "trigger.webhook" ? (
+                <div className="grid gap-2">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="workflow-trigger-webhook-token">{t("workflows.trigger.webhookToken")}</Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        id="workflow-trigger-webhook-token"
+                        value={workflowTrigger.webhookToken}
+                        onChange={(e) => setWorkflowTrigger((prev) => ({ ...prev, webhookToken: e.target.value }))}
+                        className="min-w-[220px] flex-1"
+                      />
+                      <Button
+                        variant="outline"
+                        onClick={() => setWorkflowTrigger((prev) => ({ ...prev, webhookToken: createWebhookToken() }))}
+                      >
+                        {t("workflows.trigger.generateToken")}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted">
+                    {t("workflows.trigger.webhookHint")} <span className="font-mono">{webhookTriggerPath}</span>
+                  </div>
+                </div>
+              ) : null}
+
+              {workflowTrigger.type === "trigger.heartbeat" ? (
+                <div className="grid gap-2 md:grid-cols-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="workflow-trigger-heartbeat-interval">{t("workflows.trigger.heartbeatIntervalSec")}</Label>
+                    <Input
+                      id="workflow-trigger-heartbeat-interval"
+                      type="number"
+                      min={5}
+                      value={String(workflowTrigger.heartbeatIntervalSec)}
+                      onChange={(e) =>
+                        setWorkflowTrigger((prev) => ({
+                          ...prev,
+                          heartbeatIntervalSec: Math.max(5, Number(e.target.value || 5)),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="workflow-trigger-heartbeat-jitter">{t("workflows.trigger.heartbeatJitterSec")}</Label>
+                    <Input
+                      id="workflow-trigger-heartbeat-jitter"
+                      type="number"
+                      min={0}
+                      value={String(workflowTrigger.heartbeatJitterSec)}
+                      onChange={(e) =>
+                        setWorkflowTrigger((prev) => ({
+                          ...prev,
+                          heartbeatJitterSec: Math.max(0, Number(e.target.value || 0)),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="workflow-trigger-heartbeat-skew">{t("workflows.trigger.heartbeatMaxSkewSec")}</Label>
+                    <Input
+                      id="workflow-trigger-heartbeat-skew"
+                      type="number"
+                      min={0}
+                      value={String(workflowTrigger.heartbeatMaxSkewSec)}
+                      onChange={(e) =>
+                        setWorkflowTrigger((prev) => ({
+                          ...prev,
+                          heartbeatMaxSkewSec: Math.max(0, Number(e.target.value || 0)),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="text-xs text-muted md:col-span-3">{t("workflows.trigger.heartbeatHint")}</div>
+                </div>
+              ) : null}
             </div>
 
             <div className="grid gap-2 rounded-lg border border-border bg-panel/50 p-3">

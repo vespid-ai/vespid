@@ -407,7 +407,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         ]}
       />
 
-      <div className="mx-auto min-h-dvh max-w-7xl px-3 py-3 md:px-4 md:py-4">
+      <div className="mx-auto min-h-dvh max-w-none px-3 py-3 md:px-4 md:py-4" data-shell-width="wide">
         <div
           className={cn(
             "min-h-dvh md:grid md:gap-4",

@@ -98,6 +98,44 @@ function formatMs(ms: number): string {
 }
 
 const PINNED_PATHS_STORAGE = "vespid.ui.runReplay.pins";
+const RUN_REPLAY_LAYOUT_STORAGE = "vespid.ui.run-replay-layout.v1";
+const RUN_REPLAY_PANEL_IDS = ["timeline", "details", "inspector"] as const;
+type RunReplayPanelId = (typeof RUN_REPLAY_PANEL_IDS)[number];
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function readRunReplayLayout(): Record<RunReplayPanelId, number> | undefined {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return undefined;
+  const raw = window.localStorage.getItem(RUN_REPLAY_LAYOUT_STORAGE);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const next = {} as Record<RunReplayPanelId, number>;
+    for (const panelId of RUN_REPLAY_PANEL_IDS) {
+      if (!hasOwn(parsed, panelId)) return undefined;
+      const size = (parsed as Record<string, unknown>)[panelId];
+      if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return undefined;
+      next[panelId] = size;
+    }
+    return next;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeRunReplayLayout(layout: Record<string, number>): void {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return;
+  const next = {} as Record<RunReplayPanelId, number>;
+  for (const panelId of RUN_REPLAY_PANEL_IDS) {
+    const size = layout[panelId];
+    if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return;
+    next[panelId] = size;
+  }
+  window.localStorage.setItem(RUN_REPLAY_LAYOUT_STORAGE, JSON.stringify(next));
+}
 
 function readPinnedPaths(): string[] {
   if (typeof window === "undefined" || typeof window.localStorage === "undefined") return [];
@@ -228,12 +266,17 @@ export default function RunReplayPage() {
   const [search, setSearch] = useState<string>("");
 
   const [openAttempts, setOpenAttempts] = useState<Record<string, boolean>>({});
+  const [defaultPanelLayout, setDefaultPanelLayout] = useState<Record<RunReplayPanelId, number> | undefined>(undefined);
 
   const [pinnedPaths, setPinnedPaths] = useState<string[]>([]);
   const [pinDraft, setPinDraft] = useState("");
 
   useEffect(() => {
     setPinnedPaths(readPinnedPaths());
+  }, []);
+
+  useEffect(() => {
+    setDefaultPanelLayout(readRunReplayLayout());
   }, []);
 
   useEffect(() => {
@@ -580,9 +623,14 @@ export default function RunReplayPage() {
       ) : null}
 
       <div className="rounded-[var(--radius-md)] border border-borderSubtle/60 bg-panel/40 shadow-elev2">
-        <PanelGroup orientation="horizontal" className="h-[calc(100dvh-220px)] min-h-[560px]">
-          <Panel defaultSize={28} minSize={18}>
-            <div className="h-full">
+        <PanelGroup
+          orientation="horizontal"
+          defaultLayout={defaultPanelLayout}
+          onLayoutChanged={writeRunReplayLayout}
+          className="h-[calc(100dvh-220px)] min-h-[560px]"
+        >
+          <Panel id="timeline" defaultSize={24} minSize={18}>
+            <div className="h-full min-w-0">
               <div className="flex items-center justify-between gap-2 border-b border-borderSubtle px-4 py-3 group-data-[density=compact]:py-2">
                 <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{t("runs.timeline")}</div>
                 <div className="text-xs text-muted">
@@ -714,8 +762,8 @@ export default function RunReplayPage() {
 
           <PanelResizeHandle className="w-px bg-borderSubtle transition-colors hover:bg-borderStrong" />
 
-          <Panel defaultSize={44} minSize={26}>
-            <div className="h-full">
+          <Panel id="details" defaultSize={38} minSize={24}>
+            <div className="h-full min-w-0">
               <div className="border-b border-borderSubtle px-4 py-3 group-data-[density=compact]:py-2">
                 <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{t("runs.details")}</div>
               </div>
@@ -789,21 +837,21 @@ export default function RunReplayPage() {
 
           <PanelResizeHandle className="w-px bg-borderSubtle transition-colors hover:bg-borderStrong" />
 
-          <Panel defaultSize={28} minSize={18}>
-            <div className="h-full">
+          <Panel id="inspector" defaultSize={38} minSize={30}>
+            <div className="h-full min-w-0">
               <div className="border-b border-borderSubtle px-4 py-3 group-data-[density=compact]:py-2">
                 <div className="font-[var(--font-display)] text-sm font-semibold tracking-tight">{t("runs.inspector")}</div>
               </div>
               <ScrollArea className="h-[calc(100%-52px)]">
                 <div className="p-4 group-data-[density=compact]:p-3">
-                  <Card>
+                  <Card className="min-w-0">
                     <CardHeader>
                       <CardTitle>{t("runs.trustTitle")}</CardTitle>
                     </CardHeader>
-                    <CardContent className="grid gap-3">
-                      <div className="grid gap-3">
+                    <CardContent className="grid min-w-0 gap-3">
+                      <div className="grid min-w-0 gap-3">
                         <div className="text-xs font-medium text-muted">{t("runs.sectionWhy")}</div>
-                        <div className="rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
+                        <div className="min-w-0 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                           {why ? (
                             <div className="grid gap-1 text-sm">
                               <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
@@ -820,14 +868,15 @@ export default function RunReplayPage() {
                           )}
                         </div>
 
-                        <div className="grid gap-2 md:grid-cols-2">
-                          <div>
+                        <div className="grid min-w-0 gap-3" data-testid="run-replay-io-sections">
+                          <div className="min-w-0">
                             <div className="text-xs font-medium text-muted">{t("runs.sectionInputs")}</div>
-                            <div className="mt-2 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
+                            <div className="mt-2 min-w-0 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                               {sectionInputs === undefined ? (
                                 <div className="text-sm text-muted">-</div>
                               ) : (
                                 <JsonExplorer
+                                  className="min-w-0"
                                   value={sectionInputs}
                                   pinnedPaths={pinnedPaths}
                                   onPinPath={addPinPath}
@@ -836,13 +885,14 @@ export default function RunReplayPage() {
                               )}
                             </div>
                           </div>
-                          <div>
+                          <div className="min-w-0">
                             <div className="text-xs font-medium text-muted">{t("runs.sectionOutputs")}</div>
-                            <div className="mt-2 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
+                            <div className="mt-2 min-w-0 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                               {sectionOutputs === undefined ? (
                                 <div className="text-sm text-muted">-</div>
                               ) : (
                                 <JsonExplorer
+                                  className="min-w-0"
                                   value={sectionOutputs}
                                   pinnedPaths={pinnedPaths}
                                   onPinPath={addPinPath}
@@ -853,13 +903,14 @@ export default function RunReplayPage() {
                           </div>
                         </div>
 
-                        <div>
+                        <div className="min-w-0">
                           <div className="text-xs font-medium text-muted">{t("runs.sectionErrors")}</div>
-                          <div className="mt-2 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
+                          <div className="mt-2 min-w-0 rounded-[var(--radius-md)] border border-borderSubtle bg-panel/35 p-3 shadow-elev1">
                             {sectionErrors === undefined ? (
                               <div className="text-sm text-muted">-</div>
                             ) : (
                               <JsonExplorer
+                                className="min-w-0"
                                 value={sectionErrors}
                                 pinnedPaths={pinnedPaths}
                                 onPinPath={addPinPath}

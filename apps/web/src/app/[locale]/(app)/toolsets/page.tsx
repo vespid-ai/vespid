@@ -21,7 +21,7 @@ import { CodeBlock } from "../../../../components/ui/code-block";
 import { ConfirmButton } from "../../../../components/app/confirm-button";
 import { AdvancedSection } from "../../../../components/app/advanced-section";
 import { AuthRequiredState } from "../../../../components/app/auth-required-state";
-import { LlmConfigField } from "../../../../components/app/llm/llm-config-field";
+import { LlmCompactConfigField } from "../../../../components/app/llm/llm-compact-config-field";
 import { useActiveOrgName } from "../../../../lib/hooks/use-active-org-name";
 import { useSession as useAuthSession } from "../../../../lib/hooks/use-session";
 import { useOrgSettings, useUpdateOrgSettings } from "../../../../lib/hooks/use-org-settings";
@@ -1225,7 +1225,7 @@ export default function ToolsetsPage() {
                 <div className="mt-3 grid gap-4">
                   <div className="grid gap-1.5">
                     <Label>{t("toolsets.ai.modelLabel")}</Label>
-                    <LlmConfigField
+                    <LlmCompactConfigField
                       orgId={scopedOrgId}
                       mode="toolsetBuilder"
                       value={{ providerId: aiProvider, modelId: aiModel, secretId: aiSecretId || null } as any}
@@ -1235,6 +1235,8 @@ export default function ToolsetsPage() {
                         setAiSecretId(next.secretId ?? "");
                       }}
                       disabled={loading}
+                      advancedSectionId="toolsets-ai-model-advanced"
+                      testId="toolsets-ai-model-compact"
                     />
                   </div>
 

@@ -513,6 +513,23 @@
     "customizeAdvanced": "Customize advanced workflow",
     "advancedTitle": "Advanced workflow configuration",
     "defaultAgentModel": "Default agent model",
+    "trigger": {
+      "title": "Trigger",
+      "manual": "Manual",
+      "cron": "Schedule (cron)",
+      "webhook": "Webhook",
+      "heartbeat": "Heartbeat",
+      "manualHint": "Run this workflow manually from details, API, or shared runner view.",
+      "cronExpr": "Cron expression",
+      "cronHint": "Use standard 5-field cron in UTC. Example: */15 * * * *",
+      "webhookToken": "Webhook token",
+      "generateToken": "Generate token",
+      "webhookHint": "After publishing, send POST requests to:",
+      "heartbeatIntervalSec": "Interval (sec)",
+      "heartbeatJitterSec": "Jitter (sec)",
+      "heartbeatMaxSkewSec": "Max skew (sec)",
+      "heartbeatHint": "Use heartbeat for interval-based background polling from scheduler."
+    },
     "agentNodes": "Agent nodes",
     "addAgentNode": "Add agent node",
     "instructions": "Instructions",
@@ -593,6 +610,7 @@
       "columns": {
         "name": "Name",
         "status": "Status",
+        "trigger": "Trigger",
         "revision": "Revision",
         "open": "Actions"
       }
@@ -611,6 +629,8 @@
     "createDisabledReasons": {
       "orgRequired": "Select an active organization first.",
       "workflowName": "Workflow name is required.",
+      "triggerCron": "Cron expression is required for schedule trigger.",
+      "triggerWebhook": "Webhook token is required for webhook trigger.",
       "githubSecret": "A GitHub connection is required when GitHub tools are enabled.",
       "providerSecret": "Selected provider requires a connected account."
     },
