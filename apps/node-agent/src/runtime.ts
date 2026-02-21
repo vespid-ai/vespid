@@ -543,6 +543,8 @@ async function runCliCommand(input: {
   env?: NodeJS.ProcessEnv;
   timeoutMs: number;
   signal?: AbortSignal;
+  onStdoutChunk?: (chunk: string) => void;
+  onStderrChunk?: (chunk: string) => void;
 }): Promise<{ exitCode: number; stdout: string; stderr: string; notFound: boolean; timedOut: boolean; aborted: boolean }> {
   if (input.signal?.aborted) {
     return { exitCode: 130, stdout: "", stderr: "aborted", notFound: false, timedOut: false, aborted: true };
@@ -584,10 +586,14 @@ async function runCliCommand(input: {
     input.signal?.addEventListener("abort", onAbort, { once: true });
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stdout += text;
+      input.onStdoutChunk?.(text);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stderr += text;
+      input.onStderrChunk?.(text);
     });
     child.on("error", (error: NodeJS.ErrnoException) => {
       if (settled) return;
@@ -639,6 +645,7 @@ async function executeEnginePrompt(input: {
   apiKey?: string | null;
   baseUrl?: string | null;
   signal?: AbortSignal;
+  emit?: (event: { kind: string; level: "info" | "warn" | "error"; message: string; payload?: unknown }) => void;
 }): Promise<
   | { ok: true; content: string; raw: { stdout: string; stderr: string } }
   | { ok: false; code: string; message: string; raw?: { stdout: string; stderr: string } }
@@ -649,6 +656,12 @@ async function executeEnginePrompt(input: {
   // API-key mode must work without requiring executor OAuth or local CLI auth.
   if (apiKey.length > 0) {
     const provider = input.engineId === "gateway.claude.v2" ? "anthropic" : "openai";
+    input.emit?.({
+      kind: "engine_phase",
+      level: "info",
+      message: "llm_inference_started",
+      payload: { provider, model: input.model },
+    });
     const infer = await runLlmInference({
       provider,
       model: input.model,
@@ -658,12 +671,28 @@ async function executeEnginePrompt(input: {
       ...(baseUrl.length > 0 ? { apiBaseUrl: baseUrl } : {}),
     });
     if (infer.ok) {
+      input.emit?.({
+        kind: "turn_delta",
+        level: "info",
+        message: infer.content,
+      });
+      input.emit?.({
+        kind: "engine_phase",
+        level: "info",
+        message: "llm_inference_succeeded",
+      });
       return {
         ok: true,
         content: infer.content,
         raw: { stdout: infer.content, stderr: "" },
       };
     }
+    input.emit?.({
+      kind: "engine_phase",
+      level: "error",
+      message: "llm_inference_failed",
+      payload: { error: infer.error },
+    });
     return {
       ok: false,
       code: REMOTE_EXEC_ERROR.NodeExecutionFailed,
@@ -693,18 +722,47 @@ async function executeEnginePrompt(input: {
 
   let lastStdout = "";
   let lastStderr = "";
-  for (const args of attempts) {
+  for (const [attemptIndex, args] of attempts.entries()) {
+    input.emit?.({
+      kind: "engine_phase",
+      level: "info",
+      message: "cli_attempt_started",
+      payload: { command, args, attempt: attemptIndex + 1 },
+    });
     const result = await runCliCommand({
       command,
       args,
       cwd: input.workspaceDir,
       env,
       timeoutMs: input.timeoutMs,
+      onStdoutChunk: (chunk) => {
+        const text = chunk.trim();
+        if (text.length === 0) return;
+        input.emit?.({
+          kind: "turn_delta",
+          level: "info",
+          message: text,
+        });
+      },
+      onStderrChunk: (chunk) => {
+        const text = chunk.trim();
+        if (text.length === 0) return;
+        input.emit?.({
+          kind: "tool_log",
+          level: "warn",
+          message: text,
+        });
+      },
       ...(input.signal ? { signal: input.signal } : {}),
     });
     lastStdout = result.stdout;
     lastStderr = result.stderr;
     if (result.aborted) {
+      input.emit?.({
+        kind: "turn_canceled",
+        level: "info",
+        message: "turn_canceled",
+      });
       return {
         ok: false,
         code: "TURN_CANCELED",
@@ -712,6 +770,12 @@ async function executeEnginePrompt(input: {
       };
     }
     if (result.notFound) {
+      input.emit?.({
+        kind: "engine_phase",
+        level: "error",
+        message: "cli_not_found",
+        payload: { command },
+      });
       return {
         ok: false,
         code: REMOTE_EXEC_ERROR.ExecutorCliNotFound,
@@ -719,11 +783,28 @@ async function executeEnginePrompt(input: {
       };
     }
     if (result.exitCode === 0) {
+      input.emit?.({
+        kind: "engine_phase",
+        level: "info",
+        message: "cli_attempt_succeeded",
+        payload: { attempt: attemptIndex + 1 },
+      });
       const content = result.stdout.trim();
       return { ok: true, content: content.length > 0 ? content : "ok", raw: { stdout: result.stdout, stderr: result.stderr } };
     }
+    input.emit?.({
+      kind: "engine_phase",
+      level: "warn",
+      message: "cli_attempt_failed",
+      payload: { attempt: attemptIndex + 1, exitCode: result.exitCode },
+    });
   }
 
+  input.emit?.({
+    kind: "engine_phase",
+    level: "error",
+    message: "cli_all_attempts_failed",
+  });
   return {
     ok: false,
     code: REMOTE_EXEC_ERROR.ExecutorCliFailed,
@@ -736,7 +817,10 @@ async function buildSessionRuntimeManager(input: {
   pool: "managed" | "byon";
 }): Promise<{
   openSession: (open: z.infer<typeof sessionOpenSchema>) => Promise<{ ok: true } | { ok: false; code: string; message: string }>;
-  runTurn: (turn: z.infer<typeof sessionTurnSchema>) => Promise<
+  runTurn: (
+    turn: z.infer<typeof sessionTurnSchema>,
+    options?: { emitEvent?: (event: { kind: string; level: "info" | "warn" | "error"; message: string; payload?: unknown }) => void }
+  ) => Promise<
     | { ok: true; content: string; payload?: unknown }
     | { ok: false; code: string; message: string }
   >;
@@ -771,7 +855,11 @@ async function buildSessionRuntimeManager(input: {
     return { ok: true } as const;
   }
 
-  async function runTurn(turn: z.infer<typeof sessionTurnSchema>) {
+  async function runTurn(
+    turn: z.infer<typeof sessionTurnSchema>,
+    options?: { emitEvent?: (event: { kind: string; level: "info" | "warn" | "error"; message: string; payload?: unknown }) => void }
+  ) {
+    const emit = options?.emitEvent;
     const ctx = sessions.get(turn.sessionId) ?? null;
     if (!ctx) {
       return { ok: false as const, code: "SESSION_NOT_OPEN", message: "Session has not been opened on this executor." };
@@ -790,6 +878,12 @@ async function buildSessionRuntimeManager(input: {
         ? `\n\nAttachments:\n${JSON.stringify(turn.attachments)}`
         : "";
     ctx.history.push({ role: "user", content: `${turn.message}${attachmentText}` });
+    emit?.({
+      kind: "turn_started",
+      level: "info",
+      message: "turn_started",
+      payload: { requestId: turn.requestId, sessionId: turn.sessionId },
+    });
 
     const controller = new AbortController();
     ctx.activeTurn = { requestId: turn.requestId, controller };
@@ -809,6 +903,7 @@ async function buildSessionRuntimeManager(input: {
             : null,
         baseUrl: ctx.opened.sessionConfig.engine.runtime?.baseUrl ?? null,
         signal: controller.signal,
+        ...(emit ? { emit } : {}),
       });
     } finally {
       if (ctx.activeTurn?.requestId === turn.requestId) {
@@ -816,10 +911,24 @@ async function buildSessionRuntimeManager(input: {
       }
     }
     if (!result.ok) {
+      if (result.code === "TURN_CANCELED") {
+        emit?.({
+          kind: "turn_canceled",
+          level: "info",
+          message: "turn_canceled",
+          payload: { requestId: turn.requestId, sessionId: turn.sessionId },
+        });
+      }
       return { ok: false as const, code: result.code, message: result.message };
     }
 
     ctx.history.push({ role: "assistant", content: result.content });
+    emit?.({
+      kind: "turn_finished",
+      level: "info",
+      message: "turn_finished",
+      payload: { requestId: turn.requestId, sessionId: turn.sessionId },
+    });
     return { ok: true as const, content: result.content, payload: { raw: result.raw } };
   }
 
@@ -1414,14 +1523,46 @@ export async function startNodeAgent(config: NodeAgentConfig): Promise<StartedNo
         const parsedTurn = sessionTurnSchema.safeParse(parsedJson);
         if (parsedTurn.success) {
           const incoming = parsedTurn.data as GatewaySessionTurnV2;
+          let turnEventSeq = 0;
+          const emitTurnEvent = (event: { kind: string; level: "info" | "warn" | "error"; message: string; payload?: unknown }) => {
+            turnEventSeq += 1;
+            safeSend(ws, {
+              type: "turn_event",
+              requestId: incoming.requestId,
+              organizationId: incoming.organizationId,
+              sessionId: incoming.sessionId,
+              event: {
+                seq: turnEventSeq,
+                ts: Date.now(),
+                kind: event.kind,
+                level: event.level,
+                ...(event.message ? { message: event.message } : {}),
+                ...(event.payload !== undefined ? { payload: event.payload } : {}),
+              },
+            });
+          };
           safeSend(ws, {
             type: "turn_delta",
             requestId: incoming.requestId,
             sessionId: incoming.sessionId,
             content: "processing...",
           });
-          const turn = await sessionRuntime.runTurn(incoming as any);
+          emitTurnEvent({
+            kind: "engine_phase",
+            level: "info",
+            message: "turn_received",
+            payload: { requestId: incoming.requestId },
+          });
+          const turn = await sessionRuntime.runTurn(incoming as any, { emitEvent: emitTurnEvent });
           if (!turn.ok) {
+            if (turn.code !== "TURN_CANCELED") {
+              emitTurnEvent({
+                kind: "engine_phase",
+                level: "error",
+                message: turn.message,
+                payload: { code: turn.code },
+              });
+            }
             safeSend(ws, {
               type: "turn_error",
               requestId: incoming.requestId,

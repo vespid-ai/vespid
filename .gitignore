@@ -14,3 +14,4 @@ artifacts
 *.log
 .DS_Store
 output/
+apps/mobile/.artifacts/

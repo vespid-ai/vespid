@@ -1,0 +1,21 @@
+<resources>
+  <string name="app_name">Vespid Mobile</string>
+  <string name="login_title">Sign in</string>
+  <string name="email">Email</string>
+  <string name="password">Password</string>
+  <string name="login_action">Login</string>
+  <string name="loading">Loading...</string>
+  <string name="workspace_title">Mobile Terminal</string>
+  <string name="org_label">Organization</string>
+  <string name="select_org">Select organization</string>
+  <string name="refresh_sessions">Refresh sessions</string>
+  <string name="commands_hint">Commands: /stop /reset /reset --clear /new</string>
+  <string name="sessions_title">Sessions</string>
+  <string name="terminal_title">Terminal stream</string>
+  <string name="command_input">Command</string>
+  <string name="send_action">Send</string>
+  <string name="create_session_title">Create session</string>
+  <string name="model_label">Model</string>
+  <string name="instructions_label">Instructions</string>
+  <string name="system_label">System prompt</string>
+</resources>

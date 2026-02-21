@@ -1272,6 +1272,139 @@ describe("api hardening foundation", () => {
     }
   });
 
+  it("uses engine API key/baseUrl defaults for toolset builder when llm auth is omitted", async () => {
+    const priorFetch = globalThis.fetch;
+    const priorKek = process.env.SECRETS_KEK_BASE64;
+    const priorKekId = process.env.SECRETS_KEK_ID;
+    process.env.SECRETS_KEK_ID = "test-kek-v1";
+    process.env.SECRETS_KEK_BASE64 = Buffer.alloc(32, 7).toString("base64");
+
+    try {
+      const mockFetch = vi.fn();
+      globalThis.fetch = mockFetch as any;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    message: "Use GitHub MCP and usage guide.",
+                    suggestedComponentKeys: ["mcp.github", "skill.usage-guide"],
+                  }),
+                },
+              },
+            ],
+          }),
+      });
+
+      const signup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: {
+          email: `toolset-ai-engine-default-owner-${Date.now()}@example.com`,
+          password: "Password123",
+        },
+      });
+      expect(signup.statusCode).toBe(201);
+      const ownerToken = bearerToken(signup.json() as { session: { token: string } });
+
+      const orgRes = await server.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { name: "Toolset AI Engine Default Org", slug: `toolset-ai-engine-default-org-${Date.now()}` },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as any).organization.id as string;
+
+      const secretRes = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/secrets`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: { connectorId: "llm.openai", name: "codex-key", value: "sk-openai-test" },
+      });
+      expect(secretRes.statusCode).toBe(201);
+      const secretId = (secretRes.json() as any).secret.id as string;
+
+      const settingsRes = await server.inject({
+        method: "PUT",
+        url: `/v1/orgs/${orgId}/settings`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          agents: {
+            engineAuthDefaults: {
+              "gateway.codex.v2": { mode: "api_key", secretId },
+            },
+            engineRuntimeDefaults: {
+              "gateway.codex.v2": { baseUrl: "http://127.0.0.1:8045" },
+            },
+          },
+        },
+      });
+      expect(settingsRes.statusCode).toBe(200);
+
+      const createSession = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/toolsets/builder/sessions`,
+        headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+        payload: {
+          intent: "Build a GitHub issue triage toolset.",
+          llm: { provider: "openai", model: "gpt-5.3-codex" },
+        },
+      });
+      expect(createSession.statusCode).toBe(200);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0] as [string, { headers?: Record<string, string> }];
+      expect(url).toBe("http://127.0.0.1:8045/v1/chat/completions");
+      expect((init.headers ?? {}).authorization).toBe("Bearer sk-openai-test");
+    } finally {
+      globalThis.fetch = priorFetch;
+      if (priorKek === undefined) delete process.env.SECRETS_KEK_BASE64;
+      else process.env.SECRETS_KEK_BASE64 = priorKek;
+      if (priorKekId === undefined) delete process.env.SECRETS_KEK_ID;
+      else process.env.SECRETS_KEK_ID = priorKekId;
+    }
+  });
+
+  it("returns 422 when toolset builder llm auth is not configured", async () => {
+    const signup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `toolset-ai-missing-auth-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(signup.statusCode).toBe(201);
+    const ownerToken = bearerToken(signup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Toolset AI Missing Auth Org", slug: `toolset-ai-missing-auth-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as any).organization.id as string;
+
+    const createSession = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/toolsets/builder/sessions`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: {
+        intent: "Build any toolset.",
+        llm: { provider: "openai", model: "gpt-5.3-codex" },
+      },
+    });
+    expect(createSession.statusCode).toBe(422);
+    expect(createSession.json()).toMatchObject({
+      code: "LLM_SECRET_REQUIRED",
+    });
+  });
+
   it("requires owner|admin role to list toolsets", async () => {
     const ownerSignup = await server.inject({
       method: "POST",

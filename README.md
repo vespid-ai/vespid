@@ -42,15 +42,17 @@ pnpm test
 pnpm build
 ```
 
-4. Start local services
+4. Start local infra (Postgres + Redis + migrate)
+```bash
+pnpm infra:start
+```
+
+5. Start local services
 ```bash
 pnpm dev
 ```
 
-5. Ensure Redis is available for workflow queue execution
-```bash
-redis-server --port 6379
-```
+`pnpm dev` and `pnpm infra:start` now run a dependency self-heal check first. If workspace links are broken, they auto-repair before startup.
 
 ## Key Commands
 ```bash
@@ -60,6 +62,17 @@ pnpm lint
 pnpm dev
 pnpm migrate:check
 pnpm migrate
+pnpm db:start
+pnpm db:stop
+pnpm db:logs
+pnpm db:ps
+pnpm redis:start
+pnpm redis:stop
+pnpm redis:logs
+pnpm redis:ps
+pnpm deps:repair-if-needed
+pnpm infra:start
+pnpm infra:stop
 pnpm db:rollback
 pnpm check:migrations
 pnpm sbom:generate

@@ -5231,25 +5231,50 @@ export async function buildServer(input?: {
     return normalizeConnectorId(connectorId);
   }
 
+  function mapBuilderProviderToEngineId(
+    provider: LlmProviderId
+  ): "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2" | null {
+    if (provider === "anthropic") return "gateway.claude.v2";
+    if (provider === "opencode") return "gateway.opencode.v2";
+    if (provider === "openai" || provider === "openai-codex") return "gateway.codex.v2";
+    return null;
+  }
+
+  function engineDefaultConnectorId(engineId: "gateway.codex.v2" | "gateway.claude.v2" | "gateway.opencode.v2"): string {
+    if (engineId === "gateway.claude.v2") return normalizeConnectorId("llm.anthropic");
+    if (engineId === "gateway.opencode.v2") return normalizeConnectorId("llm.opencode");
+    return normalizeConnectorId("llm.openai");
+  }
+
   async function resolveToolsetBuilderSecretValue(input: {
     llm: ToolsetBuilderLlmConfig;
     organizationId: string;
     actorUserId: string;
+    orgSettings: ReturnType<typeof normalizeOrgSettings>;
   }): Promise<string | null> {
-    const secretId = input.llm.auth?.secretId?.trim() ?? "";
+    const linkedEngineId = mapBuilderProviderToEngineId(input.llm.provider);
+    const linkedEngineAuthDefault = linkedEngineId ? input.orgSettings.agents.engineAuthDefaults[linkedEngineId] : null;
+    const linkedEngineSecretId =
+      linkedEngineAuthDefault?.mode === "api_key" && typeof linkedEngineAuthDefault?.secretId === "string"
+        ? linkedEngineAuthDefault.secretId
+        : null;
+    const secretId = input.llm.auth?.secretId?.trim() || linkedEngineSecretId || "";
     if (!secretId) {
       return null;
     }
-    const expectedConnectorId = expectedLlmConnectorId(input.llm.provider);
+    const expectedConnectorIds = new Set<string>([expectedLlmConnectorId(input.llm.provider)]);
+    if (linkedEngineId) {
+      expectedConnectorIds.add(engineDefaultConnectorId(linkedEngineId));
+    }
     const allSecrets = await store.listConnectorSecrets({
       organizationId: input.organizationId,
       actorUserId: input.actorUserId,
       connectorId: null,
     });
-    const secrets = allSecrets.filter((secret) => normalizeConnectorId(secret.connectorId) === expectedConnectorId);
+    const secrets = allSecrets.filter((secret) => expectedConnectorIds.has(normalizeConnectorId(secret.connectorId)));
     const secretMeta = secrets.find((s) => s.id === secretId) ?? null;
     if (!secretMeta) {
-      throw llmSecretRequired(`Secret must be a ${expectedConnectorId} org secret`);
+      throw llmSecretRequired(`Secret must match provider connector: ${Array.from(expectedConnectorIds).join(" or ")}`);
     }
     const secretValue = await store.loadConnectorSecretValue({
       organizationId: input.organizationId,
@@ -5257,7 +5282,7 @@ export async function buildServer(input?: {
       secretId,
     });
     if (!secretValue || secretValue.trim().length === 0) {
-      throw llmSecretRequired(`Secret value is required for ${expectedConnectorId}`);
+      throw llmSecretRequired("Secret value is required for toolset builder.");
     }
     return secretValue;
   }
@@ -5271,9 +5296,11 @@ export async function buildServer(input?: {
       throw badRequest(`Unsupported provider: ${input.provider}`);
     }
     const providerOverride = input.orgSettings.llm.providers[input.provider];
+    const linkedEngineId = mapBuilderProviderToEngineId(input.provider);
+    const linkedEngineRuntimeDefault = linkedEngineId ? input.orgSettings.agents.engineRuntimeDefaults[linkedEngineId] : null;
     return {
       apiKind: providerOverride?.apiKind ?? providerMeta.apiKind,
-      apiBaseUrl: providerOverride?.baseUrl ?? null,
+      apiBaseUrl: providerOverride?.baseUrl ?? linkedEngineRuntimeDefault?.baseUrl ?? null,
     };
   }
 
@@ -5365,6 +5392,18 @@ export async function buildServer(input?: {
     });
   }
 
+  function toolsetBuilderLlmErrorToAppError(error: string): AppError {
+    if (error === "LLM_AUTH_NOT_CONFIGURED") {
+      return llmSecretRequired(
+        "LLM auth is not configured for toolset builder. Select an API key connection in Advanced settings or configure a managed LLM API key."
+      );
+    }
+    if (error === "VERTEX_SECRET_INVALID") {
+      return badRequest("Vertex OAuth secret is invalid for toolset builder.");
+    }
+    return new AppError(503, { code: "LLM_UNAVAILABLE", message: error });
+  }
+
   server.post("/v1/orgs/:orgId/toolsets/builder/sessions", async (request) => {
     const auth = requireAuth(request);
     const params = request.params as { orgId?: string };
@@ -5393,6 +5432,7 @@ export async function buildServer(input?: {
       llm,
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
+      orgSettings,
     });
 
     const intent = parsed.data.intent?.trim() ?? "";
@@ -5452,7 +5492,7 @@ export async function buildServer(input?: {
         orgSettings,
       });
       if (!llmRes.ok) {
-        throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
+        throw toolsetBuilderLlmErrorToAppError(llmRes.error);
       }
 
       const obj = parseJsonObject(llmRes.content);
@@ -5544,6 +5584,7 @@ export async function buildServer(input?: {
       llm,
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
+      orgSettings,
     });
 
     const ranked = rankCatalogItems({ query: message, items: toolsetCatalog, limit: 20 });
@@ -5593,7 +5634,7 @@ export async function buildServer(input?: {
       orgSettings,
     });
     if (!llmRes.ok) {
-      throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
+      throw toolsetBuilderLlmErrorToAppError(llmRes.error);
     }
 
     const obj = parseJsonObject(llmRes.content);
@@ -5681,6 +5722,7 @@ export async function buildServer(input?: {
       llm,
       organizationId: orgContext.organizationId,
       actorUserId: auth.userId,
+      orgSettings,
     });
 
     const turns = await store.listToolsetBuilderTurns({
@@ -5724,7 +5766,7 @@ export async function buildServer(input?: {
       orgSettings,
     });
     if (!llmRes.ok) {
-      throw new AppError(503, { code: "LLM_UNAVAILABLE", message: llmRes.error });
+      throw toolsetBuilderLlmErrorToAppError(llmRes.error);
     }
 
     const obj = parseJsonObject(llmRes.content);

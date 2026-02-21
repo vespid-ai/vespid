@@ -46,6 +46,7 @@ export function LlmCompactConfigField(props: {
           mode={props.mode}
           value={props.value}
           onChange={props.onChange}
+          modelVariant="chip"
           {...(props.allowedProviders ? { allowedProviders: props.allowedProviders } : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
         />

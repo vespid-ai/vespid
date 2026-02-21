@@ -30,6 +30,7 @@ import type {
   SessionAttachmentV2,
   GatewayToolEventV2,
   GatewayToolResultV2,
+  RemoteExecutionEvent,
 } from "@vespid/shared";
 import { REMOTE_EXEC_ERROR } from "@vespid/shared";
 import { verifyAuthToken } from "@vespid/shared/auth";
@@ -61,6 +62,15 @@ function envNumber(name: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
 }
 
 function sha256Hex(value: string): string {
@@ -357,6 +367,7 @@ export async function buildGatewayEdgeServer(input?: {
   const serviceToken = input?.serviceToken ?? process.env.GATEWAY_SERVICE_TOKEN ?? "dev-gateway-token";
   const resultsTtlSec = Math.max(30, envNumber("GATEWAY_RESULTS_TTL_SEC", 15 * 60));
   const staleExecutorMs = Math.max(5_000, envNumber("GATEWAY_AGENT_STALE_MS", 60_000));
+  const sessionStreamV1Enabled = envBool("SESSION_STREAM_V1_ENABLED", process.env.NODE_ENV !== "production");
   const redisUrl = process.env.REDIS_URL ?? null;
   if (!redisUrl) {
     throw new Error("REDIS_URL_REQUIRED");
@@ -375,6 +386,7 @@ export async function buildGatewayEdgeServer(input?: {
 
   const executorsById = new Map<string, ConnectedExecutor>();
   const pendingToolResultByRequestId = new Map<string, { executorId: string }>();
+  const pendingSessionTurnByRequestId = new Map<string, { organizationId: string; sessionId: string; executorId: string }>();
 
   const sessionClientsBySessionId = new Map<string, Set<WebSocket>>();
   const clientStateByWs = new Map<WebSocket, { organizationId: string; userId: string; joinedSessionId: string | null }>();
@@ -571,6 +583,15 @@ export async function buildGatewayEdgeServer(input?: {
               );
               continue;
             }
+            if (cmd.payload.type === "session_turn") {
+              pendingSessionTurnByRequestId.set(cmd.payload.requestId, {
+                organizationId: cmd.payload.organizationId,
+                sessionId: cmd.payload.sessionId,
+                executorId: cmd.executorId,
+              });
+            } else if (cmd.payload.type === "session_cancel") {
+              pendingSessionTurnByRequestId.delete(cmd.payload.requestId);
+            }
             if (!safeWsSend(exec.ws, cmd.payload)) {
               executorsById.delete(exec.executorId);
               try {
@@ -578,6 +599,7 @@ export async function buildGatewayEdgeServer(input?: {
               } catch {
                 // ignore
               }
+              pendingSessionTurnByRequestId.delete(cmd.payload.requestId);
               await redis.set(
                 replyKey(cmd.payload.requestId),
                 safeJsonStringify({ status: "failed", error: REMOTE_EXEC_ERROR.PinnedAgentOffline }),
@@ -1123,6 +1145,70 @@ export async function buildGatewayEdgeServer(input?: {
         return;
       }
 
+      if (type === "turn_delta") {
+        const parsed = z
+          .object({
+            type: z.literal("turn_delta"),
+            requestId: z.string().min(1),
+            sessionId: z.string().uuid(),
+            content: z.string(),
+          })
+          .safeParse(message);
+        if (!parsed.success) return;
+        if (!sessionStreamV1Enabled) return;
+        const pending = pendingSessionTurnByRequestId.get(parsed.data.requestId) ?? null;
+        if (!pending) return;
+        const msg: EdgeToBrainRequest = {
+          type: "session_turn_event",
+          requestId: parsed.data.requestId,
+          organizationId: pending.organizationId,
+          sessionId: pending.sessionId,
+          event: {
+            seq: Date.now(),
+            ts: Date.now(),
+            kind: "turn_delta",
+            level: "info",
+            message: parsed.data.content,
+          },
+          originEdgeId: edgeId,
+        };
+        await xaddJson(redis, streamToBrain(), msg);
+        return;
+      }
+
+      if (type === "turn_event") {
+        const parsed = z
+          .object({
+            type: z.literal("turn_event"),
+            requestId: z.string().min(1),
+            organizationId: z.string().uuid(),
+            sessionId: z.string().uuid(),
+            event: z
+              .object({
+                seq: z.number().int(),
+                ts: z.number().int(),
+                kind: z.string().min(1),
+                level: z.enum(["info", "warn", "error"]),
+                message: z.string().optional(),
+                payload: z.unknown().optional(),
+              })
+              .strict(),
+          })
+          .safeParse(message) as { success: boolean; data?: { requestId: string; organizationId: string; sessionId: string; event: RemoteExecutionEvent } };
+        if (!parsed.success || !parsed.data) return;
+        if (!sessionStreamV1Enabled) return;
+        const msg: EdgeToBrainRequest = {
+          type: "session_turn_event",
+          requestId: parsed.data.requestId,
+          organizationId: parsed.data.organizationId,
+          sessionId: parsed.data.sessionId,
+          event: parsed.data.event,
+          originEdgeId: edgeId,
+        };
+        await xaddJson(redis, streamToBrain(), msg);
+        return;
+      }
+
       if (type === "turn_final") {
         const parsed = z
           .object({
@@ -1134,6 +1220,7 @@ export async function buildGatewayEdgeServer(input?: {
           })
           .safeParse(message);
         if (!parsed.success) return;
+        pendingSessionTurnByRequestId.delete(parsed.data.requestId);
         await redis.set(
           replyKey(parsed.data.requestId),
           safeJsonStringify({
@@ -1159,6 +1246,7 @@ export async function buildGatewayEdgeServer(input?: {
           })
           .safeParse(message);
         if (!parsed.success) return;
+        pendingSessionTurnByRequestId.delete(parsed.data.requestId);
         await redis.set(
           replyKey(parsed.data.requestId),
           safeJsonStringify({
@@ -1226,6 +1314,11 @@ export async function buildGatewayEdgeServer(input?: {
 
     ws.on("close", () => {
       executorsById.delete(executor.executorId);
+      for (const [requestId, pending] of pendingSessionTurnByRequestId.entries()) {
+        if (pending.executorId === executor.executorId) {
+          pendingSessionTurnByRequestId.delete(requestId);
+        }
+      }
       try {
         redis.del(executorRouteKey(executor.executorId));
       } catch {

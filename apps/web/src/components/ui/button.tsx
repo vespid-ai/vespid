@@ -9,7 +9,6 @@ const buttonVariants = cva(
     "transition-[box-shadow,background-color,border-color,color] duration-200",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/35",
     "aria-pressed:ui-selected aria-pressed:font-semibold aria-pressed:ring-2 aria-pressed:ring-accent/35 aria-pressed:ring-offset-1 aria-pressed:ring-offset-surface0",
-    "data-[state=active]:ui-selected data-[state=active]:font-semibold data-[state=active]:ring-2 data-[state=active]:ring-accent/35 data-[state=active]:ring-offset-1 data-[state=active]:ring-offset-surface0",
     "disabled:pointer-events-none disabled:opacity-50",
   ].join(" "),
   {
@@ -19,7 +18,7 @@ const buttonVariants = cva(
         accent:
           "bg-brand text-brandContrast shadow-elev1 hover:bg-brand/92 hover:shadow-elev2 focus-visible:ring-accent/35",
         outline:
-          "border border-borderSubtle/70 bg-panel/88 hover:bg-panel hover:shadow-elev2",
+          "border border-borderSubtle/70 bg-transparent hover:bg-panel/55",
         ghost:
           "hover:bg-panel/55",
         danger: "bg-danger text-white hover:bg-danger/92 focus-visible:ring-danger/35",

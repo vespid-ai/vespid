@@ -7,6 +7,7 @@ import { isOAuthRequiredProvider, normalizeConnectorId } from "@vespid/shared/ll
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { ModelPickerDialog } from "../model-picker/model-picker-dialog";
+import { ModelChipPicker } from "./model-chip-picker";
 import { useSecrets } from "../../../lib/hooks/use-secrets";
 import { ProviderPicker } from "./provider-picker";
 import {
@@ -26,6 +27,7 @@ export function LlmModelField(props: {
   allowedProviders: LlmProviderId[];
   orgId?: string | null;
   disabled?: boolean;
+  variant?: "legacy" | "chip";
 }) {
   const t = useTranslations();
   const allowed = useMemo(() => {
@@ -95,6 +97,43 @@ export function LlmModelField(props: {
       };
     });
   }, [allowed, connectedConnectors]);
+
+  if (props.variant === "chip") {
+    return (
+      <div className="grid gap-2 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)] md:items-center">
+        <ProviderPicker
+          value={props.value.providerId}
+          items={providerItems}
+          disabled={!canEditProvider}
+          onChange={setProvider}
+          labels={{
+            title: t("providerPicker.title"),
+            connected: t("providerPicker.filterConnected"),
+            recommended: t("providerPicker.filterRecommended"),
+            all: t("providerPicker.filterAll"),
+            searchPlaceholder: t("providerPicker.searchProvider"),
+            noResults: t("providerPicker.noResults"),
+            badgeConnected: t("providerPicker.badgeConnected"),
+            badgeRecommended: t("providerPicker.badgeRecommended"),
+            badgeOauth: t("providerPicker.badgeOauth"),
+          }}
+        />
+
+        <ModelChipPicker
+          value={props.value.modelId}
+          onChange={(nextModelId) => {
+            providerLockedRef.current = true;
+            props.onChange({ ...props.value, modelId: nextModelId });
+          }}
+          providerFilter={props.value.providerId}
+          placeholder={t("sessions.create.modelChipFallback")}
+          ariaLabel={t("sessions.create.modelChipAria")}
+          className="w-full max-w-none justify-between gap-1.5 rounded-full"
+          {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-2 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)_auto] md:items-center">

@@ -27,6 +27,7 @@ export function LlmConfigField(props: {
   onChange: (next: LlmConfigValue) => void;
   allowedProviders?: LlmProviderId[];
   disabled?: boolean;
+  modelVariant?: "legacy" | "chip";
 }) {
   const allowedProviders = props.allowedProviders ?? allowedProvidersForMode(props.mode);
 
@@ -41,6 +42,7 @@ export function LlmConfigField(props: {
         orgId={props.orgId}
         allowedProviders={allowedProviders}
         disabled={props.disabled ?? false}
+        variant={props.modelVariant ?? "legacy"}
         onChange={(next) => {
           // If provider changes, clear secret so auto-default selection can re-run.
           const providerChanged = next.providerId !== props.value.providerId;

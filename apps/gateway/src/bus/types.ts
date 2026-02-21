@@ -13,6 +13,7 @@ import type {
   GatewayToolEventV2,
   GatewayToolResultV2,
   MemoryProvider,
+  RemoteExecutionEvent,
   SessionAttachmentV2,
   SessionScope,
 } from "@vespid/shared";
@@ -38,6 +39,14 @@ export type EdgeToBrainRequest =
       idempotencyKey?: string;
       originEdgeId?: string;
       source?: ChannelSessionSource;
+    }
+  | {
+      type: "session_turn_event";
+      requestId: string;
+      organizationId: string;
+      sessionId: string;
+      event: RemoteExecutionEvent;
+      originEdgeId?: string;
     }
   | {
       type: "session_reset";

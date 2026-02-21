@@ -24,6 +24,7 @@ import {
   type GatewayDispatchResponse,
   type GatewayInvokeToolV2,
   type GatewayToolKind,
+  type SessionGatewayStreamMessageV1,
   type WorkflowContinuationJobPayload,
 } from "@vespid/shared";
 import { decryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
@@ -49,6 +50,31 @@ function envNumber(name: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function jsonLog(level: "info" | "warn" | "error", payload: Record<string, unknown>): void {
+  const line = JSON.stringify(payload);
+  if (level === "error") {
+    // eslint-disable-next-line no-console
+    console.error(line);
+    return;
+  }
+  if (level === "warn") {
+    // eslint-disable-next-line no-console
+    console.warn(line);
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.info(line);
 }
 
 function sha256Hex(value: string): string {
@@ -359,6 +385,24 @@ function normalizeEventLevel(level: unknown): "info" | "warn" | "error" {
   return level === "warn" || level === "error" ? level : "info";
 }
 
+function normalizeSessionStreamKind(
+  kind: unknown
+): SessionGatewayStreamMessageV1["kind"] {
+  switch (kind) {
+    case "turn_started":
+    case "turn_delta":
+    case "engine_phase":
+    case "tool_call":
+    case "tool_result":
+    case "tool_log":
+    case "turn_finished":
+    case "turn_canceled":
+      return kind;
+    default:
+      return "tool_log";
+  }
+}
+
 async function loadSecretValueFromDb(input: { pool: ReturnType<typeof createPool>; organizationId: string; userId: string; secretId: string }): Promise<string> {
   const kek = parseKekFromEnv();
   const row = await withTenantContext(input.pool, { organizationId: input.organizationId }, async (db) =>
@@ -407,6 +451,7 @@ export async function startGatewayBrainRuntime(input?: {
   const sessionOpenTimeoutMs = Math.max(5_000, envNumber("GATEWAY_SESSION_OPEN_TIMEOUT_MS", 20_000));
   // Allow small transport slack so gateway doesn't timeout right before executor returns.
   const executorReplyGraceMs = Math.max(500, envNumber("GATEWAY_EXECUTOR_REPLY_GRACE_MS", 5_000));
+  const sessionStreamV1Enabled = envBool("SESSION_STREAM_V1_ENABLED", process.env.NODE_ENV !== "production");
   const brainId = input?.brainId ?? process.env.GATEWAY_BRAIN_ID ?? `brain-${crypto.randomBytes(6).toString("hex")}`;
 
   const orgMaxInFlightDefault = Math.max(1, envNumber("GATEWAY_ORG_MAX_INFLIGHT", 50));
@@ -632,8 +677,8 @@ export async function startGatewayBrainRuntime(input?: {
           await withTenantContext(pool, { organizationId: inputTool.organizationId }, async (db) =>
             releaseExecutionWorkspaceLock(db, {
               organizationId: inputTool.organizationId,
-              workspaceId,
-              lockToken: workspaceLockToken,
+              workspaceId: workspaceId!,
+              lockToken: workspaceLockToken!,
             })
           );
         } catch {
@@ -1421,6 +1466,70 @@ export async function startGatewayBrainRuntime(input?: {
     });
   }
 
+  async function handleSessionTurnEvent(msg: Extract<EdgeToBrainRequest, { type: "session_turn_event" }>) {
+    if (!sessionStreamV1Enabled) {
+      return;
+    }
+    const nowIso = new Date(
+      typeof msg.event.ts === "number" && Number.isFinite(msg.event.ts) ? msg.event.ts : Date.now()
+    ).toISOString();
+    const streamKind = normalizeSessionStreamKind(msg.event.kind);
+
+    await broadcastRawToSessionEdges(msg.sessionId, {
+      type: "session_stream_v1",
+      sessionId: msg.sessionId,
+      requestId: msg.requestId,
+      streamSeq: msg.event.seq,
+      kind: streamKind,
+      level: normalizeEventLevel(msg.event.level),
+      ...(typeof msg.event.message === "string" ? { text: msg.event.message } : {}),
+      ...(msg.event.payload !== undefined ? { payload: msg.event.payload } : {}),
+      createdAt: nowIso,
+    } satisfies SessionGatewayStreamMessageV1);
+
+    let eventType: string | null = null;
+    if (streamKind === "tool_call") {
+      eventType = "tool_call";
+    } else if (streamKind === "tool_result") {
+      eventType = "tool_result";
+    } else if (streamKind === "turn_canceled") {
+      eventType = "system";
+    }
+    if (!eventType) {
+      return;
+    }
+
+    const persisted = await withTenantContext(pool, { organizationId: msg.organizationId }, async (db) =>
+      appendAgentSessionEvent(db, {
+        organizationId: msg.organizationId,
+        sessionId: msg.sessionId,
+        eventType,
+        level: streamKind === "turn_canceled" ? "info" : normalizeEventLevel(msg.event.level),
+        idempotencyKey: `stream:${msg.requestId}:${streamKind}:${msg.event.seq}`,
+        payload:
+          streamKind === "turn_canceled"
+            ? {
+                action: "session_turn_canceled",
+                requestId: msg.requestId,
+                event: msg.event,
+              }
+            : {
+                requestId: msg.requestId,
+                stream: msg.event,
+              },
+      })
+    );
+    await broadcastToSessionEdges(msg.sessionId, {
+      type: "session_event_v2",
+      sessionId: msg.sessionId,
+      seq: persisted.seq,
+      eventType: persisted.eventType,
+      level: normalizeEventLevel(persisted.level),
+      payload: persisted.payload ?? null,
+      createdAt: persisted.createdAt.toISOString(),
+    });
+  }
+
   const stream = streamToBrain();
   const group = "brain";
   const consumer = `${brainId}:${process.pid}`;
@@ -1442,6 +1551,8 @@ export async function startGatewayBrainRuntime(input?: {
             await handleWorkflowDispatch(msg);
           } else if (msg.type === "session_send") {
             await handleSessionSend(msg);
+          } else if (msg.type === "session_turn_event") {
+            await handleSessionTurnEvent(msg);
           } else if (msg.type === "session_reset") {
             await handleSessionReset(msg);
           } else if (msg.type === "session_cancel") {
@@ -1499,4 +1610,5 @@ export async function startGatewayBrainRuntime(input?: {
 export const __testables = {
   readEngineRuntimeBaseUrlFromOrgSettings,
   readEngineRuntimeBaseUrlFromSession,
+  normalizeSessionStreamKind,
 };

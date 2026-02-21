@@ -51,4 +51,10 @@ describe("gateway engine runtime base URL helpers", () => {
       })
     ).toBeNull();
   });
+
+  it("normalizes unsupported session stream kinds to tool_log", () => {
+    expect(__testables.normalizeSessionStreamKind("turn_started")).toBe("turn_started");
+    expect(__testables.normalizeSessionStreamKind("tool_call")).toBe("tool_call");
+    expect(__testables.normalizeSessionStreamKind("unknown_kind")).toBe("tool_log");
+  });
 });

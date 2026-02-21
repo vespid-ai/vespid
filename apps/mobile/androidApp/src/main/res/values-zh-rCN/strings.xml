@@ -1,0 +1,21 @@
+<resources>
+  <string name="app_name">Vespid 移动端</string>
+  <string name="login_title">登录</string>
+  <string name="email">邮箱</string>
+  <string name="password">密码</string>
+  <string name="login_action">登录</string>
+  <string name="loading">加载中...</string>
+  <string name="workspace_title">移动终端</string>
+  <string name="org_label">组织</string>
+  <string name="select_org">选择组织</string>
+  <string name="refresh_sessions">刷新会话</string>
+  <string name="commands_hint">命令：/stop /reset /reset --clear /new</string>
+  <string name="sessions_title">会话列表</string>
+  <string name="terminal_title">终端流</string>
+  <string name="command_input">命令输入</string>
+  <string name="send_action">发送</string>
+  <string name="create_session_title">创建会话</string>
+  <string name="model_label">模型</string>
+  <string name="instructions_label">指令</string>
+  <string name="system_label">系统提示词</string>
+</resources>

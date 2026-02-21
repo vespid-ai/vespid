@@ -521,13 +521,36 @@ export type SessionGatewayErrorMessageV2 = {
   message: string;
 };
 
+export type SessionStreamKindV1 =
+  | "turn_started"
+  | "turn_delta"
+  | "engine_phase"
+  | "tool_call"
+  | "tool_result"
+  | "tool_log"
+  | "turn_finished"
+  | "turn_canceled";
+
+export type SessionGatewayStreamMessageV1 = {
+  type: "session_stream_v1";
+  sessionId: string;
+  requestId: string;
+  streamSeq: number;
+  kind: SessionStreamKindV1;
+  level: "info" | "warn" | "error";
+  text?: string;
+  payload?: unknown;
+  createdAt: string;
+};
+
 export type SessionGatewayToClientMessageV2 =
   | SessionGatewayAckMessageV2
   | SessionGatewayDeltaMessageV2
   | SessionGatewayFinalMessageV2
   | SessionGatewayHandoffMessageV2
   | SessionGatewayStateMessageV2
-  | SessionGatewayErrorMessageV2;
+  | SessionGatewayErrorMessageV2
+  | SessionGatewayStreamMessageV1;
 
 export type GatewaySessionOpenV2 = {
   type: "session_open";
@@ -628,6 +651,14 @@ export type ExecutorTurnDeltaV2 = {
   content: string;
 };
 
+export type ExecutorTurnEventV2 = {
+  type: "turn_event";
+  requestId: string;
+  organizationId: string;
+  sessionId: string;
+  event: RemoteExecutionEvent;
+};
+
 export type ExecutorTurnFinalV2 = {
   type: "turn_final";
   requestId: string;
@@ -664,6 +695,7 @@ export type ExecutorMemoryQueryResultV2 = {
 export type ExecutorToGatewaySessionMessageV2 =
   | ExecutorSessionOpenedV2
   | ExecutorTurnDeltaV2
+  | ExecutorTurnEventV2
   | ExecutorTurnFinalV2
   | ExecutorTurnErrorV2
   | ExecutorMemorySyncResultV2
