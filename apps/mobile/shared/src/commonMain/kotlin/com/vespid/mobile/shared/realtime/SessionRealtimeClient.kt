@@ -163,7 +163,11 @@ class SessionRealtimeClient(
     val normalized = normalizeWsBase(primary)
     if (normalized.isEmpty()) return emptyList()
     val swapped = swapLoopbackHost(normalized)
-    return listOfNotNull(normalized, swapped).distinct()
+    return if (normalized.contains("10.0.2.2")) {
+      listOfNotNull(swapped, normalized).distinct()
+    } else {
+      listOfNotNull(normalized, swapped).distinct()
+    }
   }
 
   private fun normalizeWsBase(raw: String): String {

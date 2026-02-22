@@ -21,7 +21,7 @@ android {
       keyPassword = System.getenv("VESPID_RELEASE_KEY_PASSWORD") ?: "android"
       enableV1Signing = true
       enableV2Signing = true
-      enableV3Signing = true
+      enableV3Signing = false
       enableV4Signing = false
     }
   }

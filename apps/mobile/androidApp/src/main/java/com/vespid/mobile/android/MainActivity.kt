@@ -21,6 +21,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -78,6 +81,7 @@ class MainActivity : ComponentActivity() {
     val json = Json {
       ignoreUnknownKeys = true
       explicitNulls = false
+      encodeDefaults = true
     }
     val httpClient = HttpClient(OkHttp) {
       install(ContentNegotiation) { json(json) }
@@ -286,9 +290,25 @@ class MobileViewModel(
 
   fun send() {
     viewModelScope.launch {
-      val input = state.value.input.trim()
+      val snapshot = state.value
+      val input = snapshot.input.trim()
       if (input.isEmpty()) return@launch
-      val sessionId = state.value.selectedSession?.id ?: return@launch
+      val token = snapshot.token ?: return@launch
+      val orgId = snapshot.selectedOrgId ?: return@launch
+      val sessionId = snapshot.selectedSession?.id ?: return@launch
+
+      val connected = runCatching {
+        sessionRepository.connect(token = token, orgId = orgId, sessionId = sessionId)
+      }.onFailure { error ->
+        _state.update {
+          it.copy(
+            wsStatus = "ERROR",
+            authError = error.message ?: "WebSocket reconnect failed"
+          )
+        }
+      }.isSuccess
+      if (!connected) return@launch
+      _state.update { it.copy(wsStatus = "CONNECTED") }
 
       when {
         input == "/stop" -> sessionRepository.stop(sessionId)
@@ -380,6 +400,7 @@ private fun TerminalWorkspace(
   onCreateInstructions: (String) -> Unit,
   onCreateSystem: (String) -> Unit,
 ) {
+  val canSend = state.selectedSession != null && state.wsStatus == "CONNECTED"
   Column(modifier = modifier.fillMaxSize()) {
     Column(
       modifier = Modifier
@@ -489,10 +510,13 @@ private fun TerminalWorkspace(
         onValueChange = onInput,
         modifier = Modifier.weight(1f),
         label = { Text(stringResource(R.string.command_input)) },
-        enabled = state.selectedSession != null,
+        enabled = canSend,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { onSend() }),
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Button(onClick = onSend, enabled = state.selectedSession != null) { Text(stringResource(R.string.send_action)) }
+      Button(onClick = onSend, enabled = canSend) { Text(stringResource(R.string.send_action)) }
     }
   }
 }
