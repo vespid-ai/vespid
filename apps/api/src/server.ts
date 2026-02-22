@@ -43,7 +43,7 @@ import { z } from "zod";
 import { createOAuthServiceFromEnv, type OAuthProvider, type OAuthService } from "./oauth.js";
 import { createVertexOAuthServiceFromEnv, type VertexOAuthService } from "./vertex-oauth.js";
 import { createStore } from "./store/index.js";
-import type { AppStore, MembershipRecord, SessionRecord, UserRecord } from "./types.js";
+import type { AppStore, MembershipRecord, OrganizationSubscriptionRecord, SessionRecord, UserRecord } from "./types.js";
 import { hashPassword, verifyPassword } from "./security.js";
 import { workflowDslAnySchema, validateV3GraphConstraints } from "@vespid/workflow";
 import { getToolsetCatalog } from "./toolsets/catalog.js";
@@ -185,6 +185,91 @@ const DEFAULT_ORG_POLICY: OrgPolicy = {
   enterprise: { canManageOrg: true, maxOrgs: null },
 };
 
+type OrganizationSubscriptionTier = "free" | "pro" | "enterprise";
+type OrganizationSubscriptionStatus = "active" | "trialing" | "past_due" | "canceled";
+
+type OrganizationRunEntitlements = {
+  monthlyRunLimit: number | null;
+  inflightRunLimit: number | null;
+};
+
+type OrganizationRunQuotaSnapshot = {
+  tier: OrganizationSubscriptionTier;
+  status: OrganizationSubscriptionStatus;
+  defaults: OrganizationRunEntitlements;
+  overrides: OrganizationRunEntitlements;
+  effective: OrganizationRunEntitlements;
+};
+
+const DEFAULT_ORGANIZATION_SUBSCRIPTION_TIER: OrganizationSubscriptionTier = "free";
+const DEFAULT_ORGANIZATION_SUBSCRIPTION_STATUS: OrganizationSubscriptionStatus = "active";
+const DEFAULT_ORGANIZATION_RUN_ENTITLEMENTS_BY_TIER: Record<OrganizationSubscriptionTier, OrganizationRunEntitlements> = {
+  free: {
+    monthlyRunLimit: 200,
+    inflightRunLimit: 3,
+  },
+  pro: {
+    monthlyRunLimit: 5_000,
+    inflightRunLimit: 30,
+  },
+  enterprise: {
+    monthlyRunLimit: null,
+    inflightRunLimit: null,
+  },
+};
+
+function normalizeOrganizationSubscriptionTier(input: unknown): OrganizationSubscriptionTier {
+  if (input === "pro" || input === "enterprise") {
+    return input;
+  }
+  return DEFAULT_ORGANIZATION_SUBSCRIPTION_TIER;
+}
+
+function normalizeOrganizationSubscriptionStatus(input: unknown): OrganizationSubscriptionStatus {
+  if (input === "trialing" || input === "past_due" || input === "canceled") {
+    return input;
+  }
+  return DEFAULT_ORGANIZATION_SUBSCRIPTION_STATUS;
+}
+
+function normalizeLimitValue(input: unknown): number | null {
+  if (input === null || input === undefined) {
+    return null;
+  }
+  const value = Number(input);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  const normalized = Math.max(0, Math.floor(value));
+  return normalized;
+}
+
+function resolveOrganizationRunQuotaSnapshot(subscription: OrganizationSubscriptionRecord | null): OrganizationRunQuotaSnapshot {
+  const tier = normalizeOrganizationSubscriptionTier(subscription?.tier);
+  const status = normalizeOrganizationSubscriptionStatus(subscription?.status);
+  const defaults = DEFAULT_ORGANIZATION_RUN_ENTITLEMENTS_BY_TIER[tier];
+  const overrides: OrganizationRunEntitlements = {
+    monthlyRunLimit: normalizeLimitValue(subscription?.monthlyRunLimit),
+    inflightRunLimit: normalizeLimitValue(subscription?.inflightRunLimit),
+  };
+  return {
+    tier,
+    status,
+    defaults,
+    overrides,
+    effective: {
+      monthlyRunLimit: overrides.monthlyRunLimit ?? defaults.monthlyRunLimit,
+      inflightRunLimit: overrides.inflightRunLimit ?? defaults.inflightRunLimit,
+    },
+  };
+}
+
+function currentUsageMonth(date = new Date()): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
@@ -216,6 +301,19 @@ const adminPlatformSettingUpdateSchema = z.object({
   value: z.unknown(),
 });
 
+const organizationSubscriptionTierSchema = z.enum(["free", "pro", "enterprise"]);
+const organizationSubscriptionStatusSchema = z.enum(["active", "trialing", "past_due", "canceled"]);
+
+const adminOrgSubscriptionUpdateSchema = z
+  .object({
+    tier: organizationSubscriptionTierSchema,
+    status: organizationSubscriptionStatusSchema.optional(),
+    monthlyRunLimit: z.coerce.number().int().min(0).nullable().optional(),
+    inflightRunLimit: z.coerce.number().int().min(0).nullable().optional(),
+    metadata: z.unknown().optional(),
+  })
+  .strict();
+
 const adminSupportTicketsQuerySchema = z.object({
   status: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
@@ -244,6 +342,26 @@ const adminSupportTicketEventCreateSchema = z.object({
   eventType: z.string().min(1).max(80),
   payload: z.unknown().optional(),
 });
+
+const orgSupportTicketsQuerySchema = z.object({
+  status: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+});
+
+const orgSupportTicketCreateSchema = z.object({
+  category: z.string().min(1).max(120).optional(),
+  priority: z.string().min(1).max(40).optional(),
+  subject: z.string().min(1).max(200),
+  content: z.string().min(1).max(20_000),
+});
+
+const orgSupportTicketPatchSchema = z
+  .object({
+    status: z.string().min(1).max(40).optional(),
+    priority: z.string().min(1).max(40).optional(),
+    assigneeUserId: z.string().uuid().nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, { message: "At least one field is required" });
 
 const inviteSchema = z.object({
   email: z.string().email(),
@@ -928,6 +1046,14 @@ function orgSlugConflict(message = "Organization slug already exists"): AppError
 
 function queueUnavailable(message = "Workflow queue is unavailable"): AppError {
   return new AppError(503, { code: "QUEUE_UNAVAILABLE", message });
+}
+
+function orgRunQuotaExceeded(message = "Monthly workflow run quota has been reached"): AppError {
+  return new AppError(429, { code: "ORG_RUN_QUOTA_EXCEEDED", message });
+}
+
+function orgRunInflightLimitExceeded(message = "Concurrent workflow run limit has been reached"): AppError {
+  return new AppError(429, { code: "ORG_RUN_INFLIGHT_LIMIT_EXCEEDED", message });
 }
 
 function triggerNotFound(message = "Trigger not found"): AppError {
@@ -1783,6 +1909,85 @@ export async function buildServer(input?: {
     };
   }
 
+  async function getOrganizationRunQuotaSnapshot(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<{
+    quota: OrganizationRunQuotaSnapshot;
+    usageMonth: string;
+    monthlyUsed: number;
+    inFlightRuns: number;
+  }> {
+    const usageMonth = currentUsageMonth();
+    const [subscription, usage, inFlightRuns] = await Promise.all([
+      store.getOrganizationSubscription({
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId,
+      }),
+      store.getOrganizationRunUsageMonthly({
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId,
+        usageMonth,
+      }),
+      store.countWorkflowRunsByStatuses({
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId,
+        statuses: ["queued", "running"],
+      }),
+    ]);
+
+    return {
+      quota: resolveOrganizationRunQuotaSnapshot(subscription),
+      usageMonth,
+      monthlyUsed: usage?.runCount ?? 0,
+      inFlightRuns,
+    };
+  }
+
+  async function assertOrganizationRunQuota(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<void> {
+    const snapshot = await getOrganizationRunQuotaSnapshot(input);
+    const { quota } = snapshot;
+
+    if (quota.status === "canceled") {
+      throw orgRunQuotaExceeded("Organization subscription is canceled. Reactivate or upgrade to run workflows.");
+    }
+
+    if (quota.effective.monthlyRunLimit !== null && snapshot.monthlyUsed >= quota.effective.monthlyRunLimit) {
+      throw orgRunQuotaExceeded("Monthly workflow run quota reached. Upgrade plan or request a higher limit.");
+    }
+
+    if (quota.effective.inflightRunLimit !== null && snapshot.inFlightRuns >= quota.effective.inflightRunLimit) {
+      throw orgRunInflightLimitExceeded("Concurrent workflow run limit reached. Wait for running jobs or upgrade.");
+    }
+  }
+
+  async function recordOrganizationRunUsage(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<void> {
+    try {
+      await store.incrementOrganizationRunUsageMonthly({
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId,
+        usageMonth: currentUsageMonth(),
+        amount: 1,
+      });
+    } catch (error) {
+      server.log.error(
+        {
+          event: "organization_run_usage_increment_failed",
+          organizationId: input.organizationId,
+          actorUserId: input.actorUserId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "failed to increment organization run usage"
+      );
+    }
+  }
+
   async function requireSystemAdmin(request: { auth?: AuthContext }): Promise<AuthContext> {
     const auth = requireAuth(request);
     await ensureSystemAdminBootstrap({ userId: auth.userId, email: auth.email });
@@ -2343,6 +2548,11 @@ export async function buildServer(input?: {
       throw conflict("Workflow must be published before runs can be created");
     }
 
+    await assertOrganizationRunQuota({
+      organizationId: parsed.data.organizationId,
+      actorUserId: parsed.data.requestedByUserId,
+    });
+
     const run = await store.createWorkflowRun({
       organizationId: parsed.data.organizationId,
       workflowId: parsed.data.workflowId,
@@ -2384,6 +2594,11 @@ export async function buildServer(input?: {
       );
       throw queueUnavailable();
     }
+
+    await recordOrganizationRunUsage({
+      organizationId: run.organizationId,
+      actorUserId: run.requestedByUserId,
+    });
 
     return reply.status(201).send({ run });
   });
@@ -2438,6 +2653,11 @@ export async function buildServer(input?: {
             },
           };
 
+    await assertOrganizationRunQuota({
+      organizationId: subscription.organizationId,
+      actorUserId: subscription.requestedByUserId,
+    });
+
     let run;
     try {
       run = await store.createWorkflowRun({
@@ -2476,6 +2696,11 @@ export async function buildServer(input?: {
       });
       throw queueUnavailable();
     }
+
+    await recordOrganizationRunUsage({
+      organizationId: run.organizationId,
+      actorUserId: run.requestedByUserId,
+    });
 
     return reply.status(202).send({ accepted: true, runId: run.id });
   });
@@ -2801,6 +3026,75 @@ export async function buildServer(input?: {
     });
 
     return { settings: normalizeOrgSettings(updated) };
+  });
+
+  server.get("/v1/orgs/:orgId/billing/entitlements", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const subscription = await store.getOrganizationSubscription({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+    const quota = resolveOrganizationRunQuotaSnapshot(subscription);
+
+    return {
+      organizationId: orgContext.organizationId,
+      plan: {
+        tier: quota.tier,
+        status: quota.status,
+      },
+      entitlements: {
+        monthlyRunLimit: quota.effective.monthlyRunLimit,
+        inflightRunLimit: quota.effective.inflightRunLimit,
+      },
+      defaults: quota.defaults,
+      overrides: quota.overrides,
+      subscription: subscription
+        ? {
+            updatedAt: subscription.updatedAt,
+            updatedByUserId: subscription.updatedByUserId,
+            metadata: subscription.metadata ?? {},
+          }
+        : null,
+    };
+  });
+
+  server.get("/v1/orgs/:orgId/billing/usage", async (request) => {
+    const auth = requireAuth(request);
+    const params = request.params as { orgId?: string };
+    if (!params.orgId) {
+      throw badRequest("Missing orgId");
+    }
+
+    const orgContext = await requireOrgContext(request, { expectedOrgId: params.orgId });
+    const snapshot = await getOrganizationRunQuotaSnapshot({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+
+    const monthlyRunLimit = snapshot.quota.effective.monthlyRunLimit;
+    return {
+      organizationId: orgContext.organizationId,
+      usageMonth: snapshot.usageMonth,
+      plan: {
+        tier: snapshot.quota.tier,
+        status: snapshot.quota.status,
+      },
+      runs: {
+        used: snapshot.monthlyUsed,
+        limit: monthlyRunLimit,
+        remaining: monthlyRunLimit === null ? null : Math.max(0, monthlyRunLimit - snapshot.monthlyUsed),
+      },
+      inFlight: {
+        current: snapshot.inFlightRuns,
+        limit: snapshot.quota.effective.inflightRunLimit,
+      },
+    };
   });
 
   server.get("/v1/orgs/:orgId/engines/auth-status", async (request) => {
@@ -6342,6 +6636,11 @@ export async function buildServer(input?: {
       throw conflict("Workflow must be published before runs can be created");
     }
 
+    await assertOrganizationRunQuota({
+      organizationId: orgContext.organizationId,
+      actorUserId: auth.userId,
+    });
+
     const run = await store.createWorkflowRun({
       organizationId: orgContext.organizationId,
       workflowId: workflow.id,
@@ -6397,6 +6696,11 @@ export async function buildServer(input?: {
       );
       throw queueUnavailable();
     }
+
+    await recordOrganizationRunUsage({
+      organizationId: run.organizationId,
+      actorUserId: run.requestedByUserId,
+    });
 
     return reply.status(201).send({ run });
   });
@@ -6842,6 +7146,100 @@ export async function buildServer(input?: {
     return { setting };
   });
 
+  server.get("/v1/admin/orgs/:orgId/subscription", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid org path", params.error.flatten());
+    }
+
+    const subscription = await store.getOrganizationSubscription({
+      organizationId: params.data.orgId,
+      actorUserId: auth.userId,
+    });
+    const quota = resolveOrganizationRunQuotaSnapshot(subscription);
+
+    return {
+      organizationId: params.data.orgId,
+      plan: {
+        tier: quota.tier,
+        status: quota.status,
+      },
+      entitlements: {
+        monthlyRunLimit: quota.effective.monthlyRunLimit,
+        inflightRunLimit: quota.effective.inflightRunLimit,
+      },
+      defaults: quota.defaults,
+      overrides: quota.overrides,
+      subscription,
+    };
+  });
+
+  server.put("/v1/admin/orgs/:orgId/subscription", async (request) => {
+    const auth = await requireSystemAdmin(request);
+    const params = z
+      .object({
+        orgId: z.string().uuid(),
+      })
+      .safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid org path", params.error.flatten());
+    }
+    const parsed = adminOrgSubscriptionUpdateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid organization subscription payload", parsed.error.flatten());
+    }
+
+    const existing = await store.getOrganizationSubscription({
+      organizationId: params.data.orgId,
+      actorUserId: auth.userId,
+    });
+    const subscription = await store.upsertOrganizationSubscription({
+      organizationId: params.data.orgId,
+      actorUserId: auth.userId,
+      tier: parsed.data.tier,
+      status: parsed.data.status ?? existing?.status ?? DEFAULT_ORGANIZATION_SUBSCRIPTION_STATUS,
+      monthlyRunLimit:
+        parsed.data.monthlyRunLimit !== undefined ? parsed.data.monthlyRunLimit : (existing?.monthlyRunLimit ?? null),
+      inflightRunLimit:
+        parsed.data.inflightRunLimit !== undefined ? parsed.data.inflightRunLimit : (existing?.inflightRunLimit ?? null),
+      metadata: parsed.data.metadata !== undefined ? parsed.data.metadata : (existing?.metadata ?? {}),
+    });
+
+    await store.appendPlatformAuditLog({
+      actorUserId: auth.userId,
+      action: "organization_subscription.updated",
+      targetType: "organization",
+      targetId: params.data.orgId,
+      metadata: {
+        tier: subscription.tier,
+        status: subscription.status,
+        monthlyRunLimit: subscription.monthlyRunLimit,
+        inflightRunLimit: subscription.inflightRunLimit,
+      },
+    });
+
+    const quota = resolveOrganizationRunQuotaSnapshot(subscription);
+    return {
+      organizationId: params.data.orgId,
+      plan: {
+        tier: quota.tier,
+        status: quota.status,
+      },
+      entitlements: {
+        monthlyRunLimit: quota.effective.monthlyRunLimit,
+        inflightRunLimit: quota.effective.inflightRunLimit,
+      },
+      defaults: quota.defaults,
+      overrides: quota.overrides,
+      subscription,
+    };
+  });
+
   server.get("/v1/admin/system-admins", async (request) => {
     await requireSystemAdmin(request);
     const rows = await store.listPlatformUserRoles({ roleKey: "system_admin" });
@@ -6977,6 +7375,102 @@ export async function buildServer(input?: {
     await requireSystemAdmin(request);
     const setting = await store.getPlatformSetting({ key: "observability.logs" });
     return { logs: setting?.value ?? { items: [] } };
+  });
+
+  server.get("/v1/org/support-tickets", async (request) => {
+    const auth = requireAuth(request);
+    const orgContext = await requireOrgContext(request);
+    const parsed = orgSupportTicketsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid support tickets query", parsed.error.flatten());
+    }
+    const canManage = ["owner", "admin"].includes(orgContext.membership.roleKey);
+    const tickets = await store.listSupportTickets({
+      organizationId: orgContext.organizationId,
+      ...(parsed.data.status ? { status: parsed.data.status } : {}),
+      ...(parsed.data.limit ? { limit: parsed.data.limit } : {}),
+      ...(canManage ? {} : { requesterUserId: auth.userId }),
+    });
+    return { tickets };
+  });
+
+  server.post("/v1/org/support-tickets", async (request, reply) => {
+    const auth = requireAuth(request);
+    const orgContext = await requireOrgContext(request);
+    const parsed = orgSupportTicketCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid support ticket payload", parsed.error.flatten());
+    }
+    const ticket = await store.createSupportTicket({
+      requesterUserId: auth.userId,
+      organizationId: orgContext.organizationId,
+      subject: parsed.data.subject,
+      content: parsed.data.content,
+      ...(parsed.data.category !== undefined ? { category: parsed.data.category } : {}),
+      ...(parsed.data.priority !== undefined ? { priority: parsed.data.priority } : {}),
+    });
+    await store.appendSupportTicketEvent({
+      ticketId: ticket.id,
+      actorUserId: auth.userId,
+      eventType: "created",
+      payload: { source: "org", organizationId: orgContext.organizationId },
+    });
+    return reply.status(201).send({ ticket });
+  });
+
+  server.get("/v1/org/support-tickets/:ticketId", async (request) => {
+    const auth = requireAuth(request);
+    const orgContext = await requireOrgContext(request);
+    const params = z.object({ ticketId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid ticket id", params.error.flatten());
+    }
+    const ticket = await store.getSupportTicketById({ ticketId: params.data.ticketId });
+    if (!ticket || ticket.organizationId !== orgContext.organizationId) {
+      throw notFound("Ticket not found");
+    }
+    const canManage = ["owner", "admin"].includes(orgContext.membership.roleKey);
+    if (!canManage && ticket.requesterUserId !== auth.userId) {
+      throw forbidden("Support ticket is not accessible");
+    }
+    const events = await store.listSupportTicketEvents({ ticketId: ticket.id, limit: 200 });
+    return { ticket, events };
+  });
+
+  server.patch("/v1/org/support-tickets/:ticketId", async (request) => {
+    const auth = requireAuth(request);
+    const orgContext = await requireOrgContext(request);
+    if (!["owner", "admin"].includes(orgContext.membership.roleKey)) {
+      throw forbidden("Only organization owners/admins can manage support tickets");
+    }
+    const params = z.object({ ticketId: z.string().uuid() }).safeParse(request.params ?? {});
+    if (!params.success) {
+      throw badRequest("Invalid ticket id", params.error.flatten());
+    }
+    const parsed = orgSupportTicketPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw badRequest("Invalid support ticket patch payload", parsed.error.flatten());
+    }
+    const current = await store.getSupportTicketById({ ticketId: params.data.ticketId });
+    if (!current || current.organizationId !== orgContext.organizationId) {
+      throw notFound("Ticket not found");
+    }
+    const ticket = await store.patchSupportTicket({
+      ticketId: current.id,
+      ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+      ...(parsed.data.priority !== undefined ? { priority: parsed.data.priority } : {}),
+      ...(parsed.data.assigneeUserId !== undefined ? { assigneeUserId: parsed.data.assigneeUserId } : {}),
+    });
+    if (!ticket) {
+      throw notFound("Ticket not found");
+    }
+    await store.appendSupportTicketEvent({
+      ticketId: ticket.id,
+      actorUserId: auth.userId,
+      eventType: "updated",
+      payload: parsed.data,
+    });
+    return { ticket };
   });
 
   server.get("/v1/admin/tickets", async (request) => {
@@ -7219,6 +7713,11 @@ export async function buildServer(input?: {
       throw conflict("Workflow must be published before runs can be created");
     }
 
+    await assertOrganizationRunQuota({
+      organizationId: shared.workflow.organizationId,
+      actorUserId: auth.userId,
+    });
+
     const run = await store.createWorkflowRun({
       organizationId: shared.workflow.organizationId,
       workflowId: shared.workflow.id,
@@ -7247,6 +7746,11 @@ export async function buildServer(input?: {
       });
       throw queueUnavailable();
     }
+
+    await recordOrganizationRunUsage({
+      organizationId: run.organizationId,
+      actorUserId: run.requestedByUserId,
+    });
 
     return reply.status(201).send({ run });
   });

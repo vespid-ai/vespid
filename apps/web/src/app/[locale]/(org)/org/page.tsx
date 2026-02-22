@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { apiFetch } from "../../../../lib/api";
 import { getActiveOrgId, setActiveOrgId, subscribeActiveOrg } from "../../../../lib/org-context";
 import { useMe } from "../../../../lib/hooks/use-me";
+import { useOrgBillingEntitlements, useOrgBillingUsage } from "../../../../lib/hooks/use-org-billing";
 import { useSession } from "../../../../lib/hooks/use-session";
 import { Button } from "../../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../../components/ui/card";
@@ -45,6 +46,8 @@ export default function OrganizationPage() {
   const [orgSlug, setOrgSlug] = useState("acme");
   const [inviteEmail, setInviteEmail] = useState("member@example.com");
   const [activeOrgId, setActiveOrgIdState] = useState("");
+  const billingEntitlementsQuery = useOrgBillingEntitlements(activeOrgId || null);
+  const billingUsageQuery = useOrgBillingUsage(activeOrgId || null);
 
   // Avoid reading localStorage during the server render / initial hydration pass.
   const [recentOrgs, setRecentOrgs] = useState<Array<{ id: string; name: string }>>([]);
@@ -52,6 +55,12 @@ export default function OrganizationPage() {
   const canManageOrganizations = Boolean(meQuery.data?.orgPolicy?.canManageOrganizations);
   const orgNameById = new Map((meQuery.data?.orgs ?? []).map((org) => [org.id, org.name]));
   const activeOrgName = activeOrgId ? orgNameById.get(activeOrgId) ?? "" : "";
+  const monthlyRunLimit =
+    billingUsageQuery.data?.runs.limit ?? billingEntitlementsQuery.data?.entitlements.monthlyRunLimit ?? null;
+  const monthlyUsed = billingUsageQuery.data?.runs.used ?? 0;
+  const monthlyRemaining = billingUsageQuery.data?.runs.remaining ?? null;
+  const inFlightLimit = billingUsageQuery.data?.inFlight.limit ?? billingEntitlementsQuery.data?.entitlements.inflightRunLimit ?? null;
+  const inFlightCurrent = billingUsageQuery.data?.inFlight.current ?? 0;
 
   useEffect(() => {
     // Generate a default slug after hydration. Keep user edits intact.
@@ -154,7 +163,7 @@ export default function OrganizationPage() {
         <div className="mt-1 text-sm text-muted">{t("org.subtitle")}</div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>{t("org.createTitle")}</CardTitle>
@@ -190,6 +199,38 @@ export default function OrganizationPage() {
               <Input id="inviteEmail" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
             </div>
             <Button onClick={inviteMember}>{t("org.inviteAction")}</Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("org.billing.title")}</CardTitle>
+            <CardDescription>{t("org.billing.description")}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2 text-sm">
+            {!activeOrgId ? <div className="text-muted">{t("org.billing.noActive")}</div> : null}
+            {activeOrgId && (billingEntitlementsQuery.isLoading || billingUsageQuery.isLoading) ? (
+              <div className="text-muted">{t("org.billing.loading")}</div>
+            ) : null}
+            {activeOrgId && (billingEntitlementsQuery.isError || billingUsageQuery.isError) ? (
+              <div className="text-muted">{t("org.billing.failed")}</div>
+            ) : null}
+            {activeOrgId && !billingEntitlementsQuery.isLoading && !billingUsageQuery.isLoading && !billingEntitlementsQuery.isError && !billingUsageQuery.isError ? (
+              <>
+                <div>
+                  {t("org.billing.plan")}: {billingEntitlementsQuery.data?.plan.tier ?? "free"} / {billingEntitlementsQuery.data?.plan.status ?? "active"}
+                </div>
+                <div>
+                  {t("org.billing.monthlyRuns")}: {monthlyUsed} / {monthlyRunLimit === null ? t("org.billing.unlimited") : monthlyRunLimit}
+                </div>
+                <div>
+                  {t("org.billing.remaining")}: {monthlyRemaining === null ? t("org.billing.unlimited") : monthlyRemaining}
+                </div>
+                <div>
+                  {t("org.billing.inFlightRuns")}: {inFlightCurrent} / {inFlightLimit === null ? t("org.billing.unlimited") : inFlightLimit}
+                </div>
+              </>
+            ) : null}
           </CardContent>
         </Card>
       </div>

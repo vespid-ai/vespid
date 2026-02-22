@@ -35,6 +35,8 @@ import type {
   PlatformAuditLogRecord,
   PlatformSettingRecord,
   PlatformUserRoleRecord,
+  OrganizationRunUsageMonthlyRecord,
+  OrganizationSubscriptionRecord,
   SupportTicketEventRecord,
   SupportTicketRecord,
   AgentBindingRecord,
@@ -54,6 +56,8 @@ export class MemoryAppStore implements AppStore {
   private usersByEmail = new Map<string, string>();
   private platformUserRoles = new Map<string, PlatformUserRoleRecord>();
   private platformSettings = new Map<string, PlatformSettingRecord>();
+  private organizationSubscriptions = new Map<string, OrganizationSubscriptionRecord>();
+  private organizationRunUsageMonthly = new Map<string, OrganizationRunUsageMonthlyRecord>();
   private supportTickets = new Map<string, SupportTicketRecord>();
   private supportTicketEventsByTicketId = new Map<string, SupportTicketEventRecord[]>();
   private platformAuditLogs: PlatformAuditLogRecord[] = [];
@@ -281,6 +285,74 @@ export class MemoryAppStore implements AppStore {
     return row;
   }
 
+  async getOrganizationSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<OrganizationSubscriptionRecord | null> {
+    return this.organizationSubscriptions.get(input.organizationId) ?? null;
+  }
+
+  async upsertOrganizationSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+    tier: "free" | "pro" | "enterprise";
+    status: "active" | "trialing" | "past_due" | "canceled";
+    monthlyRunLimit?: number | null;
+    inflightRunLimit?: number | null;
+    metadata?: unknown;
+  }): Promise<OrganizationSubscriptionRecord> {
+    const existing = this.organizationSubscriptions.get(input.organizationId) ?? null;
+    const now = nowIso();
+    const next: OrganizationSubscriptionRecord = {
+      organizationId: input.organizationId,
+      tier: input.tier,
+      status: input.status,
+      monthlyRunLimit: input.monthlyRunLimit ?? null,
+      inflightRunLimit: input.inflightRunLimit ?? null,
+      metadata: input.metadata ?? {},
+      updatedByUserId: input.actorUserId,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.organizationSubscriptions.set(input.organizationId, next);
+    return next;
+  }
+
+  async getOrganizationRunUsageMonthly(input: {
+    organizationId: string;
+    actorUserId: string;
+    usageMonth: string;
+  }): Promise<OrganizationRunUsageMonthlyRecord | null> {
+    return this.organizationRunUsageMonthly.get(`${input.organizationId}:${input.usageMonth}`) ?? null;
+  }
+
+  async incrementOrganizationRunUsageMonthly(input: {
+    organizationId: string;
+    actorUserId: string;
+    usageMonth: string;
+    amount?: number;
+  }): Promise<OrganizationRunUsageMonthlyRecord> {
+    const key = `${input.organizationId}:${input.usageMonth}`;
+    const existing = this.organizationRunUsageMonthly.get(key) ?? null;
+    const now = nowIso();
+    const amount = Math.max(0, Math.floor(input.amount ?? 1));
+    const next: OrganizationRunUsageMonthlyRecord = existing
+      ? {
+          ...existing,
+          runCount: existing.runCount + amount,
+          updatedAt: now,
+        }
+      : {
+          organizationId: input.organizationId,
+          usageMonth: input.usageMonth,
+          runCount: amount,
+          createdAt: now,
+          updatedAt: now,
+        };
+    this.organizationRunUsageMonthly.set(key, next);
+    return next;
+  }
+
   async createSupportTicket(input: {
     requesterUserId?: string | null;
     organizationId?: string | null;
@@ -308,11 +380,22 @@ export class MemoryAppStore implements AppStore {
     return row;
   }
 
-  async listSupportTickets(input?: { status?: string; limit?: number }): Promise<SupportTicketRecord[]> {
+  async listSupportTickets(input?: {
+    status?: string;
+    limit?: number;
+    organizationId?: string | null;
+    requesterUserId?: string | null;
+  }): Promise<SupportTicketRecord[]> {
     const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
     let rows = [...this.supportTickets.values()];
     if (input?.status) {
       rows = rows.filter((row) => row.status === input.status);
+    }
+    if (input?.organizationId !== undefined) {
+      rows = rows.filter((row) => row.organizationId === input.organizationId);
+    }
+    if (input?.requesterUserId !== undefined) {
+      rows = rows.filter((row) => row.requesterUserId === input.requesterUserId);
     }
     rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return rows.slice(0, limit);
@@ -1317,6 +1400,20 @@ export class MemoryAppStore implements AppStore {
     } as WorkflowRunRecord;
     this.workflowRuns.set(updated.id, updated);
     return updated;
+  }
+
+  async countWorkflowRunsByStatuses(input: {
+    organizationId: string;
+    actorUserId: string;
+    statuses: Array<WorkflowRunRecord["status"] | string>;
+  }): Promise<number> {
+    const normalized = new Set(input.statuses.map((status) => String(status)));
+    if (normalized.size === 0) {
+      return 0;
+    }
+    return [...this.workflowRuns.values()].filter(
+      (run) => run.organizationId === input.organizationId && normalized.has(run.status)
+    ).length;
   }
 
   async createWorkflowRun(input: {

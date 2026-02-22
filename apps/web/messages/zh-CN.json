@@ -17,6 +17,7 @@
     "org": "组织",
     "openById": "按 ID 打开",
     "channels": "聊天平台",
+    "support": "工单支持",
     "admin": "管理后台"
   },
   "common": {
@@ -308,7 +309,7 @@
       "governance": "治理",
       "risk": "风控",
       "observability": "可观测",
-      "tickets": "工单"
+      "tickets": "内部工单"
     },
     "governance": {
       "orgPolicy": "组织策略",
@@ -325,10 +326,51 @@
       "logs": "日志"
     },
     "tickets": {
-      "create": "创建工单",
-      "list": "工单列表",
+      "create": "创建内部工单",
+      "list": "内部工单列表",
       "subject": "主题",
       "content": "内容"
+    }
+  },
+  "support": {
+    "title": "工单支持",
+    "subtitle": "提交并跟踪组织级支持工单。",
+    "create": {
+      "title": "创建支持工单",
+      "subject": "主题",
+      "content": "请描述问题、影响范围和期望结果。"
+    },
+    "list": {
+      "title": "支持工单列表",
+      "empty": "暂无支持工单。",
+      "category": "分类",
+      "priority": "优先级",
+      "status": "状态",
+      "update": "更新"
+    },
+    "filter": {
+      "all": "全部状态"
+    },
+    "category": {
+      "general": "通用",
+      "billing": "计费",
+      "workflow": "工作流",
+      "incident": "故障"
+    },
+    "priority": {
+      "low": "低",
+      "normal": "中",
+      "high": "高",
+      "urgent": "紧急"
+    },
+    "status": {
+      "open": "待处理",
+      "in_progress": "处理中",
+      "resolved": "已解决",
+      "closed": "已关闭"
+    },
+    "errors": {
+      "subjectContentRequired": "主题和内容不能为空。"
     }
   },
   "org": {
@@ -350,7 +392,19 @@
     "inviteEmailLabel": "邀请邮箱",
     "inviteAction": "邀请成员",
     "recentDescription": "保存在本浏览器本地。",
-    "noRecent": "暂无最近组织。"
+    "noRecent": "暂无最近组织。",
+    "billing": {
+      "title": "套餐与用量",
+      "description": "当前组织的商业化配额限制。",
+      "plan": "套餐",
+      "monthlyRuns": "月运行次数",
+      "remaining": "剩余额度",
+      "inFlightRuns": "并发运行数",
+      "unlimited": "无限制",
+      "noActive": "请先设置当前组织后再查看用量。",
+      "loading": "正在加载用量...",
+      "failed": "加载用量失败。"
+    }
   },
   "auth": {
     "title": "登录",
@@ -791,6 +845,8 @@
       "connectCommand": "2）执行连接命令",
       "regenerateToken": "创建/轮换令牌",
       "checkStatus": "我已连接，重新检查",
+      "recheckSuccess": "执行器状态已更新，当前在线工作节点 {count} 个。",
+      "recheckStillOffline": "当前仍无在线工作节点，请稍等几秒后重试。",
       "openAgents": "打开工作节点页面",
       "installerUnavailable": "安装包元数据暂不可用。请前往工作节点页面完成完整配置。",
       "memberCannotPair": "你的角色无权创建配对令牌，请联系 owner/admin 操作。",

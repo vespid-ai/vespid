@@ -17,6 +17,7 @@
     "org": "Organization",
     "openById": "Open by ID",
     "channels": "Channels",
+    "support": "Support",
     "admin": "Admin"
   },
   "common": {
@@ -108,6 +109,8 @@
       "connectCommand": "2) Run connect command",
       "regenerateToken": "Create / rotate token",
       "checkStatus": "I have connected it, check again",
+      "recheckSuccess": "Executor status updated. {count} worker node(s) online.",
+      "recheckStillOffline": "Still no online worker nodes. Wait a few seconds and check again.",
       "openAgents": "Open Worker Nodes page",
       "installerUnavailable": "Installer metadata is unavailable. Open the Worker Nodes page for full setup options.",
       "memberCannotPair": "Your role cannot create pairing tokens. Ask an owner/admin to complete executor pairing.",
@@ -436,7 +439,7 @@
       "governance": "Governance",
       "risk": "Risk",
       "observability": "Observability",
-      "tickets": "Tickets"
+      "tickets": "Internal tickets"
     },
     "governance": {
       "orgPolicy": "Organization policy",
@@ -453,10 +456,51 @@
       "logs": "Logs"
     },
     "tickets": {
-      "create": "Create ticket",
-      "list": "Ticket list",
+      "create": "Create internal ticket",
+      "list": "Internal ticket list",
       "subject": "Subject",
       "content": "Content"
+    }
+  },
+  "support": {
+    "title": "Support",
+    "subtitle": "Create and track organization support tickets.",
+    "create": {
+      "title": "Create support ticket",
+      "subject": "Subject",
+      "content": "Describe your issue, impact, and expected outcome."
+    },
+    "list": {
+      "title": "Support tickets",
+      "empty": "No support tickets yet.",
+      "category": "Category",
+      "priority": "Priority",
+      "status": "Status",
+      "update": "Update"
+    },
+    "filter": {
+      "all": "All statuses"
+    },
+    "category": {
+      "general": "General",
+      "billing": "Billing",
+      "workflow": "Workflow",
+      "incident": "Incident"
+    },
+    "priority": {
+      "low": "Low",
+      "normal": "Normal",
+      "high": "High",
+      "urgent": "Urgent"
+    },
+    "status": {
+      "open": "Open",
+      "in_progress": "In progress",
+      "resolved": "Resolved",
+      "closed": "Closed"
+    },
+    "errors": {
+      "subjectContentRequired": "Subject and content are required."
     }
   },
   "org": {
@@ -478,7 +522,19 @@
     "inviteEmailLabel": "Invite email",
     "inviteAction": "Invite member",
     "recentDescription": "Stored locally in this browser.",
-    "noRecent": "No recent orgs."
+    "noRecent": "No recent orgs.",
+    "billing": {
+      "title": "Plan and usage",
+      "description": "Commercial limits for the active organization.",
+      "plan": "Plan",
+      "monthlyRuns": "Monthly runs",
+      "remaining": "Remaining",
+      "inFlightRuns": "In-flight runs",
+      "unlimited": "Unlimited",
+      "noActive": "Set an active organization to view billing usage.",
+      "loading": "Loading billing usage...",
+      "failed": "Failed to load billing usage."
+    }
   },
   "auth": {
     "title": "Sign in",

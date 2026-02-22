@@ -1542,6 +1542,121 @@ describe("api hardening foundation", () => {
     expect((crossOrg.json() as { code: string }).code).toBe("ORG_ACCESS_DENIED");
   });
 
+  it("supports organization support tickets with role-scoped access", async () => {
+    const ownerSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `support-owner-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(ownerSignup.statusCode).toBe(201);
+    const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+    const memberEmail = `support-member-${Date.now()}@example.com`;
+    const memberSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: { email: memberEmail, password: "Password123" },
+    });
+    expect(memberSignup.statusCode).toBe(201);
+    const memberToken = bearerToken(memberSignup.json() as { session: { token: string } });
+
+    const outsiderSignup = await server.inject({
+      method: "POST",
+      url: "/v1/auth/signup",
+      payload: {
+        email: `support-outsider-${Date.now()}@example.com`,
+        password: "Password123",
+      },
+    });
+    expect(outsiderSignup.statusCode).toBe(201);
+    const outsiderToken = bearerToken(outsiderSignup.json() as { session: { token: string } });
+
+    const orgRes = await server.inject({
+      method: "POST",
+      url: "/v1/orgs",
+      headers: { authorization: `Bearer ${ownerToken}` },
+      payload: { name: "Support Org", slug: `support-org-${Date.now()}` },
+    });
+    expect(orgRes.statusCode).toBe(201);
+    const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+    const invite = await server.inject({
+      method: "POST",
+      url: `/v1/orgs/${orgId}/invitations`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { email: memberEmail, roleKey: "member" },
+    });
+    expect(invite.statusCode).toBe(201);
+    const inviteToken = (invite.json() as { invitation: { token: string } }).invitation.token;
+
+    const accept = await server.inject({
+      method: "POST",
+      url: `/v1/invitations/${inviteToken}/accept`,
+      headers: { authorization: `Bearer ${memberToken}` },
+    });
+    expect(accept.statusCode).toBe(200);
+
+    const memberTicketCreate = await server.inject({
+      method: "POST",
+      url: "/v1/org/support-tickets",
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+      payload: { subject: "member ticket", content: "need help", category: "general", priority: "normal" },
+    });
+    expect(memberTicketCreate.statusCode).toBe(201);
+    const memberTicketId = (memberTicketCreate.json() as { ticket: { id: string } }).ticket.id;
+
+    const ownerTicketCreate = await server.inject({
+      method: "POST",
+      url: "/v1/org/support-tickets",
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { subject: "owner ticket", content: "internal escalation", category: "incident", priority: "high" },
+    });
+    expect(ownerTicketCreate.statusCode).toBe(201);
+
+    const memberList = await server.inject({
+      method: "GET",
+      url: "/v1/org/support-tickets",
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+    });
+    expect(memberList.statusCode).toBe(200);
+    expect((memberList.json() as { tickets: Array<{ subject: string }> }).tickets.map((item) => item.subject)).toEqual(["member ticket"]);
+
+    const ownerList = await server.inject({
+      method: "GET",
+      url: "/v1/org/support-tickets",
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+    });
+    expect(ownerList.statusCode).toBe(200);
+    expect((ownerList.json() as { tickets: Array<{ subject: string }> }).tickets).toHaveLength(2);
+
+    const outsiderDenied = await server.inject({
+      method: "GET",
+      url: "/v1/org/support-tickets",
+      headers: { authorization: `Bearer ${outsiderToken}`, "x-org-id": orgId },
+    });
+    expect(outsiderDenied.statusCode).toBe(403);
+
+    const memberPatchDenied = await server.inject({
+      method: "PATCH",
+      url: `/v1/org/support-tickets/${memberTicketId}`,
+      headers: { authorization: `Bearer ${memberToken}`, "x-org-id": orgId },
+      payload: { status: "resolved" },
+    });
+    expect(memberPatchDenied.statusCode).toBe(403);
+
+    const ownerPatch = await server.inject({
+      method: "PATCH",
+      url: `/v1/org/support-tickets/${memberTicketId}`,
+      headers: { authorization: `Bearer ${ownerToken}`, "x-org-id": orgId },
+      payload: { status: "resolved" },
+    });
+    expect(ownerPatch.statusCode).toBe(200);
+    expect((ownerPatch.json() as { ticket: { status: string } }).ticket.status).toBe("resolved");
+  });
+
   it("supports workflow core lifecycle with tenant and role checks", async () => {
     const ownerSignup = await server.inject({
       method: "POST",
@@ -1822,6 +1937,168 @@ describe("api hardening foundation", () => {
     const sizeAfter = ((store as unknown as { workflowRuns: Map<string, unknown> }).workflowRuns).size;
     expect(sizeAfter).toBe(sizeBefore);
     queueProducer.setFailure(null);
+  });
+
+  it("supports organization subscription billing endpoints and enforces run quotas", async () => {
+    process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST = "quota-admin@example.com";
+    queueProducer.setFailure(null);
+    try {
+      const adminSignup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: {
+          email: "quota-admin@example.com",
+          password: "Password123",
+        },
+      });
+      expect(adminSignup.statusCode).toBe(201);
+      const adminToken = bearerToken(adminSignup.json() as { session: { token: string } });
+
+      const ownerSignup = await server.inject({
+        method: "POST",
+        url: "/v1/auth/signup",
+        payload: {
+          email: `quota-owner-${Date.now()}@example.com`,
+          password: "Password123",
+        },
+      });
+      expect(ownerSignup.statusCode).toBe(201);
+      const ownerToken = bearerToken(ownerSignup.json() as { session: { token: string } });
+
+      const orgRes = await server.inject({
+        method: "POST",
+        url: "/v1/orgs",
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: {
+          name: "Quota Org",
+          slug: `quota-org-${Date.now()}`,
+        },
+      });
+      expect(orgRes.statusCode).toBe(201);
+      const orgId = (orgRes.json() as { organization: { id: string } }).organization.id;
+
+      const createWorkflow = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {
+          name: "Quota Workflow",
+          dsl: {
+            version: "v2",
+            trigger: { type: "trigger.manual" },
+            nodes: [{ id: "node-http", type: "http.request" }],
+          },
+        },
+      });
+      expect(createWorkflow.statusCode).toBe(201);
+      const workflowId = (createWorkflow.json() as { workflow: { id: string } }).workflow.id;
+
+      const publishWorkflow = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/publish`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(publishWorkflow.statusCode).toBe(200);
+
+      const setStrictQuota = await server.inject({
+        method: "PUT",
+        url: `/v1/admin/orgs/${orgId}/subscription`,
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+        },
+        payload: {
+          tier: "free",
+          status: "active",
+          monthlyRunLimit: 1,
+          inflightRunLimit: 1,
+        },
+      });
+      expect(setStrictQuota.statusCode).toBe(200);
+      expect((setStrictQuota.json() as any).entitlements.monthlyRunLimit).toBe(1);
+      expect((setStrictQuota.json() as any).entitlements.inflightRunLimit).toBe(1);
+
+      const firstRun = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {},
+      });
+      expect(firstRun.statusCode).toBe(201);
+
+      const usageAfterFirstRun = await server.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/billing/usage`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(usageAfterFirstRun.statusCode).toBe(200);
+      expect((usageAfterFirstRun.json() as any).runs.used).toBe(1);
+      expect((usageAfterFirstRun.json() as any).runs.limit).toBe(1);
+      expect((usageAfterFirstRun.json() as any).inFlight.current).toBeGreaterThanOrEqual(1);
+
+      const monthlyQuotaExceeded = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {},
+      });
+      expect(monthlyQuotaExceeded.statusCode).toBe(429);
+      expect((monthlyQuotaExceeded.json() as { code: string }).code).toBe("ORG_RUN_QUOTA_EXCEEDED");
+
+      const raiseMonthlyQuota = await server.inject({
+        method: "PUT",
+        url: `/v1/admin/orgs/${orgId}/subscription`,
+        headers: {
+          authorization: `Bearer ${adminToken}`,
+        },
+        payload: {
+          tier: "free",
+          monthlyRunLimit: 10,
+          inflightRunLimit: 1,
+        },
+      });
+      expect(raiseMonthlyQuota.statusCode).toBe(200);
+
+      const inflightQuotaExceeded = await server.inject({
+        method: "POST",
+        url: `/v1/orgs/${orgId}/workflows/${workflowId}/runs`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+        payload: {},
+      });
+      expect(inflightQuotaExceeded.statusCode).toBe(429);
+      expect((inflightQuotaExceeded.json() as { code: string }).code).toBe("ORG_RUN_INFLIGHT_LIMIT_EXCEEDED");
+
+      const entitlements = await server.inject({
+        method: "GET",
+        url: `/v1/orgs/${orgId}/billing/entitlements`,
+        headers: {
+          authorization: `Bearer ${ownerToken}`,
+          "x-org-id": orgId,
+        },
+      });
+      expect(entitlements.statusCode).toBe(200);
+      expect((entitlements.json() as any).plan.tier).toBe("free");
+      expect((entitlements.json() as any).entitlements.monthlyRunLimit).toBe(10);
+    } finally {
+      delete process.env.SYSTEM_ADMIN_EMAIL_ALLOWLIST;
+    }
   });
 
   it("supports webhook trigger subscriptions and trigger toggle", async () => {

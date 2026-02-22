@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./client.js";
 import {
   agentBindings,
@@ -28,9 +28,11 @@ import {
   memberships,
   organizationPolicyRules,
   organizationInvitations,
+  organizationRunUsageMonthly,
   platformAuditLogs,
   platformSettings,
   platformUserRoles,
+  organizationSubscriptions,
   organizations,
   roles,
   supportTicketEvents,
@@ -1410,6 +1412,32 @@ export async function listWorkflowRuns(
   const nextCursor = last ? { createdAt: last.createdAt, id: last.id } : null;
 
   return { rows, nextCursor };
+}
+
+export async function countWorkflowRunsByStatuses(
+  db: Db,
+  input: {
+    organizationId: string;
+    statuses: string[];
+  }
+) {
+  const normalizedStatuses = input.statuses
+    .map((status) => String(status).trim())
+    .filter((status) => status.length > 0);
+  if (normalizedStatuses.length === 0) {
+    return 0;
+  }
+
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(workflowRuns)
+    .where(
+      and(
+        eq(workflowRuns.organizationId, input.organizationId),
+        inArray(workflowRuns.status, normalizedStatuses as [string, ...string[]])
+      )
+    );
+  return Number(row?.count ?? 0);
 }
 
 export async function markWorkflowRunRunning(
@@ -4120,6 +4148,109 @@ export async function listPlatformSettings(db: Db) {
   return await db.select().from(platformSettings).orderBy(asc(platformSettings.key));
 }
 
+export async function getOrganizationSubscription(
+  db: Db,
+  input: { organizationId: string }
+) {
+  const [row] = await db
+    .select()
+    .from(organizationSubscriptions)
+    .where(eq(organizationSubscriptions.organizationId, input.organizationId));
+  return row ?? null;
+}
+
+export async function upsertOrganizationSubscription(
+  db: Db,
+  input: {
+    organizationId: string;
+    tier: string;
+    status: string;
+    monthlyRunLimit?: number | null;
+    inflightRunLimit?: number | null;
+    metadata?: unknown;
+    updatedByUserId?: string | null;
+  }
+) {
+  const [row] = await db
+    .insert(organizationSubscriptions)
+    .values({
+      organizationId: input.organizationId,
+      tier: input.tier,
+      status: input.status,
+      monthlyRunLimit: input.monthlyRunLimit ?? null,
+      inflightRunLimit: input.inflightRunLimit ?? null,
+      metadata: (input.metadata ?? {}) as any,
+      updatedByUserId: input.updatedByUserId ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: organizationSubscriptions.organizationId,
+      set: {
+        tier: input.tier,
+        status: input.status,
+        monthlyRunLimit: input.monthlyRunLimit ?? null,
+        inflightRunLimit: input.inflightRunLimit ?? null,
+        metadata: (input.metadata ?? {}) as any,
+        updatedByUserId: input.updatedByUserId ?? null,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to upsert organization subscription");
+  }
+  return row;
+}
+
+export async function getOrganizationRunUsageMonthly(
+  db: Db,
+  input: { organizationId: string; usageMonth: string }
+) {
+  const [row] = await db
+    .select()
+    .from(organizationRunUsageMonthly)
+    .where(
+      and(
+        eq(organizationRunUsageMonthly.organizationId, input.organizationId),
+        eq(organizationRunUsageMonthly.usageMonth, input.usageMonth)
+      )
+    );
+  return row ?? null;
+}
+
+export async function incrementOrganizationRunUsageMonthly(
+  db: Db,
+  input: {
+    organizationId: string;
+    usageMonth: string;
+    amount?: number;
+  }
+) {
+  const amount = Math.max(0, Math.floor(input.amount ?? 1));
+  const [row] = await db
+    .insert(organizationRunUsageMonthly)
+    .values({
+      organizationId: input.organizationId,
+      usageMonth: input.usageMonth,
+      runCount: amount,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [organizationRunUsageMonthly.organizationId, organizationRunUsageMonthly.usageMonth],
+      set: {
+        runCount: sql`${organizationRunUsageMonthly.runCount} + ${amount}`,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  if (!row) {
+    throw new Error("Failed to increment organization run usage");
+  }
+  return row;
+}
+
 export async function createSupportTicket(
   db: Db,
   input: {
@@ -4155,14 +4286,29 @@ export async function createSupportTicket(
 
 export async function listSupportTickets(
   db: Db,
-  input?: { status?: string; limit?: number }
+  input?: {
+    status?: string;
+    limit?: number;
+    organizationId?: string | null;
+    requesterUserId?: string | null;
+  }
 ) {
   const limit = Math.max(1, Math.min(500, Math.floor(input?.limit ?? 100)));
-  const query = db.select().from(supportTickets).orderBy(desc(supportTickets.updatedAt)).limit(limit);
+  const filters = [];
   if (input?.status) {
-    return await query.where(eq(supportTickets.status, input.status));
+    filters.push(eq(supportTickets.status, input.status));
   }
-  return await query;
+  if (input?.organizationId !== undefined) {
+    filters.push(input.organizationId === null ? isNull(supportTickets.organizationId) : eq(supportTickets.organizationId, input.organizationId));
+  }
+  if (input?.requesterUserId !== undefined) {
+    filters.push(input.requesterUserId === null ? isNull(supportTickets.requesterUserId) : eq(supportTickets.requesterUserId, input.requesterUserId));
+  }
+  const query = db.select().from(supportTickets);
+  if (filters.length > 0) {
+    return await query.where(and(...filters)).orderBy(desc(supportTickets.updatedAt)).limit(limit);
+  }
+  return await query.orderBy(desc(supportTickets.updatedAt)).limit(limit);
 }
 
 export async function getSupportTicketById(

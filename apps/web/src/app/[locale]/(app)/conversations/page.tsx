@@ -174,6 +174,20 @@ export default function ConversationsPage() {
   const needsExecutorOnboarding = canOperate && engineAuthStatusQuery.isSuccess && onlineExecutorCount === 0;
   const canStartConversation = canOperate && !createSession.isPending && message.trim().length > 0;
 
+  const recheckExecutorStatus = useCallback(async () => {
+    const result = await engineAuthStatusQuery.refetch();
+    if (result.error) {
+      toast.error(result.error instanceof Error ? result.error.message : t("common.unknownError"));
+      return;
+    }
+    const onlineCount = countUniqueOnlineExecutors(result.data ?? engineAuthStatusQuery.data);
+    if (onlineCount > 0) {
+      toast.success(t("sessions.executorGuide.recheckSuccess", { count: onlineCount }));
+      return;
+    }
+    toast(t("sessions.executorGuide.recheckStillOffline"));
+  }, [engineAuthStatusQuery, t]);
+
   useEffect(() => {
     if (llmInitRef.current) return;
     const sessionDefaults = settingsQuery.data?.settings?.llm?.defaults?.primary as any;
@@ -515,8 +529,13 @@ export default function ConversationsPage() {
                       >
                         {t("sessions.executorGuide.regenerateToken")}
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
-                        {t("sessions.executorGuide.checkStatus")}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void recheckExecutorStatus()}
+                        disabled={engineAuthStatusQuery.isFetching}
+                      >
+                        {engineAuthStatusQuery.isFetching ? t("common.loading") : t("sessions.executorGuide.checkStatus")}
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
                         {t("sessions.executorGuide.openAgents")}
@@ -528,8 +547,13 @@ export default function ConversationsPage() {
                     <div className="rounded-md border border-borderSubtle/70 bg-panel/45 px-3 py-2 text-xs text-muted">
                       {t("sessions.executorGuide.memberCannotPair")}
                     </div>
-                    <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
-                      {t("sessions.executorGuide.checkStatus")}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void recheckExecutorStatus()}
+                      disabled={engineAuthStatusQuery.isFetching}
+                    >
+                      {engineAuthStatusQuery.isFetching ? t("common.loading") : t("sessions.executorGuide.checkStatus")}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
                       {t("sessions.executorGuide.openAgents")}

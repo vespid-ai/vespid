@@ -28,6 +28,8 @@ import {
   getUserById,
   getUserByEmail,
   getPlatformSetting as dbGetPlatformSetting,
+  getOrganizationRunUsageMonthly as dbGetOrganizationRunUsageMonthly,
+  getOrganizationSubscription as dbGetOrganizationSubscription,
   listConnectorSecrets as dbListConnectorSecrets,
   listPlatformSettings as dbListPlatformSettings,
   listPlatformUserRoles as dbListPlatformUserRoles,
@@ -102,6 +104,7 @@ import {
   updateWorkflowTriggerSubscriptionEnabled as dbUpdateWorkflowTriggerSubscriptionEnabled,
   getWorkflowTriggerSubscriptionByWebhookTokenHash as dbGetWorkflowTriggerSubscriptionByWebhookTokenHash,
   createWorkflowRun as dbCreateWorkflowRun,
+  countWorkflowRunsByStatuses as dbCountWorkflowRunsByStatuses,
   deleteQueuedWorkflowRun as dbDeleteQueuedWorkflowRun,
   listWorkflowRuns as dbListWorkflowRuns,
   getWorkflowRunById as dbGetWorkflowRunById,
@@ -141,7 +144,9 @@ import {
   deletePlatformUserRole as dbDeletePlatformUserRole,
   getSupportTicketById as dbGetSupportTicketById,
   patchSupportTicket as dbPatchSupportTicket,
+  incrementOrganizationRunUsageMonthly as dbIncrementOrganizationRunUsageMonthly,
   upsertPlatformSetting as dbUpsertPlatformSetting,
+  upsertOrganizationSubscription as dbUpsertOrganizationSubscription,
 } from "@vespid/db";
 import crypto from "node:crypto";
 import { decryptSecret, encryptSecret, parseKekFromEnv } from "@vespid/shared/secrets";
@@ -166,7 +171,9 @@ import type {
   SupportTicketEventRecord,
   SupportTicketRecord,
   ExecutorPairingTokenRecord,
+  OrganizationRunUsageMonthlyRecord,
   OrganizationExecutorRecord,
+  OrganizationSubscriptionRecord,
   OrganizationSettings,
   ManagedExecutorRecord,
   ToolsetBuilderSessionRecord,
@@ -284,6 +291,30 @@ export class PgAppStore implements AppStore {
       createdAt: toIso(row.createdAt),
       startedAt: row.startedAt ? toIso(row.startedAt) : null,
       finishedAt: row.finishedAt ? toIso(row.finishedAt) : null,
+    };
+  }
+
+  private toOrganizationSubscriptionRecord(row: any): OrganizationSubscriptionRecord {
+    return {
+      organizationId: row.organizationId,
+      tier: row.tier as "free" | "pro" | "enterprise",
+      status: row.status as "active" | "trialing" | "past_due" | "canceled",
+      monthlyRunLimit: row.monthlyRunLimit ?? null,
+      inflightRunLimit: row.inflightRunLimit ?? null,
+      metadata: row.metadata ?? {},
+      updatedByUserId: row.updatedByUserId ?? null,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
+    };
+  }
+
+  private toOrganizationRunUsageMonthlyRecord(row: any): OrganizationRunUsageMonthlyRecord {
+    return {
+      organizationId: row.organizationId,
+      usageMonth: row.usageMonth,
+      runCount: row.runCount ?? 0,
+      createdAt: toIso(row.createdAt),
+      updatedAt: toIso(row.updatedAt),
     };
   }
 
@@ -726,6 +757,76 @@ export class PgAppStore implements AppStore {
     };
   }
 
+  async getOrganizationSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<OrganizationSubscriptionRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) => dbGetOrganizationSubscription(db, { organizationId: input.organizationId })
+    );
+    return row ? this.toOrganizationSubscriptionRecord(row) : null;
+  }
+
+  async upsertOrganizationSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+    tier: "free" | "pro" | "enterprise";
+    status: "active" | "trialing" | "past_due" | "canceled";
+    monthlyRunLimit?: number | null;
+    inflightRunLimit?: number | null;
+    metadata?: unknown;
+  }): Promise<OrganizationSubscriptionRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbUpsertOrganizationSubscription(db, {
+          organizationId: input.organizationId,
+          tier: input.tier,
+          status: input.status,
+          monthlyRunLimit: input.monthlyRunLimit ?? null,
+          inflightRunLimit: input.inflightRunLimit ?? null,
+          metadata: input.metadata ?? {},
+          updatedByUserId: input.actorUserId,
+        })
+    );
+    return this.toOrganizationSubscriptionRecord(row);
+  }
+
+  async getOrganizationRunUsageMonthly(input: {
+    organizationId: string;
+    actorUserId: string;
+    usageMonth: string;
+  }): Promise<OrganizationRunUsageMonthlyRecord | null> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbGetOrganizationRunUsageMonthly(db, {
+          organizationId: input.organizationId,
+          usageMonth: input.usageMonth,
+        })
+    );
+    return row ? this.toOrganizationRunUsageMonthlyRecord(row) : null;
+  }
+
+  async incrementOrganizationRunUsageMonthly(input: {
+    organizationId: string;
+    actorUserId: string;
+    usageMonth: string;
+    amount?: number;
+  }): Promise<OrganizationRunUsageMonthlyRecord> {
+    const row = await this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbIncrementOrganizationRunUsageMonthly(db, {
+          organizationId: input.organizationId,
+          usageMonth: input.usageMonth,
+          amount: input.amount ?? 1,
+        })
+    );
+    return this.toOrganizationRunUsageMonthlyRecord(row);
+  }
+
   async createSupportTicket(input: {
     requesterUserId?: string | null;
     organizationId?: string | null;
@@ -754,7 +855,12 @@ export class PgAppStore implements AppStore {
     };
   }
 
-  async listSupportTickets(input?: { status?: string; limit?: number }): Promise<SupportTicketRecord[]> {
+  async listSupportTickets(input?: {
+    status?: string;
+    limit?: number;
+    organizationId?: string | null;
+    requesterUserId?: string | null;
+  }): Promise<SupportTicketRecord[]> {
     const rows = await this.withUserContext({ userId: crypto.randomUUID() }, async (db) => dbListSupportTickets(db, input));
     return rows.map((row) => ({
       id: row.id,
@@ -1856,6 +1962,21 @@ export class PgAppStore implements AppStore {
         })
     );
     return row ? this.toWorkflowRunRecord(row) : null;
+  }
+
+  async countWorkflowRunsByStatuses(input: {
+    organizationId: string;
+    actorUserId: string;
+    statuses: Array<WorkflowRunRecord["status"] | string>;
+  }): Promise<number> {
+    return this.withOrgContext(
+      { userId: input.actorUserId, organizationId: input.organizationId },
+      async (db) =>
+        dbCountWorkflowRunsByStatuses(db, {
+          organizationId: input.organizationId,
+          statuses: input.statuses,
+        })
+    );
   }
 
   async createWorkflowRun(input: {

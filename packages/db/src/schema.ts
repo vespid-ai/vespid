@@ -7,6 +7,7 @@ import {
   index,
   integer,
   jsonb,
+  primaryKey,
   pgTable,
   text,
   timestamp,
@@ -111,6 +112,41 @@ export const platformSettings = pgTable("platform_settings", {
   updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const organizationSubscriptions = pgTable("organization_subscriptions", {
+  organizationId: uuid("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  tier: text("tier").notNull().default("free"),
+  status: text("status").notNull().default("active"),
+  monthlyRunLimit: integer("monthly_run_limit"),
+  inflightRunLimit: integer("inflight_run_limit"),
+  metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+  updatedByUserId: uuid("updated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const organizationRunUsageMonthly = pgTable(
+  "organization_run_usage_monthly",
+  {
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    usageMonth: text("usage_month").notNull(),
+    runCount: integer("run_count").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    organizationRunUsageMonthlyPk: primaryKey({
+      name: "organization_run_usage_monthly_pkey",
+      columns: [table.organizationId, table.usageMonth],
+    }),
+    organizationRunUsageMonthlyOrgUpdatedIdx: index("organization_run_usage_monthly_org_updated_idx").on(
+      table.organizationId,
+      table.updatedAt
+    ),
+  })
+);
 
 export const workflows = pgTable("workflows", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -885,6 +921,8 @@ export const platformAuditLogs = pgTable(
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(memberships),
   invitations: many(organizationInvitations),
+  subscriptions: many(organizationSubscriptions),
+  runUsageMonthly: many(organizationRunUsageMonthly),
   workflows: many(workflows),
   workflowRuns: many(workflowRuns),
   workflowTriggerSubscriptions: many(workflowTriggerSubscriptions),
@@ -976,6 +1014,24 @@ export const authSessionsRelations = relations(authSessions, ({ one }) => ({
   user: one(users, {
     fields: [authSessions.userId],
     references: [users.id],
+  }),
+}));
+
+export const organizationSubscriptionsRelations = relations(organizationSubscriptions, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [organizationSubscriptions.organizationId],
+    references: [organizations.id],
+  }),
+  updatedByUser: one(users, {
+    fields: [organizationSubscriptions.updatedByUserId],
+    references: [users.id],
+  }),
+}));
+
+export const organizationRunUsageMonthlyRelations = relations(organizationRunUsageMonthly, ({ one }) => ({
+  organization: one(organizations, {
+    fields: [organizationRunUsageMonthly.organizationId],
+    references: [organizations.id],
   }),
 }));
 

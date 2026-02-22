@@ -105,6 +105,7 @@ const ENGINE_LABELS: Record<string, string> = {
 const DEFAULT_NODE_AGENT_CONNECT_TEMPLATE =
   'npx -y @vespid/node-agent@latest connect --pairing-token "<pairing-token>" --api-base "<api-base>"';
 const DEFAULT_NODE_AGENT_START_COMMAND = "npx -y @vespid/node-agent@latest start";
+type EngineAuthStatusSnapshot = ReturnType<typeof useEngineAuthStatus>["data"];
 
 function gatewayWsBase(): string {
   const configured = process.env.NEXT_PUBLIC_GATEWAY_WS_BASE;
@@ -150,6 +151,18 @@ function buildConnectCommand(input: { template: string; pairingToken: string; ap
   return input.template
     .replaceAll("<pairing-token>", input.pairingToken)
     .replaceAll("<api-base>", normalizeNodeAgentApiBase(input.apiBase));
+}
+
+function countUniqueOnlineExecutors(status: EngineAuthStatusSnapshot): number {
+  const engines = status?.engines;
+  if (!engines) return 0;
+  const ids = new Set<string>();
+  for (const key of Object.keys(engines) as Array<keyof typeof engines>) {
+    for (const executor of engines[key].executors ?? []) {
+      if (executor.executorId) ids.add(executor.executorId);
+    }
+  }
+  return ids.size;
 }
 
 function mergeBySeq(existing: AgentSessionEvent[], incoming: AgentSessionEvent[]): AgentSessionEvent[] {
@@ -622,6 +635,20 @@ export default function ConversationDetailPage() {
     }
     return false;
   }, [eventErrorCodes, hasOnlineExecutors, sessionErrorCodes]);
+
+  const recheckExecutorStatus = useCallback(async () => {
+    const result = await engineAuthStatusQuery.refetch();
+    if (result.error) {
+      toast.error(result.error instanceof Error ? result.error.message : t("common.unknownError"));
+      return;
+    }
+    const onlineCount = countUniqueOnlineExecutors(result.data ?? engineAuthStatusQuery.data);
+    if (onlineCount > 0) {
+      toast.success(t("sessions.executorGuide.recheckSuccess", { count: onlineCount }));
+      return;
+    }
+    toast(t("sessions.executorGuide.recheckStillOffline"));
+  }, [engineAuthStatusQuery, t]);
 
   useEffect(() => {
     setPairingToken(null);
@@ -1164,8 +1191,13 @@ export default function ConversationDetailPage() {
                   <Button size="sm" variant="accent" onClick={() => void issuePairingToken()} disabled={createPairingTokenMutation.isPending}>
                     {t("sessions.executorGuide.regenerateToken")}
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
-                    {t("sessions.executorGuide.checkStatus")}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void recheckExecutorStatus()}
+                    disabled={engineAuthStatusQuery.isFetching}
+                  >
+                    {engineAuthStatusQuery.isFetching ? t("common.loading") : t("sessions.executorGuide.checkStatus")}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
                     {t("sessions.executorGuide.openAgents")}
@@ -1177,8 +1209,13 @@ export default function ConversationDetailPage() {
                 <div className="rounded-md border border-borderSubtle/70 bg-panel/45 px-3 py-2 text-xs text-muted">
                   {t("sessions.executorGuide.memberCannotPair")}
                 </div>
-                <Button size="sm" variant="outline" onClick={() => void engineAuthStatusQuery.refetch()}>
-                  {t("sessions.executorGuide.checkStatus")}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void recheckExecutorStatus()}
+                  disabled={engineAuthStatusQuery.isFetching}
+                >
+                  {engineAuthStatusQuery.isFetching ? t("common.loading") : t("sessions.executorGuide.checkStatus")}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => router.push(`/${locale}/agents`)}>
                   {t("sessions.executorGuide.openAgents")}

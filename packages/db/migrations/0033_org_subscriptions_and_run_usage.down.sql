@@ -1,0 +1,7 @@
+drop policy if exists organization_run_usage_monthly_tenant_isolation on organization_run_usage_monthly;
+drop policy if exists organization_subscriptions_tenant_isolation on organization_subscriptions;
+
+drop index if exists organization_run_usage_monthly_org_updated_idx;
+
+drop table if exists organization_run_usage_monthly;
+drop table if exists organization_subscriptions;

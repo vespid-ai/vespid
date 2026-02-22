@@ -303,6 +303,30 @@ export type PlatformSettingRecord = {
   updatedAt: string;
 };
 
+export type OrganizationSubscriptionTier = "free" | "pro" | "enterprise";
+
+export type OrganizationSubscriptionStatus = "active" | "trialing" | "past_due" | "canceled";
+
+export type OrganizationSubscriptionRecord = {
+  organizationId: string;
+  tier: OrganizationSubscriptionTier;
+  status: OrganizationSubscriptionStatus;
+  monthlyRunLimit: number | null;
+  inflightRunLimit: number | null;
+  metadata: unknown;
+  updatedByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OrganizationRunUsageMonthlyRecord = {
+  organizationId: string;
+  usageMonth: string;
+  runCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type SupportTicketRecord = {
   id: string;
   requesterUserId: string | null;
@@ -586,6 +610,35 @@ export interface AppStore {
     value: unknown;
     updatedByUserId?: string | null;
   }): Promise<PlatformSettingRecord>;
+  getOrganizationSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+  }): Promise<OrganizationSubscriptionRecord | null>;
+  upsertOrganizationSubscription(input: {
+    organizationId: string;
+    actorUserId: string;
+    tier: OrganizationSubscriptionTier;
+    status: OrganizationSubscriptionStatus;
+    monthlyRunLimit?: number | null;
+    inflightRunLimit?: number | null;
+    metadata?: unknown;
+  }): Promise<OrganizationSubscriptionRecord>;
+  getOrganizationRunUsageMonthly(input: {
+    organizationId: string;
+    actorUserId: string;
+    usageMonth: string;
+  }): Promise<OrganizationRunUsageMonthlyRecord | null>;
+  incrementOrganizationRunUsageMonthly(input: {
+    organizationId: string;
+    actorUserId: string;
+    usageMonth: string;
+    amount?: number;
+  }): Promise<OrganizationRunUsageMonthlyRecord>;
+  countWorkflowRunsByStatuses(input: {
+    organizationId: string;
+    actorUserId: string;
+    statuses: Array<WorkflowRunRecord["status"] | string>;
+  }): Promise<number>;
   createSupportTicket(input: {
     requesterUserId?: string | null;
     organizationId?: string | null;
@@ -596,7 +649,12 @@ export interface AppStore {
     content: string;
     assigneeUserId?: string | null;
   }): Promise<SupportTicketRecord>;
-  listSupportTickets(input?: { status?: string; limit?: number }): Promise<SupportTicketRecord[]>;
+  listSupportTickets(input?: {
+    status?: string;
+    limit?: number;
+    organizationId?: string | null;
+    requesterUserId?: string | null;
+  }): Promise<SupportTicketRecord[]>;
   getSupportTicketById(input: { ticketId: string }): Promise<SupportTicketRecord | null>;
   patchSupportTicket(input: {
     ticketId: string;
